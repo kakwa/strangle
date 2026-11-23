@@ -1,2 +1,3 @@
-# ansible-master
-Opinionated ansible master server
+# strangle
+
+Strangle: an opinionated ansible master server.
