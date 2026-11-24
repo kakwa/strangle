@@ -1,3 +1,6 @@
+# Test configuration for the Go-managed SSH transport: run this playbook
+# with a target whose inventory marks the host
+# ansible_connection=strangle_ssh (see inventory.ini in this directory).
 ---
 - name: Strangle SSH demo
   hosts: remote

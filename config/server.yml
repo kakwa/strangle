@@ -1,0 +1,20 @@
+# Base server configuration for strangle (server.yml).
+# Loaded by default (override with -s). Holds process-level settings only.
+
+# HTTP listen address. Defaults to :8080.
+listen_addr: ":8080"
+
+# Log level: debug, info, warn or error. Defaults to info.
+log_level: info
+
+# How often a full cycle over every target is run. Defaults to 15m.
+interval: 15m
+
+# PostgreSQL DSN for run history. Without a DSN strangle falls back to an
+# in-memory store and history is lost on restart.
+database:
+  dsn: postgres://kakwa:kakwa@127.0.0.1:5432/strangle
+
+# Authentication. Placeholder: parsed but not enforced yet.
+# auth:
+#   token: change-me

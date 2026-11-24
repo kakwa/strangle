@@ -34,11 +34,14 @@ config/              base configuration, loaded by default
   server.yml           process-level settings (listen address, interval, DSN)
   collection.yml       the list of Ansible projects (targets) to apply
   strangle.yml         sample per-target configuration (reference)
-strangle.yml         per-target configuration for the local demo target (live)
-playbook.yml         demo playbook (target `demo`, applied to localhost)
-inventory.ini        demo inventory for the `demo` target
-playbook-remote.yml  example using the Go-managed SSH transport
-inventory-remote.ini inventory for the SSH-transport example
+demo/                the local demo target (applied to localhost)
+  strangle.yml           per-target configuration (live)
+  playbook.yml           the demo playbook
+  inventory.ini          the demo inventory
+tests/               test configurations
+  ssh/                   Go-managed SSH transport example
+    playbook.yml             the SSH demo playbook
+    inventory.ini            inventory pointing at a remote host
 ```
 
 ## What is stored
@@ -140,11 +143,11 @@ vault_password_file: /run/secrets/ansible_vault
 
 `--diff` is always added by the applier. `working_dir` is chdir'd into for the
 duration of each run, so `ansible.cfg`, relative paths and roles are resolved
-relative to the project. The `config/` directory is a working example:
+relative to the project. The repository is a working example:
 `config/server.yml` and `config/collection.yml` configure a local `demo`
-target (the repo root, using `playbook.yml` and `inventory.ini`) plus the
-`home.tf` project, and `config/strangle.yml` is a reference for the
-per-target file each target directory carries.
+target (the `demo/` directory, applied to localhost) plus the `home.tf`
+project, and `config/strangle.yml` is a reference for the per-target file
+each target directory carries.
 
 ### Go-managed SSH transport
 
@@ -184,7 +187,7 @@ Host-key policies:
 | `insecure`    | Accept any key. Development only. |
 
 Mark hosts with `ansible_connection=strangle_ssh` in the inventory (see
-`inventory-remote.ini`). With `api` policy, the first run of a playbook will
+`tests/ssh/inventory.ini`). With `api` policy, the first run of a playbook will
 fail with a "pending approval" error; list pending keys with `GET /api/hostkeys`,
 then approve the fingerprint and re-run. Check `GET /api/ssh/stats` to confirm
 `total_dials` stops growing while `active_connections` stays constant.

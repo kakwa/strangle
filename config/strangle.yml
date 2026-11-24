@@ -1,0 +1,41 @@
+# Sample per-target configuration (strangle.yml).
+#
+# This is a reference example. Every target listed in collection.yml carries
+# its own strangle.yml at the root of its project directory — that live file
+# is what strangle actually reads. Copy this file into a target directory and
+# adjust it for that project.
+
+# The playbooks to run, in order. Relative paths resolve against working_dir.
+playbooks:
+  - playbook.yml
+
+# Inventory file or directory, relative to working_dir.
+inventory: inventory.ini
+
+# The directory the playbooks run from: Ansible resolves ansible.cfg,
+# relative paths and roles relative to it. Defaults to the target path.
+# working_dir: playbooks
+
+# Optional: connect to hosts as this user (-u). It is also the fallback user
+# for the Go-managed SSH transport when the inventory sets none.
+# user: deploy
+
+# Optional privilege escalation (-b / --become-method / --become-user).
+# become: true
+# become_method: sudo
+# become_user: root
+
+# Passwords are given as files: an embedded interpreter cannot answer
+# interactive -k/-K prompts. These map to Ansible's password-file flags.
+# become_password_file: /run/secrets/ansible_become
+# connection_password_file: /run/secrets/ansible_connection
+# vault_password_file: /run/secrets/ansible_vault
+
+# Optional: Go-managed SSH transport (persistent connections, no ssh
+# process). The default host_key_policy is api; see the README for the
+# full option set.
+# ssh:
+#   enabled: true
+#   private_key_file: ~/.ssh/id_ed25519
+#   use_agent: true
+#   host_key_policy: api

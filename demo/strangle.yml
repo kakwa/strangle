@@ -1,0 +1,8 @@
+# Per-target configuration for the `demo` target (this directory), listed in
+# config/collection.yml. Every target directory carries its own live
+# strangle.yml — see config/strangle.yml for a documented reference.
+
+playbooks:
+  - playbook.yml
+
+inventory: inventory.ini
