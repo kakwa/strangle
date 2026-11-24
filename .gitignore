@@ -26,6 +26,13 @@ profile.cov
 go.work
 go.work.sum
 
+# Built binaries
+/bin/
+
+# Web (vite)
+node_modules/
+web/dist/
+
 # env file
 .env
 

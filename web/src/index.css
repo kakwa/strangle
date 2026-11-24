@@ -1,0 +1,5 @@
+/* Global styles. Mantine handles component styling and theming. */
+html,
+body {
+  min-height: 100%;
+}
