@@ -20,6 +20,7 @@ import (
 	"github.com/kakwa/strangle/internal/applier"
 	"github.com/kakwa/strangle/internal/config"
 	"github.com/kakwa/strangle/internal/db"
+	"github.com/kakwa/strangle/internal/riverqueue"
 	"github.com/kakwa/strangle/internal/scheduler"
 	"github.com/kakwa/strangle/internal/server"
 	"github.com/kakwa/strangle/internal/sshpool"
@@ -128,8 +129,47 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	apr := applier.NewAnsible(cfg.Targets, mgr, st, logger)
-	sched := scheduler.New(cfg.Server.Interval, apr.RunCycle, logger)
-	srv := server.New(cfg.Server.ListenAddr, apr, st, multi, logger)
+
+	// With a database, playbook runs flow through a postgres-backed River
+	// queue: each cycle enqueues one job per (target, playbook) pair and a
+	// River client in this process consumes them and dispatches runs to the
+	// worker pool. Without a database, playbooks run directly.
+	var queue *riverqueue.Client
+	var enqueue server.RunEnqueuer
+	var enqueueCycle func(ctx context.Context) error
+	if cfg.Server.Database.DSN != "" {
+		var err error
+		queue, err = riverqueue.Open(ctx, cfg.Server.Database.DSN, cfg.Server.Workers, apr.Trigger, logger)
+		if err != nil {
+			_ = mgr.Stop()
+			return fmt.Errorf("failed to initialize job queue: %w", err)
+		}
+		enqueue = queue
+		enqueueCycle = func(ctx context.Context) error {
+			var firstErr error
+			for _, t := range cfg.Targets {
+				for _, pb := range t.Playbooks {
+					if _, err := queue.EnqueueRun(ctx, t.Name, pb.Name); err != nil {
+						logger.Error("failed to enqueue playbook",
+							zap.String("target", t.Name),
+							zap.String("playbook", pb.Name),
+							zap.Error(err),
+						)
+						if firstErr == nil {
+							firstErr = err
+						}
+					}
+				}
+			}
+			return firstErr
+		}
+	} else {
+		enqueue = directEnqueuer{apr: apr, logger: logger}
+		enqueueCycle = apr.RunCycle
+	}
+
+	sched := scheduler.New(cfg.Server.Interval, enqueueCycle, logger)
+	srv := server.New(cfg.Server.ListenAddr, apr, st, multi, enqueue, logger)
 
 	done := make(chan struct{})
 	go func() {
@@ -137,20 +177,62 @@ func run(cmd *cobra.Command, args []string) error {
 		close(done)
 	}()
 
+	if queue != nil {
+		// The queue runs on its own context, not the signal context: a
+		// SIGTERM must not hard-cancel in-flight runs; Stop drains them.
+		queueCtx, cancelQueue := context.WithCancel(context.Background())
+		defer cancelQueue()
+		if err := queue.Start(queueCtx); err != nil {
+			queue.Close()
+			_ = mgr.Stop()
+			return fmt.Errorf("failed to start job queue: %w", err)
+		}
+	}
+
 	logger.Info("starting strangle",
 		zap.String("addr", cfg.Server.ListenAddr),
 		zap.Duration("interval", cfg.Server.Interval),
 		zap.Int("workers", cfg.Server.Workers),
+		zap.String("queue", queueMode(queue)),
 		zap.Strings("targets", apr.TargetNames()),
 	)
 	if err := srv.ListenAndServe(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("server failed", zap.Error(err))
-		shutdown(stop, done, mgr, st, logger)
+		shutdown(stop, done, mgr, st, queue, logger)
 		return err
 	}
-	shutdown(stop, done, mgr, st, logger)
+	shutdown(stop, done, mgr, st, queue, logger)
 	logger.Info("strangle stopped")
 	return nil
+}
+
+// directEnqueuer runs a playbook in a background goroutine. It is used when
+// no database is configured and there is no job queue to back manual runs.
+type directEnqueuer struct {
+	apr    *applier.Ansible
+	logger *zap.Logger
+}
+
+func (d directEnqueuer) EnqueueRun(_ context.Context, target, playbook string) (string, error) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		if err := d.apr.Trigger(ctx, target, playbook); err != nil {
+			d.logger.Error("manual run failed",
+				zap.String("target", target),
+				zap.String("playbook", playbook),
+				zap.Error(err),
+			)
+		}
+	}()
+	return "started", nil
+}
+
+func queueMode(queue *riverqueue.Client) string {
+	if queue != nil {
+		return "river"
+	}
+	return "direct"
 }
 
 // runWorker serves the Runner gRPC service inside a worker child process.
@@ -214,13 +296,21 @@ func newLogger(level string) (*zap.Logger, error) {
 	return cfg.Build()
 }
 
-// shutdown stops the scheduler (waiting for any in-progress playbook run and
-// its persistence to drain), then terminates the workers and closes the
-// store in that order: in-progress runs may still be writing to the store
-// while they finish.
-func shutdown(stop context.CancelFunc, done <-chan struct{}, mgr *worker.Manager, st store.Store, logger *zap.Logger) {
+// shutdown stops the scheduler, drains the job queue (waiting for in-flight
+// playbook runs to finish and be recorded), then terminates the workers and
+// closes the store in that order: in-progress runs may still be writing to
+// the store while they finish, and they run inside the worker processes.
+func shutdown(stop context.CancelFunc, done <-chan struct{}, mgr *worker.Manager, st store.Store, queue *riverqueue.Client, logger *zap.Logger) {
 	stop()
 	<-done
+	if queue != nil {
+		qctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		if err := queue.Stop(qctx); err != nil {
+			logger.Warn("job queue did not drain in time", zap.Error(err))
+		}
+		cancel()
+		queue.Close()
+	}
 	if err := mgr.Stop(); err != nil {
 		logger.Warn("failed to stop workers", zap.Error(err))
 	}

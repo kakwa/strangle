@@ -1,0 +1,354 @@
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/kakwa/strangle/internal/applier"
+	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/store"
+	"go.uber.org/zap"
+)
+
+// testTargets is the configuration used by the route tests: one target with
+// two playbooks.
+var testTargets = []config.TargetConfig{{
+	Name: "home",
+	Playbooks: []config.PlaybookConfig{
+		{Name: "site", Playbook: "site.yml", Inventory: "inventory.ini"},
+		{Name: "other", Playbook: "other.yml", Inventory: "inventory.ini"},
+	},
+}}
+
+// newTestServerWithStore builds a Server over the given store.
+func newTestServerWithStore(enq RunEnqueuer, st store.Store) *Server {
+	apr := applier.NewAnsible(testTargets, stubExecutor{}, st, zap.NewNop())
+	return New("test", apr, st, nil, enq, zap.NewNop())
+}
+
+func doGet(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	rec := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rec, req)
+	return rec
+}
+
+// seedRun persists one successful run for the named playbook with host web1
+// in the inventory (and, optionally, a second host that disappears).
+func seedRun(t *testing.T, st store.Store, playbook string, success bool) {
+	t.Helper()
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	err := st.SaveRun(context.Background(), store.RunInput{
+		Run: store.RunRecord{
+			Target:     "home",
+			Playbook:   playbook,
+			StartedAt:  now.Add(-time.Second),
+			FinishedAt: now,
+			DurationMS: 1000,
+			ExitCode:   0,
+			Success:    success,
+			Hosts:      1,
+		},
+		Hosts:      []store.HostRunRecord{{Host: "web1", Status: "ok", Ok: 3}},
+		Inventory:  []store.InventoryHost{{Name: "web1"}, {Name: "db1"}},
+		ScopeNames: []string{"web1", "db1"},
+	})
+	if err != nil {
+		t.Fatalf("SaveRun() error: %v", err)
+	}
+}
+
+func TestGetHealth(t *testing.T) {
+	s := newTestServer(&recEnqueuer{status: "queued"})
+
+	rec := doGet(t, s, "/api/health")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var out map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out["status"] != "ok" {
+		t.Errorf("status = %q, want ok", out["status"])
+	}
+}
+
+func TestGetStats(t *testing.T) {
+	st := store.NewMem()
+	seedRun(t, st, "site", true)
+	seedRun(t, st, "other", false)
+	s := newTestServerWithStore(&recEnqueuer{status: "queued"}, st)
+
+	rec := doGet(t, s, "/api/stats")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var out store.Stats
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Runs.Total != 2 || out.Runs.Succeeded != 1 || out.Runs.Failed != 1 {
+		t.Errorf("runs stats = %+v, want 2 total / 1 ok / 1 failed", out.Runs)
+	}
+	if out.Hosts.Total != 2 || out.Hosts.InInventory != 2 || out.Hosts.Active != 1 || out.Hosts.Disappeared != 1 {
+		t.Errorf("hosts stats = %+v, want 2 total / 2 in inventory / 1 active / 1 disappeared", out.Hosts)
+	}
+	if len(out.PerPlaybook) != 2 {
+		t.Errorf("per_playbook = %d entries, want 2", len(out.PerPlaybook))
+	}
+}
+
+func TestGetRunsWithLimit(t *testing.T) {
+	st := store.NewMem()
+	seedRun(t, st, "site", true)
+	seedRun(t, st, "other", true)
+	s := newTestServerWithStore(&recEnqueuer{status: "queued"}, st)
+
+	rec := doGet(t, s, "/api/runs?limit=1")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var runs []store.RunRecord
+	if err := json.NewDecoder(rec.Body).Decode(&runs); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(runs) != 1 {
+		t.Errorf("limit=1: got %d runs, want 1", len(runs))
+	}
+}
+
+func TestGetHosts(t *testing.T) {
+	st := store.NewMem()
+	seedRun(t, st, "site", true)
+	s := newTestServerWithStore(&recEnqueuer{status: "queued"}, st)
+
+	rec := doGet(t, s, "/api/hosts")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var hosts []store.HostRecord
+	if err := json.NewDecoder(rec.Body).Decode(&hosts); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byName := map[string]store.HostRecord{}
+	for _, h := range hosts {
+		byName[h.Name] = h
+	}
+	if len(hosts) != 2 {
+		t.Fatalf("got %d hosts, want 2", len(hosts))
+	}
+	if web, ok := byName["web1"]; !ok || !web.Active {
+		t.Errorf("web1 = %+v, want active", web)
+	}
+	if db, ok := byName["db1"]; !ok || db.Active {
+		t.Errorf("db1 = %+v, want disappeared (not active)", db)
+	}
+}
+
+func TestGetHostRuns(t *testing.T) {
+	st := store.NewMem()
+	seedRun(t, st, "site", true)
+	s := newTestServerWithStore(&recEnqueuer{status: "queued"}, st)
+
+	rec := doGet(t, s, "/api/hosts/web1/runs")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var runs []store.HostRunRecord
+	if err := json.NewDecoder(rec.Body).Decode(&runs); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(runs) != 1 || runs[0].Host != "web1" || runs[0].Playbook != "site" {
+		t.Errorf("runs = %+v, want one web1/site record", runs)
+	}
+}
+
+func TestGetHostChanges(t *testing.T) {
+	st := store.NewMem()
+	seedRun(t, st, "site", true)
+	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	err := st.SaveRun(context.Background(), store.RunInput{
+		Run: store.RunRecord{
+			Target: "home", Playbook: "site",
+			StartedAt: now.Add(-time.Second), FinishedAt: now,
+			DurationMS: 1000, Success: true,
+		},
+		Tasks: []store.TaskStateRecord{
+			{Host: "web1", Task: "install package", Status: "changed", LastDiff: "- old\n+ new"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SaveRun() error: %v", err)
+	}
+	s := newTestServerWithStore(&recEnqueuer{status: "queued"}, st)
+
+	rec := doGet(t, s, "/api/hosts/web1/changes")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var changes []store.TaskStateRecord
+	if err := json.NewDecoder(rec.Body).Decode(&changes); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(changes) != 1 || changes[0].Task != "install package" || changes[0].LastDiff != "- old\n+ new" {
+		t.Errorf("changes = %+v, want one changed task with its diff", changes)
+	}
+}
+
+func TestGetPlaybooks(t *testing.T) {
+	st := store.NewMem()
+	seedRun(t, st, "site", true)
+	seedRun(t, st, "other", false)
+	s := newTestServerWithStore(&recEnqueuer{status: "queued"}, st)
+
+	rec := doGet(t, s, "/api/playbooks")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var out map[string][]playbookInfo
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	home, ok := out["home"]
+	if !ok || len(home) != 2 {
+		t.Fatalf("home playbooks = %v, want 2 entries", out)
+	}
+	byName := map[string]playbookInfo{}
+	for _, p := range home {
+		byName[p.Name] = p
+	}
+	if byName["site"].LastStatus != "ok" || byName["site"].LastRunAt == nil {
+		t.Errorf("site = %+v, want last_status ok with a run time", byName["site"])
+	}
+	if byName["other"].LastStatus != "failed" {
+		t.Errorf("other = %+v, want last_status failed", byName["other"])
+	}
+}
+
+func TestGetHostkeysDisabled(t *testing.T) {
+	s := newTestServer(&recEnqueuer{status: "queued"}) // no ssh pool
+
+	rec := doGet(t, s, "/api/hostkeys")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var keys []interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&keys); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(keys) != 0 {
+		t.Errorf("hostkeys = %v, want empty", keys)
+	}
+}
+
+func TestSshStatsDisabled(t *testing.T) {
+	s := newTestServer(&recEnqueuer{status: "queued"}) // no ssh pool
+
+	rec := doGet(t, s, "/api/ssh/stats")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var stats map[string]interface{}
+	if err := json.NewDecoder(rec.Body).Decode(&stats); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(stats) != 0 {
+		t.Errorf("ssh stats = %v, want empty", stats)
+	}
+}
+
+func TestHostkeyAcceptDisabled(t *testing.T) {
+	s := newTestServer(&recEnqueuer{status: "queued"}) // no ssh pool
+
+	rec := postRunJSON(t, s, "/api/hostkeys/accept", `{"target":"home","host":"web1","fingerprint":"sha256:ab"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHostkeyRejectDisabled(t *testing.T) {
+	s := newTestServer(&recEnqueuer{status: "queued"}) // no ssh pool
+
+	rec := postRunJSON(t, s, "/api/hostkeys/reject", `{"target":"home","host":"web1"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestSpaFallback(t *testing.T) {
+	s := newTestServer(&recEnqueuer{status: "queued"})
+
+	// / and any client-side route fall back to the embedded index.html.
+	for _, path := range []string{"/", "/runs/42", "/hosts/web1"} {
+		rec := doGet(t, s, path)
+		if rec.Code != http.StatusOK {
+			t.Errorf("GET %s: status = %d, want %d", path, rec.Code, http.StatusOK)
+			continue
+		}
+		if ct := rec.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+			t.Errorf("GET %s: content type = %q, want text/html", path, ct)
+		}
+	}
+}
+
+func TestIntQuery(t *testing.T) {
+	cases := []struct {
+		q    string
+		def  int
+		want int
+	}{
+		{"", 50, 50},
+		{"0", 50, 50},
+		{"-1", 50, 50},
+		{"abc", 50, 50},
+		{"7", 50, 7},
+	}
+	for _, tc := range cases {
+		u := "/api/runs"
+		if tc.q != "" {
+			u = "/api/runs?limit=" + tc.q
+		}
+		req := httptest.NewRequest(http.MethodGet, u, nil)
+		if got := intQuery(req, "limit", tc.def); got != tc.want {
+			t.Errorf("intQuery(%q, %d) = %d, want %d", tc.q, tc.def, got, tc.want)
+		}
+	}
+}
+
+func TestListenAndServe(t *testing.T) {
+	s := New("127.0.0.1:0",
+		applier.NewAnsible(testTargets, stubExecutor{}, store.NewMem(), zap.NewNop()),
+		store.NewMem(), nil, &recEnqueuer{status: "queued"}, zap.NewNop())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- s.ListenAndServe(ctx) }()
+
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("ListenAndServe() error: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("ListenAndServe did not return after ctx cancel")
+	}
+}
+
+// postRunJSON posts a JSON body to the named endpoint.
+func postRunJSON(t *testing.T, s *Server, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rec, req)
+	return rec
+}

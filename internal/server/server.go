@@ -20,12 +20,21 @@ import (
 	"go.uber.org/zap"
 )
 
+// RunEnqueuer accepts a request to run one playbook now. In production this
+// enqueues a river job; without a database it runs the playbook directly.
+// It returns a short status word for the API response ("queued" for a
+// background job, "started" for a direct run).
+type RunEnqueuer interface {
+	EnqueueRun(ctx context.Context, target, playbook string) (string, error)
+}
+
 // Server is the strangle HTTP server.
 type Server struct {
 	addr    string
 	applier *applier.Ansible
 	store   store.Store
 	ssh     *sshpool.Multi
+	run     RunEnqueuer
 	logger  *zap.Logger
 }
 
@@ -51,13 +60,15 @@ var uiFS = func() fs.FS {
 
 // New returns a Server. The web UI is embedded in the binary; build it with
 // `make web` (or `make build`) before compiling. ssh may be nil when no
-// target uses the Go-managed SSH transport.
-func New(addr string, apr *applier.Ansible, st store.Store, ssh *sshpool.Multi, logger *zap.Logger) *Server {
+// target uses the Go-managed SSH transport. run accepts manual playbook runs
+// (a river job in production, a direct run without a database).
+func New(addr string, apr *applier.Ansible, st store.Store, ssh *sshpool.Multi, run RunEnqueuer, logger *zap.Logger) *Server {
 	return &Server{
 		addr:    addr,
 		applier: apr,
 		store:   st,
 		ssh:     ssh,
+		run:     run,
 		logger:  logger,
 	}
 }
@@ -178,21 +189,16 @@ func (s *Server) Routes() http.Handler {
 			return
 		}
 		// req.Playbook is the job name from strangle.yml, not a file path.
-		// The run happens in the background; the UI sees it appear in
-		// /api/runs when it finishes (runs are serialized anyway).
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-			defer cancel()
-			if err := s.applier.Trigger(ctx, req.Target, req.Playbook); err != nil {
-				s.logger.Error("manual run failed",
-					zap.String("target", req.Target),
-					zap.String("playbook", req.Playbook),
-					zap.Error(err),
-				)
-			}
-		}()
+		// The run happens in the background (a river job, or a direct run
+		// without a database); the UI sees it appear in /api/runs when it
+		// finishes.
+		status, err := s.run.EnqueueRun(r.Context(), req.Target, req.Playbook)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 		writeJSON(w, http.StatusAccepted, map[string]string{
-			"status":   "started",
+			"status":   status,
 			"target":   req.Target,
 			"playbook": req.Playbook,
 		})
