@@ -460,7 +460,10 @@ func (d *DB) Stats(ctx context.Context) (*store.Stats, error) {
 	}
 
 	{
-		var pbs []store.PlaybookStats
+		// GORM leaves the slice nil when there are no rows; keep it non-nil
+		// so the API serializes an empty array instead of null (the UI
+		// expects an array here).
+		pbs := make([]store.PlaybookStats, 0)
 		err := d.db.WithContext(ctx).Model(&Run{}).
 			Select("target, playbook, COUNT(*) AS total, "+
 				"COUNT(*) FILTER (WHERE NOT success) AS failed, "+

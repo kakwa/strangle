@@ -18,9 +18,9 @@ import (
 
 // HostKey describes a key seen for a host.
 type HostKey struct {
-	// Target is the name of the collection target that owns the connection.
-	// It is set when host keys are aggregated across targets (see Multi);
-	// the per-target persistence files leave it empty.
+	// Target is the scope key (<target>/<playbook name>) that owns the
+	// connection. It is set when host keys are aggregated across scopes (see Multi);
+	// the per-scope persistence files leave it empty.
 	Target      string    `json:"target,omitempty"`
 	Host        string    `json:"host"`
 	Fingerprint string    `json:"fingerprint"`

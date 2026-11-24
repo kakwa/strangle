@@ -5,37 +5,57 @@
 # is what strangle actually reads. Copy this file into a target directory and
 # adjust it for that project.
 
-# The playbooks to run, in order. Relative paths resolve against working_dir.
-playbooks:
-  - playbook.yml
+# The named jobs to run, in order. Each job has its own playbook, inventory
+# and options. Relative paths resolve against working_dir.
+#
+# Options given here at the top level are defaults; a job's own `options`
+# overrides them field by field.
+#
+# options:
+#   user: kakwa
+#   become: true
 
-# Inventory file or directory, relative to working_dir.
-inventory: inventory.ini
+playbooks:
+  - name: hypervisors
+    playbook: ./hypervisor.yml
+    inventory: ./inventory/hypervisor.yml
+    options:
+      user: kakwa
+      become: true
+  - name: base_infra
+    playbook: ./infra.yml
+    inventory: ./inventory/infra.yml
+    options:
+      user: kakwa
+      become: true
+  - name: ai_inference
+    playbook: ./ai.yml
+    inventory: ./inventory/ai.yml
+    options:
+      user: kakwa
+      become: true
 
 # The directory the playbooks run from: Ansible resolves ansible.cfg,
 # relative paths and roles relative to it. Defaults to the target path.
 # working_dir: playbooks
 
-# Optional: connect to hosts as this user (-u). It is also the fallback user
-# for the Go-managed SSH transport when the inventory sets none.
-# user: deploy
-
-# Optional privilege escalation (-b / --become-method / --become-user).
-# become: true
-# become_method: sudo
-# become_user: root
-
+# Options accepted inside a job's (or the top-level) `options` block:
+#
+#   user: deploy             # -u; also the SSH transport's fallback user
+#   become: true             # -b
+#   become_method: sudo      # --become-method (Ansible default: sudo)
+#   become_user: root        # --become-user
+#
 # Passwords are given as files: an embedded interpreter cannot answer
 # interactive -k/-K prompts. These map to Ansible's password-file flags.
-# become_password_file: /run/secrets/ansible_become
-# connection_password_file: /run/secrets/ansible_connection
-# vault_password_file: /run/secrets/ansible_vault
-
-# Optional: Go-managed SSH transport (persistent connections, no ssh
-# process). The default host_key_policy is api; see the README for the
-# full option set.
-# ssh:
-#   enabled: true
-#   private_key_file: ~/.ssh/id_ed25519
-#   use_agent: true
-#   host_key_policy: api
+#   become_password_file: /run/secrets/ansible_become
+#   connection_password_file: /run/secrets/ansible_connection
+#   vault_password_file: /run/secrets/ansible_vault
+#
+# Optional Go-managed SSH transport (persistent connections, no ssh process).
+# The default host_key_policy is api; see the README for the full option set.
+#   ssh:
+#     enabled: true
+#     private_key_file: ~/.ssh/id_ed25519
+#     use_agent: true
+#     host_key_policy: api

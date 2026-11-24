@@ -65,13 +65,17 @@ tests/               test configurations
 - `GET /api/hosts`       — all hosts with their last status and disappearance state
 - `GET /api/hosts/{host}/runs`    — the last runs that included the host (default 10)
 - `GET /api/hosts/{host}/changes` — the host's task traces, newest first (default 200)
-- `GET /api/playbooks`   — configured playbooks, keyed by target name
-- `POST /api/run`        — body `{"target": "demo", "playbook": "site.yml"}`;
-  starts the run in the background and returns `202` (unknown target or
-  playbook names are rejected)
+- `GET /api/playbooks`   — playbook job names, keyed by target name
+- `POST /api/run`        — body `{"target": "demo", "playbook": "site"}`;
+  `playbook` is the job name from `strangle.yml`, not a file path. Starts the
+  run in the background and returns `202` (unknown target or job names are
+  rejected)
 - `GET /api/hostkeys`    — host keys pending approval (SSH transport only)
-- `POST /api/hostkeys/accept` — body `{"target": "demo", "host": "...", "fingerprint": "..."}`
-- `POST /api/hostkeys/reject` — body `{"target": "demo", "host": "..."}`
+- `POST /api/hostkeys/accept` — body `{"target": "demo/site", "host": "...", "fingerprint": "..."}`
+- `POST /api/hostkeys/reject` — body `{"target": "demo/site", "host": "..."}`
+
+For the host-key endpoints, `target` is the SSH scope key
+`<target>/<playbook name>`; it appears as `target` in `/api/hostkeys` output.
 - `GET /api/ssh/stats`   — SSH pool counters (`active_connections`, `total_dials`)
 
 ## Web UI
@@ -120,56 +124,86 @@ targets:
 
 ### strangle.yml — one per target
 
-Lives at the root of the target directory and holds the Ansible parameters:
+Lives at the root of the target directory. Each entry of `playbooks` is a named
+job with its own playbook file, inventory and options:
 
 ```yaml
-working_dir: playbooks            # the dir playbooks run from (optional;
-                                  # defaults to the target path)
-inventory: inventory              # inventory file or directory, relative to working_dir
-playbooks:                        # ordered list, relative to working_dir
-  - site.yml
-  - dns.yml
+# Optional defaults inherited by every job; a job's `options` overrides them
+# field by field.
+# options:
+#   user: kakwa
+#   become: true
 
-user: deploy             # optional: -u; also the SSH transport's fallback user
-become: true             # optional: -b
-become_method: sudo      # optional: --become-method (default: sudo)
-become_user: root        # optional: --become-user
+playbooks:
+  - name: hypervisors
+    playbook: ./hypervisor.yml
+    inventory: ./inventory/hypervisor.yml
+    options:
+      user: kakwa
+      become: true
+  - name: base_infra
+    playbook: ./infra.yml
+    inventory: ./inventory/infra.yml
+    options:
+      user: kakwa
+      become: true
 
-# Password files instead of interactive prompts (-K/-k cannot be answered in-process):
-become_password_file: /run/secrets/ansible_become
-connection_password_file: /run/secrets/ansible_connection
-vault_password_file: /run/secrets/ansible_vault
+working_dir: playbooks    # optional; defaults to the target path
 ```
 
-`--diff` is always added by the applier. `working_dir` is chdir'd into for the
-duration of each run, so `ansible.cfg`, relative paths and roles are resolved
-relative to the project. The repository is a working example:
-`config/server.yml` and `config/collection.yml` configure a local `demo`
-target (the `demo/` directory, applied to localhost) plus the `home.tf`
-project, and `config/strangle.yml` is a reference for the per-target file
-each target directory carries.
+`name` is the job's identifier in the API, web UI and run history; `playbook`
+is the file actually executed. Both `playbook` and `inventory` are resolved
+against `working_dir` (absolute paths are used as-is). Unset values in a job's
+`options` fall back to the top-level `options` block. The full option set is:
+
+| Key | Meaning |
+|-----|---------|
+| `user` | SSH user (`-u`); also the SSH transport's fallback user |
+| `become` | Privilege escalation (`-b`); can be explicitly set to `false` |
+| `become_method` | `--become-method` (Ansible defaults to `sudo`) |
+| `become_user` | `--become-user` |
+| `become_password_file` | `--become-password-file` |
+| `connection_password_file` | `--connection-password-file` |
+| `vault_password_file` | `--vault-password-file` |
+| `ssh` | Go-managed SSH transport (see below); replaces/merges the top-level `ssh` block |
+
+Password files are used instead of interactive prompts, which an embedded
+interpreter cannot answer. `--diff` is always added by the applier.
+`working_dir` is chdir'd into for the duration of each run, so `ansible.cfg`,
+relative paths and roles are resolved relative to the project. Unknown keys
+are rejected, so the old flat `playbooks`/`inventory` format is not accepted.
+
+The repository is a working example: `config/server.yml` and
+`config/collection.yml` configure a local `demo` target (the `demo/`
+directory, applied to localhost), and `config/strangle.yml` is a reference for
+the per-target file each target directory carries.
 
 ### Go-managed SSH transport
 
-Configured per target in its `strangle.yml`. When `ssh.enabled` is true,
+Configured per job in `strangle.yml` under `options.ssh` (or once at the top
+level under `options.ssh` as a default for all jobs). When `enabled` is true,
 Ansible uses a custom `strangle_ssh` connection plugin that asks the Go
-process to perform all SSH operations for that target. Each target with the
-transport enabled gets its own connection pool, so keys, policies and pending
-host keys are isolated per target. Connections are created lazily and
-**kept open** in a pool, so they are reused across tasks and across playbook
-runs. No `ssh` process is spawned.
+process to perform all SSH operations for that job. Each job with the
+transport enabled gets its own connection pool keyed `<target>/<name>`, so
+credentials, policies and pending host keys are isolated per job. Default
+host-key files are named `strangle.<name>.known_hosts`,
+`strangle.<name>.auto.json` and `strangle.<name>.pending.json` in the target
+directory; set the file keys explicitly to share or relocate them.
+Connections are created lazily and **kept open** in a pool, so they are reused
+across tasks and across playbook runs. No `ssh` process is spawned.
 
 ```yaml
-ssh:
-  enabled: true
-  user: kakwa              # default user when the inventory does not set one
-                           # (defaults to the target-level user key)
-  port: 22
-  private_key_file: ~/.ssh/id_ed25519  # supports unencrypted or passphrase keys
-  private_key_passphrase: ""           # optional
-  use_agent: true          # keys from SSH_AUTH_SOCK
-  # password: ""           # password auth (discouraged; prefer keys/agent)
-  host_key_policy: api     # api | known_hosts | ca | auto | insecure
+options:
+  ssh:
+    enabled: true
+    user: kakwa            # default user when the inventory does not set one
+                           # (defaults to the job's user)
+    port: 22
+    private_key_file: ~/.ssh/id_ed25519  # supports unencrypted or passphrase keys
+    private_key_passphrase: ""           # optional
+    use_agent: true        # keys from SSH_AUTH_SOCK
+    # password: ""         # password auth (discouraged; prefer keys/agent)
+    host_key_policy: api   # api | known_hosts | ca | auto | insecure
 ```
 
 Authentication: `private_key_file` (with optional `-cert.pub` for OpenSSH user
@@ -181,7 +215,7 @@ Host-key policies:
 | Policy        | Behavior |
 |---------------|----------|
 | `api` (default) | Unknown keys are stored as *pending* and rejected until approved via `POST /api/hostkeys/accept`. A changed key for a known host is rejected and queued as pending. |
-| `known_hosts` | Strict verification against `known_hosts_file` (default `<target path>/known_hosts.strangle`, OpenSSH format). |
+| `known_hosts` | Strict verification against `known_hosts_file` (default `<target dir>/strangle.<name>.known_hosts`, OpenSSH format). |
 | `ca`          | Trust host certificates signed by a CA public key listed in `ca_files` (authorized_keys format). |
 | `auto`        | Trust the first key seen per host; reject later changes. Accepted keys persist in `auto_accept_file`. |
 | `insecure`    | Accept any key. Development only. |

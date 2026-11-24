@@ -3,3 +3,8 @@ html,
 body {
   min-height: 100%;
 }
+
+/* Keep in-page anchor targets clear of the fixed header */
+[id] {
+  scroll-margin-top: 72px;
+}

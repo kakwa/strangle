@@ -35,7 +35,10 @@ node_modules/
 web/dist/*
 !web/dist/index.html
 
-# Generated SSH host-key state
+# Generated SSH host-key state (per-playbook scope files)
+strangle.*.known_hosts
+strangle.*.auto.json
+strangle.*.pending.json
 known_hosts.strangle
 known_hosts.accepted.json
 known_hosts.auto.json

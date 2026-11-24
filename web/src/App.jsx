@@ -1,21 +1,72 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
+  IconBook,
+  IconClock,
+  IconPlayerPlay,
+  IconServer,
+} from '@tabler/icons-react'
+import {
   Accordion,
+  Alert,
+  AppShell,
   Badge,
+  Burger,
   Card,
-  Container,
+  Center,
   Group,
+  Loader,
   ScrollArea,
   SimpleGrid,
   Stack,
   Table,
-  Tabs,
   Text,
+  ThemeIcon,
   Title,
 } from '@mantine/core'
+import { useDisclosure } from '@mantine/hooks'
+import { DoubleNavbar } from './DoubleNavbar'
 
 const POLL_INTERVAL_MS = 10_000
-const PAGE_SIZE = 50
+
+// The API should always return arrays/objects, but older or partial responses
+// may contain null. Normalize them so a rendering bug cannot take down the UI.
+function asArray(value) {
+  return Array.isArray(value) ? value : []
+}
+
+function asObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value
+    : {}
+}
+
+function normalizeStats(value) {
+  const s = asObject(value)
+  return {
+    hosts: {
+      total: 0,
+      in_inventory: 0,
+      active: 0,
+      disappeared: 0,
+      ...asObject(s.hosts),
+    },
+    runs: {
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+      avg_duration_ms: undefined,
+      last_run_at: null,
+      ...asObject(s.runs),
+    },
+    per_playbook: asArray(s.per_playbook),
+  }
+}
+
+function normalizePlaybooks(value) {
+  return Object.fromEntries(
+    Object.entries(asObject(value)).map(([target, pbs]) => [target, asArray(pbs)])
+  )
+}
 
 function fmtDuration(ms) {
   if (ms === undefined || ms === null) return '—'
@@ -41,11 +92,22 @@ function fmtAgo(t) {
   return `${Math.floor(h / 24)}d ago`
 }
 
-function Stat({ label, value, children }) {
+function Stat({ label, value, icon: Icon, children }) {
   return (
     <Card withBorder>
-      <Text size="xs" c="dimmed" fw={700} tt="uppercase">{label}</Text>
-      <Text size="xl" fw={700}>{value}</Text>
+      <Group gap="sm" align="center">
+        <ThemeIcon size={40} variant="light" color="blue">
+          <Icon size={20} stroke={1.5} />
+        </ThemeIcon>
+        <div>
+          <Text size="xs" c="dimmed" fw={700} tt="uppercase">
+            {label}
+          </Text>
+          <Text size="xl" fw={700}>
+            {value}
+          </Text>
+        </div>
+      </Group>
       {children}
     </Card>
   )
@@ -89,31 +151,33 @@ function Dashboard({ stats, runs, hosts, onHost }) {
   const disappeared = hosts.filter((h) => !h.active && h.in_inventory)
   return (
     <Stack gap="md">
-      <SimpleGrid cols={{ base: 2, md: 4 }} gap="md">
-        <Stat label="Hosts" value={stats.hosts.total}>
-          <Group gap="xs" mt="xs" wrap="wrap">
-            <Badge size="sm" variant="subtle">{stats.hosts.in_inventory} in inventory</Badge>
-            <Badge size="sm" color="green" variant="light">{stats.hosts.active} active</Badge>
-            {stats.hosts.disappeared > 0 && (
-              <Badge size="sm" color="orange" variant="light">{stats.hosts.disappeared} disappeared</Badge>
-            )}
-          </Group>
-        </Stat>
-        <Stat label="Runs" value={stats.runs.total}>
-          <Group gap="xs" mt="xs" wrap="wrap">
-            <Badge size="sm" color="green" variant="light">{stats.runs.succeeded} succeeded</Badge>
-            <Badge size="sm" color="red" variant="light">{stats.runs.failed} failed</Badge>
-          </Group>
-        </Stat>
-        <Stat label="Avg duration" value={fmtDuration(stats.runs.avg_duration_ms)}>
-          <Text size="xs" c="dimmed" mt="xs">last run {fmtAgo(stats.runs.last_run_at)}</Text>
-        </Stat>
-        <Stat label="Playbooks" value={stats.per_playbook.length}>
-          <Text size="xs" c="dimmed" mt="xs">
-            {stats.per_playbook.map((p) => p.playbook.split('/').pop()).join(', ') || '—'}
-          </Text>
-        </Stat>
-      </SimpleGrid>
+      <div id="dash-overview">
+        <SimpleGrid cols={{ base: 2, md: 4 }} gap="md">
+          <Stat label="Hosts" value={stats.hosts.total} icon={IconServer}>
+            <Group gap="xs" mt="xs" wrap="wrap">
+              <Badge size="sm" variant="subtle">{stats.hosts.in_inventory} in inventory</Badge>
+              <Badge size="sm" color="green" variant="light">{stats.hosts.active} active</Badge>
+              {stats.hosts.disappeared > 0 && (
+                <Badge size="sm" color="orange" variant="light">{stats.hosts.disappeared} disappeared</Badge>
+              )}
+            </Group>
+          </Stat>
+          <Stat label="Runs" value={stats.runs.total} icon={IconPlayerPlay}>
+            <Group gap="xs" mt="xs" wrap="wrap">
+              <Badge size="sm" color="green" variant="light">{stats.runs.succeeded} succeeded</Badge>
+              <Badge size="sm" color="red" variant="light">{stats.runs.failed} failed</Badge>
+            </Group>
+          </Stat>
+          <Stat label="Avg duration" value={fmtDuration(stats.runs.avg_duration_ms)} icon={IconClock}>
+            <Text size="xs" c="dimmed" mt="xs">last run {fmtAgo(stats.runs.last_run_at)}</Text>
+          </Stat>
+          <Stat label="Playbooks" value={stats.per_playbook.length} icon={IconBook}>
+            <Text size="xs" c="dimmed" mt="xs">
+              {stats.per_playbook.map((p) => (p.playbook || '').split('/').pop()).join(', ') || '—'}
+            </Text>
+          </Stat>
+        </SimpleGrid>
+      </div>
 
       {disappeared.length > 0 && (
         <Card withBorder>
@@ -128,12 +192,12 @@ function Dashboard({ stats, runs, hosts, onHost }) {
         </Card>
       )}
 
-      <Card withBorder>
+      <Card withBorder id="dash-runs">
         <Title order={4} mb="sm">Recent runs</Title>
         <RunsTable runs={runs} onHost={onHost} />
       </Card>
 
-      <Card withBorder>
+      <Card withBorder id="dash-playbooks">
         <Title order={4} mb="sm">Per-playbook</Title>
         <Table>
           <Table.Thead>
@@ -146,7 +210,7 @@ function Dashboard({ stats, runs, hosts, onHost }) {
           </Table.Thead>
           <Table.Tbody>
             {stats.per_playbook.map((p) => (
-              <Table.Tr key={p.playbook}>
+              <Table.Tr key={`${p.target}/${p.playbook}`}>
                 <Table.Td>{p.playbook}</Table.Td>
                 <Table.Td>{p.total}</Table.Td>
                 <Table.Td>
@@ -270,6 +334,41 @@ function HostsTable({ hosts, onHost, filter, setFilter }) {
   )
 }
 
+function PlaybooksView({ playbooks }) {
+  return (
+    <Card withBorder>
+      <Title order={4} mb="sm">Targets & playbooks</Title>
+      <Table>
+        <Table.Thead>
+          <Table.Tr>
+            <Table.Th>Target</Table.Th>
+            <Table.Th>Playbooks</Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {Object.entries(playbooks).map(([target, pbs]) => (
+            <Table.Tr key={target}>
+              <Table.Td><Text fw="bold">{target}</Text></Table.Td>
+              <Table.Td>
+                <Group gap={4} wrap="wrap">
+                  {pbs.map((pb) => (
+                    <Badge key={pb} size="xs" variant="subtle">{pb}</Badge>
+                  ))}
+                </Group>
+              </Table.Td>
+            </Table.Tr>
+          ))}
+          {Object.keys(playbooks).length === 0 && (
+            <Table.Tr>
+              <Table.Td colSpan={2}>No targets configured</Table.Td>
+            </Table.Tr>
+          )}
+        </Table.Tbody>
+      </Table>
+    </Card>
+  )
+}
+
 function HostDetail({ host, onBack }) {
   const [runs, setRuns] = useState([])
   const [changes, setChanges] = useState([])
@@ -283,8 +382,8 @@ function HostDetail({ host, onBack }) {
       if (!runsRes.ok || !changesRes.ok) {
         throw new Error(`HTTP ${runsRes.status}/${changesRes.status}`)
       }
-      setRuns(await runsRes.json())
-      setChanges(await changesRes.json())
+      setRuns(asArray(await runsRes.json()))
+      setChanges(asArray(await changesRes.json()))
     } catch {
       // ignore transient errors while polling
     }
@@ -406,24 +505,29 @@ export default function App() {
   const [stats, setStats] = useState(null)
   const [runs, setRuns] = useState([])
   const [hosts, setHosts] = useState([])
+  const [playbooks, setPlaybooks] = useState({})
   const [error, setError] = useState(null)
-  const [tab, setTab] = useState('dashboard')
+  const [section, setSection] = useState('Dashboard')
   const [selectedHost, setSelectedHost] = useState(null)
   const [hostFilter, setHostFilter] = useState('all')
+  const [mobileOpened, { toggle: toggleMobile, close: closeMobile }] =
+    useDisclosure(false)
 
   const refresh = useCallback(async () => {
     try {
-      const [statsRes, runsRes, hostsRes] = await Promise.all([
+      const [statsRes, runsRes, hostsRes, playbooksRes] = await Promise.all([
         fetch('/api/stats'),
         fetch('/api/runs?limit=50'),
         fetch('/api/hosts'),
+        fetch('/api/playbooks'),
       ])
-      if (!statsRes.ok || !runsRes.ok || !hostsRes.ok) {
-        throw new Error(`HTTP ${statsRes.status}/${runsRes.status}/${hostsRes.status}`)
+      if (!statsRes.ok || !runsRes.ok || !hostsRes.ok || !playbooksRes.ok) {
+        throw new Error(`HTTP ${statsRes.status}/${runsRes.status}/${hostsRes.status}/${playbooksRes.status}`)
       }
-      setStats(await statsRes.json())
-      setRuns(await runsRes.json())
-      setHosts(await hostsRes.json())
+      setStats(normalizeStats(await statsRes.json()))
+      setRuns(asArray(await runsRes.json()))
+      setHosts(asArray(await hostsRes.json()))
+      setPlaybooks(normalizePlaybooks(await playbooksRes.json()))
       setError(null)
     } catch (err) {
       setError(err.message)
@@ -438,59 +542,95 @@ export default function App() {
 
   const openHost = (name) => {
     setSelectedHost(name)
-    setTab('host')
+    setSection('Hosts')
+  }
+
+  const backToHosts = () => {
+    setSelectedHost(null)
   }
 
   const host = selectedHost ? hosts.find((h) => h.name === selectedHost) : null
 
+  const headerTitle =
+    section === 'Hosts' && selectedHost ? selectedHost : section
+
   return (
-    <Container size="lg" py="md">
-      <Stack gap="lg">
-        <Group justify="space-between" align="center">
-          <Group align="baseline" gap="sm">
-            <Title order={1}>strangle</Title>
-            <Text c="dimmed" size="sm">
-              Ansible fleet monitor
-            </Text>
+    <AppShell
+      header={{ height: 56 }}
+      navbar={{
+        width: { base: 300 },
+        breakpoint: 'sm',
+        collapsed: { mobile: !mobileOpened },
+      }}
+    >
+      <AppShell.Header>
+        <Group h="100%" px="md" justify="space-between">
+          <Group gap="sm" align="center">
+            <Burger
+              opened={mobileOpened}
+              onClick={toggleMobile}
+              hiddenFrom="sm"
+              size="sm"
+            />
+            <Title order={4}>{headerTitle}</Title>
           </Group>
-          <Badge variant="subtle" color="gray">
+          <Badge variant="subtle" color="gray" size="sm">
             polling every {POLL_INTERVAL_MS / 1000}s
           </Badge>
         </Group>
+      </AppShell.Header>
 
-        {error && (
-          <Card withBorder>
-            <Text c="red" size="sm">API unavailable: {error}</Text>
-          </Card>
-        )}
+      <AppShell.Navbar p={0}>
+        <DoubleNavbar
+          active={section}
+          onSection={(s) => {
+            setSection(s)
+            closeMobile()
+          }}
+          hosts={hosts}
+          selectedHost={selectedHost}
+          onSelectHost={openHost}
+          playbooks={playbooks}
+        />
+      </AppShell.Navbar>
 
-        {stats && (
-          <Tabs value={tab} onChange={(v) => (v && setTab(v))} color="blue">
-            <Tabs.List>
-              <Tabs.Tab value="dashboard">Dashboard</Tabs.Tab>
-              <Tabs.Tab value="hosts">Hosts</Tabs.Tab>
-              {selectedHost && (
-                <Tabs.Tab value="host" leftSection={<span>›</span>}>
-                  {selectedHost}
-                </Tabs.Tab>
-              )}
-            </Tabs.List>
-            <Tabs.Panel value="dashboard" pt="md">
-              <Dashboard stats={stats} runs={runs} hosts={hosts} onHost={openHost} />
-            </Tabs.Panel>
-            <Tabs.Panel value="hosts" pt="md">
-              <HostsTable hosts={hosts} onHost={openHost} filter={hostFilter} setFilter={setHostFilter} />
-            </Tabs.Panel>
-            <Tabs.Panel value="host" pt="md">
-              {host ? (
-                <HostDetail host={selectedHost} onBack={() => { setSelectedHost(null); setTab('hosts') }} />
-              ) : (
-                <Text c="dimmed">Host not found (it may have been removed from the inventory)</Text>
-              )}
-            </Tabs.Panel>
-          </Tabs>
-        )}
-      </Stack>
-    </Container>
+      <AppShell.Main>
+        <Stack gap="lg" p="lg">
+          {error && (
+            <Alert color="red" title="API unavailable">
+              {error}
+            </Alert>
+          )}
+
+          {stats === null && !error && (
+            <Center py="xl">
+              <Loader />
+            </Center>
+          )}
+
+          {stats && section === 'Dashboard' && (
+            <Dashboard stats={stats} runs={runs} hosts={hosts} onHost={openHost} />
+          )}
+
+          {stats && section === 'Hosts' && !selectedHost && (
+            <HostsTable hosts={hosts} onHost={openHost} filter={hostFilter} setFilter={setHostFilter} />
+          )}
+
+          {stats && section === 'Hosts' && selectedHost && (
+            host ? (
+              <HostDetail host={selectedHost} onBack={backToHosts} />
+            ) : (
+              <Alert color="gray" title="Host not found">
+                It may have been removed from the inventory.
+              </Alert>
+            )
+          )}
+
+          {stats && section === 'Playbooks' && (
+            <PlaybooksView playbooks={playbooks} />
+          )}
+        </Stack>
+      </AppShell.Main>
+    </AppShell>
   )
 }

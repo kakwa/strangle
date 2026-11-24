@@ -13,7 +13,7 @@ interval: 15m
 # PostgreSQL DSN for run history. Without a DSN strangle falls back to an
 # in-memory store and history is lost on restart.
 database:
-  dsn: postgres://kakwa:kakwa@127.0.0.1:5432/strangle
+  dsn: postgres://postgres@127.0.0.1:5432/strangle
 
 # Authentication. Placeholder: parsed but not enforced yet.
 # auth:

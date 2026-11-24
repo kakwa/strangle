@@ -164,3 +164,19 @@ func TestMemSaveRunAndQueries(t *testing.T) {
 		t.Errorf("Stats().PerPlaybook = %v", perPB)
 	}
 }
+
+func TestMemEmptyCollectionsAreNotNull(t *testing.T) {
+	ctx := context.Background()
+	s := NewMem()
+	defer s.Close()
+
+	if runs, err := s.HostRuns(ctx, "missing", 10); err != nil || runs == nil {
+		t.Fatalf("HostRuns() = %v, %v; want non-nil empty slice", runs, err)
+	}
+	if changes, err := s.HostChanges(ctx, "missing", 10); err != nil || changes == nil {
+		t.Fatalf("HostChanges() = %v, %v; want non-nil empty slice", changes, err)
+	}
+	if stats, err := s.Stats(ctx); err != nil || stats.PerPlaybook == nil {
+		t.Fatalf("Stats().PerPlaybook = %v, %v; want non-nil empty slice", stats, err)
+	}
+}

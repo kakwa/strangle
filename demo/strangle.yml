@@ -3,6 +3,6 @@
 # strangle.yml — see config/strangle.yml for a documented reference.
 
 playbooks:
-  - playbook.yml
-
-inventory: inventory.ini
+  - name: demo
+    playbook: playbook.yml
+    inventory: inventory.ini

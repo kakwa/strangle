@@ -170,7 +170,7 @@ func (s *Mem) HostRuns(_ context.Context, host string, limit int) ([]HostRunReco
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var out []HostRunRecord
+	out := make([]HostRunRecord, 0)
 	for i := len(s.hostRuns) - 1; i >= 0; i-- {
 		if s.hostRuns[i].Host == host {
 			out = append(out, s.hostRuns[i])
@@ -186,7 +186,7 @@ func (s *Mem) HostChanges(_ context.Context, host string, limit int) ([]TaskStat
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var out []TaskStateRecord
+	out := make([]TaskStateRecord, 0)
 	for _, ts := range s.tasks {
 		if ts.Host == host {
 			out = append(out, *ts)

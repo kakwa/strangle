@@ -45,21 +45,37 @@ targets:
       url: https://example.com/one.git
       branch: main
 `
-	strangleFull = `
+	strangleMinimal = `
 playbooks:
-  - site.yml
-  - dns.yml
-inventory: inventory
-user: deploy
-become: true
-become_method: su
-become_user: root
-become_password_file: /run/secrets/become
-connection_password_file: /run/secrets/conn
-vault_password_file: /run/secrets/vault
-ssh:
-  enabled: true
-  use_agent: true
+  - name: site
+    playbook: site.yml
+    inventory: inventory
+`
+	strangleFull = `
+working_dir: playbooks
+options:
+  user: admin
+  ssh:
+    enabled: true
+    use_agent: true
+playbooks:
+  - name: site
+    playbook: site.yml
+    inventory: inventory
+    options:
+      user: deploy
+      become: true
+      become_method: su
+      become_user: root
+      become_password_file: /run/secrets/become
+      connection_password_file: /run/secrets/conn
+      vault_password_file: /run/secrets/vault
+      ssh:
+        port: 2222
+        host_key_policy: auto
+  - name: dns
+    playbook: dns.yml
+    inventory: /abs/inventory
 `
 )
 
@@ -75,6 +91,7 @@ auth:
 `, collOne, strangleFull)
 
 	targetDir := filepath.Join(filepath.Dir(collectionPath), "proj")
+	wd := filepath.Join(targetDir, "playbooks")
 
 	cfg, err := Load(serverPath, collectionPath)
 	if err != nil {
@@ -96,39 +113,71 @@ auth:
 	if tr.Git.URL != "https://example.com/one.git" || tr.Git.Branch != "main" {
 		t.Errorf("Git = %+v", tr.Git)
 	}
-	if tr.WorkingDir != targetDir {
-		t.Errorf("WorkingDir = %q, want default %q", tr.WorkingDir, targetDir)
+	if tr.WorkingDir != wd {
+		t.Errorf("WorkingDir = %q, want %q", tr.WorkingDir, wd)
 	}
-	if !slices.Equal(tr.Playbooks, []string{"site.yml", "dns.yml"}) {
-		t.Errorf("Playbooks = %v", tr.Playbooks)
-	}
-	if tr.Inventory != "inventory" {
-		t.Errorf("Inventory = %q", tr.Inventory)
-	}
-	if !tr.SSH.Enabled || tr.SSH.Port != 22 || tr.SSH.HostKeyPolicy != PolicyAPI {
-		t.Errorf("SSH defaults = %+v", tr.SSH)
-	}
-	if tr.SSH.User != "deploy" {
-		t.Errorf("SSH.User = %q, want target-level user %q", tr.SSH.User, "deploy")
-	}
-	if got, want := tr.SSH.KnownHostsFile, filepath.Join(targetDir, "known_hosts.strangle"); got != want {
-		t.Errorf("SSH.KnownHostsFile = %q, want %q", got, want)
-	}
-	if got, want := tr.SSH.AutoAcceptFile, filepath.Join(targetDir, "known_hosts.auto.json"); got != want {
-		t.Errorf("SSH.AutoAcceptFile = %q, want %q", got, want)
-	}
-	if got, want := tr.SSH.PendingFile, filepath.Join(targetDir, "hostkeys.pending.json"); got != want {
-		t.Errorf("SSH.PendingFile = %q, want %q", got, want)
+	if len(tr.Playbooks) != 2 {
+		t.Fatalf("len(Playbooks) = %d, want 2", len(tr.Playbooks))
 	}
 
-	if got, want := tr.PlaybookPath("site.yml"), filepath.Join(targetDir, "site.yml"); got != want {
-		t.Errorf("PlaybookPath(site.yml) = %q, want %q", got, want)
+	site := tr.Playbooks[0]
+	if site.Name != "site" || site.Playbook != "site.yml" || site.Inventory != "inventory" || site.WorkingDir != wd {
+		t.Errorf("site identity = %+v", site)
 	}
-	if got := tr.PlaybookPath("/abs/site.yml"); got != "/abs/site.yml" {
-		t.Errorf("PlaybookPath(abs) = %q", got)
+	if site.TargetName != "one" || site.TargetPath != targetDir || site.SSHKey() != "one/site" {
+		t.Errorf("site scope = %+v", site)
 	}
-	if got, want := tr.InventoryPath(), filepath.Join(targetDir, "inventory"); got != want {
+	if site.Options.User != "deploy" || !site.Options.Become ||
+		site.Options.BecomeMethod != "su" || site.Options.BecomeUser != "root" ||
+		site.Options.BecomePasswordFile != "/run/secrets/become" ||
+		site.Options.ConnectionPasswordFile != "/run/secrets/conn" ||
+		site.Options.VaultPasswordFile != "/run/secrets/vault" {
+		t.Errorf("site options = %+v", site.Options)
+	}
+	if !site.Options.SSH.Enabled || !site.Options.SSH.UseAgent ||
+		site.Options.SSH.Port != 2222 || site.Options.SSH.HostKeyPolicy != PolicyAuto ||
+		site.Options.SSH.User != "deploy" {
+		t.Errorf("site SSH = %+v", site.Options.SSH)
+	}
+	prefix := filepath.Join(targetDir, "strangle.site")
+	if site.Options.SSH.AutoAcceptFile != prefix+".auto.json" ||
+		site.Options.SSH.PendingFile != prefix+".pending.json" ||
+		site.Options.SSH.KnownHostsFile != prefix+".known_hosts" {
+		t.Errorf("site SSH files = %+v", site.Options.SSH)
+	}
+
+	dns := tr.Playbooks[1]
+	if dns.Name != "dns" || dns.Options.User != "admin" || dns.Options.Become {
+		t.Errorf("dns inherited options = %+v", dns)
+	}
+	if !dns.Options.SSH.Enabled || dns.Options.SSH.Port != 22 || dns.Options.SSH.HostKeyPolicy != PolicyAPI {
+		t.Errorf("dns SSH defaults = %+v", dns.Options.SSH)
+	}
+	if dns.Options.SSH.User != "admin" {
+		t.Errorf("dns SSH.User = %q, want inherited playbook user", dns.Options.SSH.User)
+	}
+	if dns.SSHKey() != "one/dns" {
+		t.Errorf("dns SSHKey = %q", dns.SSHKey())
+	}
+
+	if _, ok := tr.Playbook("site"); !ok {
+		t.Error("Playbook(site) = not found")
+	}
+	if _, ok := tr.Playbook("missing"); ok {
+		t.Error("Playbook(missing) = found")
+	}
+
+	if got, want := site.PlaybookPath(), filepath.Join(wd, "site.yml"); got != want {
+		t.Errorf("PlaybookPath() = %q, want %q", got, want)
+	}
+	if got, want := site.InventoryPath(), filepath.Join(wd, "inventory"); got != want {
 		t.Errorf("InventoryPath() = %q, want %q", got, want)
+	}
+	if got, want := dns.PlaybookPath(), filepath.Join(wd, "dns.yml"); got != want {
+		t.Errorf("dns.PlaybookPath() = %q, want %q", got, want)
+	}
+	if got := dns.InventoryPath(); got != "/abs/inventory" {
+		t.Errorf("dns.InventoryPath() = %q", got)
 	}
 
 	wantArgs := []string{
@@ -139,17 +188,20 @@ auth:
 		"--vault-password-file", "/run/secrets/vault",
 		"site.yml",
 	}
-	if got := tr.Args("site.yml"); !reflect.DeepEqual(got, wantArgs) {
+	if got := site.Args(); !reflect.DeepEqual(got, wantArgs) {
 		t.Errorf("Args() = %v, want %v", got, wantArgs)
+	}
+	if got := dns.Args(); !slices.Equal(got, []string{"--diff", "-i", "/abs/inventory", "-u", "admin", "dns.yml"}) {
+		t.Errorf("dns.Args() = %v", got)
 	}
 }
 
 func TestLoadDefaults(t *testing.T) {
 	serverPath, collectionPath := writeTree(t, "# empty\n", collOne, `
-working_dir: playbooks
 playbooks:
-  - site.yml
-inventory: /abs/inventory
+  - name: site
+    playbook: /abs/site.yml
+    inventory: /abs/inventory
 `)
 
 	cfg, err := Load(serverPath, collectionPath)
@@ -161,16 +213,20 @@ inventory: /abs/inventory
 	}
 	tr := cfg.Targets[0]
 	targetDir := filepath.Join(filepath.Dir(collectionPath), "proj")
-	if got, want := tr.WorkingDir, filepath.Join(targetDir, "playbooks"); got != want {
-		t.Errorf("WorkingDir = %q, want relative resolved to %q", got, want)
+	if got, want := tr.WorkingDir, targetDir; got != want {
+		t.Errorf("WorkingDir = %q, want default %q", got, want)
 	}
-	if got, want := tr.InventoryPath(), "/abs/inventory"; got != want {
+	pb := tr.Playbooks[0]
+	if pb.Options.SSH.Enabled || pb.Options.Become || pb.Options.User != "" {
+		t.Errorf("options should keep zero values: %+v", pb.Options)
+	}
+	if got, want := pb.PlaybookPath(), "/abs/site.yml"; got != want {
+		t.Errorf("PlaybookPath() = %q, want %q", got, want)
+	}
+	if got, want := pb.InventoryPath(), "/abs/inventory"; got != want {
 		t.Errorf("InventoryPath() = %q, want %q", got, want)
 	}
-	if tr.SSH.Enabled || tr.SSH.Port != 0 || tr.SSH.HostKeyPolicy != "" {
-		t.Errorf("SSH should keep zero values when disabled: %+v", tr.SSH)
-	}
-	if got := tr.Args("site.yml"); !slices.Equal(got, []string{"--diff", "-i", "/abs/inventory", "site.yml"}) {
+	if got := pb.Args(); !slices.Equal(got, []string{"--diff", "-i", "/abs/inventory", "/abs/site.yml"}) {
 		t.Errorf("Args() = %v", got)
 	}
 }
@@ -179,7 +235,7 @@ func TestLoadErrors(t *testing.T) {
 	const (
 		serverOK = `listen_addr: ":9000"`
 		collOK   = "targets:\n  - name: one\n    path: __TARGET__\n"
-		strOK    = "playbooks: [site.yml]\ninventory: inventory\n"
+		strOK    = "playbooks:\n  - name: site\n    playbook: site.yml\n    inventory: inventory\n"
 	)
 
 	cases := []struct {
@@ -228,15 +284,64 @@ func TestLoadErrors(t *testing.T) {
 			name:     "missing playbooks",
 			server:   serverOK,
 			coll:     collOK,
-			strangle: "inventory: inventory\n",
+			strangle: "working_dir: playbooks\n",
 			want:     "playbooks is required",
+		},
+		{
+			name:     "old flat playbook list",
+			server:   serverOK,
+			coll:     collOK,
+			strangle: "playbooks:\n  - site.yml\ninventory: inventory\n",
+			want:     "cannot unmarshal",
+		},
+		{
+			name:     "old top-level inventory",
+			server:   serverOK,
+			coll:     collOK,
+			strangle: "playbooks:\n  - name: site\n    playbook: site.yml\ninventory: inventory\n",
+			want:     "field inventory not found",
+		},
+		{
+			name:     "unknown option",
+			server:   serverOK,
+			coll:     collOK,
+			strangle: "playbooks:\n  - name: site\n    playbook: site.yml\n    inventory: inv\n    options:\n      user: bob\n      nope: true\n",
+			want:     "field nope not found",
+		},
+		{
+			name:     "playbook without name",
+			server:   serverOK,
+			coll:     collOK,
+			strangle: "playbooks:\n  - playbook: site.yml\n    inventory: inventory\n",
+			want:     "needs a name",
+		},
+		{
+			name:     "invalid playbook name",
+			server:   serverOK,
+			coll:     collOK,
+			strangle: "playbooks:\n  - name: ../site\n    playbook: site.yml\n    inventory: inventory\n",
+			want:     "invalid playbook name",
+		},
+		{
+			name:     "duplicate playbook name",
+			server:   serverOK,
+			coll:     collOK,
+			strangle: "playbooks:\n  - name: site\n    playbook: site.yml\n    inventory: inventory\n  - name: site\n    playbook: dns.yml\n    inventory: inventory\n",
+			want:     "duplicate playbook name",
+		},
+		{
+			name:     "missing playbook file",
+			server:   serverOK,
+			coll:     collOK,
+			strangle: "playbooks:\n  - name: site\n    inventory: inventory\n",
+			want:     "needs a playbook file",
 		},
 		{
 			name:     "missing inventory",
 			server:   serverOK,
 			coll:     collOK,
-			strangle: "playbooks: [site.yml]\n",
-			want:     "inventory is required",
+			strangle: "playbooks:\n  - name: site\n    playbook: site.yml\n",
+			want:     "needs an inventory",
 		},
 		{
 			name:     "invalid log level",
@@ -249,14 +354,14 @@ func TestLoadErrors(t *testing.T) {
 			name:     "invalid host key policy",
 			server:   serverOK,
 			coll:     collOK,
-			strangle: "playbooks: [site.yml]\ninventory: inventory\nssh:\n  enabled: true\n  host_key_policy: nope\n",
+			strangle: "playbooks:\n  - name: site\n    playbook: site.yml\n    inventory: inventory\n    options:\n      ssh:\n        enabled: true\n        host_key_policy: nope\n",
 			want:     "host_key_policy",
 		},
 		{
 			name:     "ca policy without ca files",
 			server:   serverOK,
 			coll:     collOK,
-			strangle: "playbooks: [site.yml]\ninventory: inventory\nssh:\n  enabled: true\n  host_key_policy: ca\n",
+			strangle: "playbooks:\n  - name: site\n    playbook: site.yml\n    inventory: inventory\n    options:\n      ssh:\n        enabled: true\n        host_key_policy: ca\n",
 			want:     "ca requires",
 		},
 	}
@@ -285,7 +390,7 @@ func TestLoadErrors(t *testing.T) {
 func TestLoadRelativeTargetPath(t *testing.T) {
 	// A target path relative to the collection file's directory resolves
 	// against that directory, not the working directory.
-	serverPath, collectionPath := writeTree(t, "listen_addr: \":9000\"\n", "targets:\n  - name: one\n    path: proj\n", "\nplaybooks:\n  - site.yml\ninventory: inventory\n")
+	serverPath, collectionPath := writeTree(t, "listen_addr: \":9000\"\n", "targets:\n  - name: one\n    path: proj\n", strangleMinimal)
 
 	cfg, err := Load(serverPath, collectionPath)
 	if err != nil {

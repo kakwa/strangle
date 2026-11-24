@@ -61,27 +61,27 @@ func (a *Ansible) TargetNames() []string {
 	return names
 }
 
-// Playbooks returns the playbook list of one target.
+// Playbooks returns the names of the configured jobs of one target.
 func (a *Ansible) Playbooks(target string) []string {
 	t, ok := a.targets[target]
 	if !ok {
 		return nil
 	}
-	return t.Playbooks
+	names := make([]string, 0, len(t.Playbooks))
+	for _, pb := range t.Playbooks {
+		names = append(names, pb.Name)
+	}
+	return names
 }
 
-// KnownPlaybook reports whether playbook is in the target's playbook list.
-func (a *Ansible) KnownPlaybook(target, playbook string) bool {
+// KnownPlaybook reports whether name is one of the target's job names.
+func (a *Ansible) KnownPlaybook(target, name string) bool {
 	t, ok := a.targets[target]
 	if !ok {
 		return false
 	}
-	for _, p := range t.Playbooks {
-		if p == playbook {
-			return true
-		}
-	}
-	return false
+	_, found := t.Playbook(name)
+	return found
 }
 
 // RunCycle runs every playbook of every target, in order, and records the
@@ -106,33 +106,27 @@ func (a *Ansible) RunCycle(ctx context.Context) error {
 	return firstErr
 }
 
-// Trigger runs a single playbook of one target now. It blocks until the run
+// Trigger runs one named job of a target now. It blocks until the run
 // finishes (waiting for any in-progress cycle first).
-func (a *Ansible) Trigger(ctx context.Context, target, playbook string) error {
+func (a *Ansible) Trigger(ctx context.Context, target, name string) error {
 	t, ok := a.targets[target]
 	if !ok {
 		return fmt.Errorf("unknown target %q", target)
 	}
-	if !a.KnownPlaybook(target, playbook) {
-		return fmt.Errorf("unknown playbook %q for target %q", playbook, target)
+	pb, ok := t.Playbook(name)
+	if !ok {
+		return fmt.Errorf("unknown playbook %q for target %q", name, target)
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	return a.runTarget(ctx, t, nil, playbook)
+	return a.runTarget(ctx, t, nil, pb)
 }
 
 // runTarget runs the given target's playbooks (or just one, when specified)
 // and records the results. The caller must hold a.mu. It returns the first
 // error encountered; playbooks after a failure still run.
-func (a *Ansible) runTarget(ctx context.Context, t config.TargetConfig, firstErr *error, only ...string) error {
-	if a.multi != nil {
-		if err := a.multi.SetActive(t.Name); err != nil {
-			return err
-		}
-	}
-	inv, invHosts := a.loadInventory(t)
-
+func (a *Ansible) runTarget(ctx context.Context, t config.TargetConfig, firstErr *error, only ...config.PlaybookConfig) error {
 	playbooks := t.Playbooks
 	if len(only) > 0 {
 		playbooks = only
@@ -143,11 +137,27 @@ func (a *Ansible) runTarget(ctx context.Context, t config.TargetConfig, firstErr
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		a.logger.Info("running playbook", zap.String("target", t.Name), zap.String("playbook", pb))
-		if err := a.runPlaybook(ctx, t, pb, scopeNames(inv, t.PlaybookPath(pb)), invHosts); err != nil {
+		// Bridge requests carry no target information, so point the SSH
+		// dispatcher at this job's manager just before running it.
+		if a.multi != nil {
+			if pb.Options.SSH.Enabled {
+				if err := a.multi.SetActive(pb.SSHKey()); err != nil {
+					return err
+				}
+			} else {
+				a.multi.ClearActive()
+			}
+		}
+		inv, invHosts := a.loadInventory(pb)
+		a.logger.Info("running playbook",
+			zap.String("target", t.Name),
+			zap.String("playbook", pb.Name),
+			zap.String("file", pb.PlaybookPath()),
+		)
+		if err := a.runPlaybook(ctx, pb, scopeNames(inv, pb.PlaybookPath()), invHosts); err != nil {
 			a.logger.Error("playbook failed",
 				zap.String("target", t.Name),
-				zap.String("playbook", pb),
+				zap.String("playbook", pb.Name),
 				zap.Error(err),
 			)
 			if targetErr == nil {
@@ -163,13 +173,13 @@ func (a *Ansible) runTarget(ctx context.Context, t config.TargetConfig, firstErr
 
 // runPlaybook executes one playbook, parses the output and persists the
 // results. The caller must hold a.mu.
-func (a *Ansible) runPlaybook(ctx context.Context, t config.TargetConfig, playbook string, scope []string, invHosts []store.InventoryHost) error {
+func (a *Ansible) runPlaybook(ctx context.Context, pb config.PlaybookConfig, scope []string, invHosts []store.InventoryHost) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
 	started := time.Now().UTC()
-	result, runErr := a.runner.RunDir(t.WorkingDir, t.Args(playbook)...)
+	result, runErr := a.runner.RunDir(pb.WorkingDir, pb.Args()...)
 	finished := time.Now().UTC()
 
 	output := result.Output
@@ -183,8 +193,8 @@ func (a *Ansible) runPlaybook(ctx context.Context, t config.TargetConfig, playbo
 	summaries, tasks := parser.Parse(output)
 
 	run := store.RunRecord{
-		Target:       t.Name,
-		Playbook:     playbook,
+		Target:       pb.TargetName,
+		Playbook:     pb.Name,
 		StartedAt:    started,
 		FinishedAt:   finished,
 		DurationMS:   finished.Sub(started).Milliseconds(),
@@ -199,7 +209,7 @@ func (a *Ansible) runPlaybook(ctx context.Context, t config.TargetConfig, playbo
 	hostRuns := make([]store.HostRunRecord, 0, len(summaries))
 	for _, s := range summaries {
 		hostRuns = append(hostRuns, store.HostRunRecord{
-			Target:      t.Name,
+			Target:      pb.TargetName,
 			Host:        s.Host,
 			Status:      parser.Status(s.Ok, s.Changed, s.Failed, s.Unreachable),
 			Ok:          s.Ok,
@@ -215,7 +225,7 @@ func (a *Ansible) runPlaybook(ctx context.Context, t config.TargetConfig, playbo
 	taskStates := make([]store.TaskStateRecord, 0, len(tasks))
 	for _, ts := range tasks {
 		taskStates = append(taskStates, store.TaskStateRecord{
-			Target:    t.Name,
+			Target:    pb.TargetName,
 			Host:      ts.Host,
 			Task:      ts.Task,
 			Status:    ts.Status,
@@ -238,8 +248,8 @@ func (a *Ansible) runPlaybook(ctx context.Context, t config.TargetConfig, playbo
 	}
 
 	a.logger.Info("playbook recorded",
-		zap.String("target", t.Name),
-		zap.String("playbook", playbook),
+		zap.String("target", pb.TargetName),
+		zap.String("playbook", pb.Name),
 		zap.Int("exit_code", result.ExitCode),
 		zap.Bool("success", run.Success),
 		zap.Int("hosts", run.Hosts),
@@ -255,18 +265,22 @@ func (a *Ansible) runPlaybook(ctx context.Context, t config.TargetConfig, playbo
 	return nil
 }
 
-// loadInventory parses the target's inventory directory. It returns nil for
+// loadInventory parses one playbook's inventory directory. It returns nil for
 // anything it cannot parse (e.g. an INI file), in which case host membership
 // is not tracked for that cycle.
-func (a *Ansible) loadInventory(t config.TargetConfig) (*inventory.Inventory, []store.InventoryHost) {
-	dir := t.InventoryPath()
+func (a *Ansible) loadInventory(pb config.PlaybookConfig) (*inventory.Inventory, []store.InventoryHost) {
+	dir := pb.InventoryPath()
 	st, err := os.Stat(dir)
 	if err != nil || !st.IsDir() {
 		return nil, nil
 	}
 	inv, err := inventory.Load(dir)
 	if err != nil {
-		a.logger.Warn("inventory load failed", zap.String("target", t.Name), zap.Error(err))
+		a.logger.Warn("inventory load failed",
+			zap.String("target", pb.TargetName),
+			zap.String("playbook", pb.Name),
+			zap.Error(err),
+		)
 		return nil, nil
 	}
 	if len(inv.Hosts) == 0 {

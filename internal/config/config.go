@@ -5,16 +5,18 @@
 //     interval, database, auth placeholder).
 //   - collection.yml: the inventory of Ansible projects (targets) that
 //     strangle applies, with a git-upstream placeholder per target.
-//   - strangle.yml: one per target, at the root of the project directory,
-//     holding that project's playbooks, inventory, user, become options and
-//     SSH transport.
+//   - strangle.yml: one per target, at the root of the project directory.
+//     Each entry of its `playbooks` list is a named job with its own
+//     playbook file, inventory and Ansible/SSH options.
 //
 // Configuration is file-only: there are no environment variables.
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -83,8 +85,7 @@ type CollectionConfig struct {
 }
 
 // TargetSpec is one collection.yml entry. It points at the directory of an
-// Ansible project, which must contain a strangle.yml with the project's
-// playbook and SSH settings.
+// Ansible project, which must contain a strangle.yml with named playbooks.
 type TargetSpec struct {
 	// Name is the target's identifier within the collection.
 	Name string `yaml:"name"`
@@ -108,49 +109,169 @@ type GitConfig struct {
 }
 
 // TargetConfig is one Ansible project: the collection.yml entry merged with
-// its directory's strangle.yml.
+// the named playbooks of its directory's strangle.yml.
 type TargetConfig struct {
 	// Name is the target's identifier from the collection.
-	Name string `yaml:"-"`
+	Name string
 	// Path is the resolved directory of the Ansible project.
-	Path string `yaml:"-"`
+	Path string
 	// Git is the upstream repository placeholder from the collection.
-	Git GitConfig `yaml:"-"`
-
-	// The fields below come from the target's strangle.yml.
+	Git GitConfig
 
 	// WorkingDir is the directory the playbooks run from. Ansible resolves
 	// ansible.cfg, relative paths and roles relative to it. Defaults to
 	// Path.
-	WorkingDir string `yaml:"working_dir,omitempty"`
-	// Playbooks is the ordered list of playbook files to run, relative to
-	// WorkingDir (or absolute).
-	Playbooks []string `yaml:"playbooks"`
-	// Inventory is the inventory file or directory, relative to WorkingDir
+	WorkingDir string
+
+	// Playbooks are the resolved, ordered jobs of this target.
+	Playbooks []PlaybookConfig
+}
+
+// Playbook returns the named playbook of the target.
+func (t TargetConfig) Playbook(name string) (PlaybookConfig, bool) {
+	for _, pb := range t.Playbooks {
+		if pb.Name == name {
+			return pb, true
+		}
+	}
+	return PlaybookConfig{}, false
+}
+
+// targetFile is the on-disk shape of a strangle.yml. Strict decoding of this
+// struct rejects the old flat format (a list of file names plus a target-wide
+// inventory) as well as misspelled keys.
+type targetFile struct {
+	WorkingDir string         `yaml:"working_dir,omitempty"`
+	Options    OptionsSpec    `yaml:"options,omitempty"`
+	Playbooks  []PlaybookSpec `yaml:"playbooks"`
+}
+
+// PlaybookSpec is one entry of the `playbooks` list in strangle.yml.
+type PlaybookSpec struct {
+	// Name identifies the job in the API, web UI and run history.
+	Name string `yaml:"name"`
+	// Playbook is the playbook file to execute, relative to working_dir
+	// (or absolute).
+	Playbook string `yaml:"playbook"`
+	// Inventory is the inventory file or directory, relative to working_dir
 	// (or absolute).
 	Inventory string `yaml:"inventory"`
-	// User is the SSH user, overriding ansible_user in the inventory. It is
-	// also the fallback user for the Go-managed SSH transport when the
-	// inventory sets none.
-	User string `yaml:"user,omitempty"`
-	// Become enables privilege escalation.
-	Become bool `yaml:"become,omitempty"`
-	// BecomeMethod is the escalation method (sudo, su, ...). Only used when
-	// Become is enabled; Ansible defaults it to sudo.
-	BecomeMethod string `yaml:"become_method,omitempty"`
-	// BecomeUser is the escalation target user. Only used when Become is
-	// enabled.
-	BecomeUser string `yaml:"become_user,omitempty"`
-	// BecomePasswordFile holds the become password. Only used when Become
-	// is enabled.
-	BecomePasswordFile string `yaml:"become_password_file,omitempty"`
-	// ConnectionPasswordFile holds the SSH password.
-	ConnectionPasswordFile string `yaml:"connection_password_file,omitempty"`
-	// VaultPasswordFile holds the Ansible vault password.
-	VaultPasswordFile string `yaml:"vault_password_file,omitempty"`
-	// SSH configures the Go-managed SSH transport used by Ansible for this
-	// target.
-	SSH SSHConfig `yaml:"ssh,omitempty"`
+	// Options override the target-level `options` defaults for this job.
+	Options OptionsSpec `yaml:"options,omitempty"`
+}
+
+// OptionsSpec is the `options` block, both as target-level defaults and as a
+// per-playbook override. Pointer scalars distinguish "unset" from false/0 so
+// defaults can be overridden explicitly.
+type OptionsSpec struct {
+	User                   string   `yaml:"user,omitempty"`
+	Become                 *bool    `yaml:"become,omitempty"`
+	BecomeMethod           string   `yaml:"become_method,omitempty"`
+	BecomeUser             string   `yaml:"become_user,omitempty"`
+	BecomePasswordFile     string   `yaml:"become_password_file,omitempty"`
+	ConnectionPasswordFile string   `yaml:"connection_password_file,omitempty"`
+	VaultPasswordFile      string   `yaml:"vault_password_file,omitempty"`
+	SSH                    *SSHSpec `yaml:"ssh,omitempty"`
+}
+
+// SSHSpec is the YAML shape of the SSH transport options.
+type SSHSpec struct {
+	Enabled              *bool         `yaml:"enabled,omitempty"`
+	User                 string        `yaml:"user,omitempty"`
+	Port                 *int          `yaml:"port,omitempty"`
+	PrivateKeyFile       string        `yaml:"private_key_file,omitempty"`
+	PrivateKeyPassphrase string        `yaml:"private_key_passphrase,omitempty"`
+	UseAgent             *bool         `yaml:"use_agent,omitempty"`
+	Password             string        `yaml:"password,omitempty"`
+	HostKeyPolicy        HostKeyPolicy `yaml:"host_key_policy,omitempty"`
+	KnownHostsFile       string        `yaml:"known_hosts_file,omitempty"`
+	CAFiles              []string      `yaml:"ca_files,omitempty"`
+	AutoAcceptFile       string        `yaml:"auto_accept_file,omitempty"`
+	PendingFile          string        `yaml:"pending_file,omitempty"`
+}
+
+// PlaybookOptions holds the resolved Ansible and SSH options of one playbook.
+type PlaybookOptions struct {
+	User                   string
+	Become                 bool
+	BecomeMethod           string
+	BecomeUser             string
+	BecomePasswordFile     string
+	ConnectionPasswordFile string
+	VaultPasswordFile      string
+	SSH                    SSHConfig
+}
+
+// PlaybookConfig is a validated, resolved entry of a target's playbooks list.
+type PlaybookConfig struct {
+	// Name is the job identifier used by the API, UI and run history.
+	Name string
+	// TargetName is the collection target this job belongs to.
+	TargetName string
+	// TargetPath is the target's project directory, used for default SSH
+	// host-key files.
+	TargetPath string
+	// Playbook is the configured playbook path (relative to WorkingDir).
+	Playbook string
+	// Inventory is the configured inventory path (relative to WorkingDir).
+	Inventory string
+	// WorkingDir is the absolute directory the job runs from.
+	WorkingDir string
+	// Options are the merged target-level and per-playbook options.
+	Options PlaybookOptions
+}
+
+// SSHKey identifies this playbook's SSH manager. Managers are scoped per job
+// so that different playbooks can use different credentials and host-key
+// policies; the same key is used by the host-key approval API.
+func (p PlaybookConfig) SSHKey() string {
+	return p.TargetName + "/" + p.Name
+}
+
+// PlaybookPath resolves the playbook file against WorkingDir.
+func (p PlaybookConfig) PlaybookPath() string {
+	if filepath.IsAbs(p.Playbook) {
+		return p.Playbook
+	}
+	return filepath.Join(p.WorkingDir, p.Playbook)
+}
+
+// InventoryPath resolves the inventory against WorkingDir.
+func (p PlaybookConfig) InventoryPath() string {
+	if filepath.IsAbs(p.Inventory) {
+		return p.Inventory
+	}
+	return filepath.Join(p.WorkingDir, p.Inventory)
+}
+
+// Args builds the ansible-playbook argument list for this job. --diff is
+// always included; the become flags are only passed when become is enabled.
+func (p PlaybookConfig) Args() []string {
+	args := []string{"--diff", "-i", p.Inventory}
+
+	if p.Options.User != "" {
+		args = append(args, "-u", p.Options.User)
+	}
+	if p.Options.Become {
+		args = append(args, "-b")
+		if p.Options.BecomeMethod != "" {
+			args = append(args, "--become-method", p.Options.BecomeMethod)
+		}
+		if p.Options.BecomeUser != "" {
+			args = append(args, "--become-user", p.Options.BecomeUser)
+		}
+		if p.Options.BecomePasswordFile != "" {
+			args = append(args, "--become-password-file", p.Options.BecomePasswordFile)
+		}
+	}
+	if p.Options.ConnectionPasswordFile != "" {
+		args = append(args, "--connection-password-file", p.Options.ConnectionPasswordFile)
+	}
+	if p.Options.VaultPasswordFile != "" {
+		args = append(args, "--vault-password-file", p.Options.VaultPasswordFile)
+	}
+
+	return append(args, p.Playbook)
 }
 
 // HostKeyPolicy controls how unknown SSH host keys are handled.
@@ -179,13 +300,11 @@ func (p HostKeyPolicy) Valid() bool {
 }
 
 // SSHConfig configures the persistent SSH connections owned by the Go process
-// on behalf of one target.
+// for one playbook.
 type SSHConfig struct {
-	Enabled bool `yaml:"enabled,omitempty"`
-	// User is the SSH user for connections the inventory does not set.
-	// Defaults to the target-level user key.
-	User string `yaml:"user,omitempty"`
-	Port int `yaml:"port,omitempty"`
+	Enabled              bool          `yaml:"enabled,omitempty"`
+	User                 string        `yaml:"user,omitempty"`
+	Port                 int           `yaml:"port,omitempty"`
 	PrivateKeyFile       string        `yaml:"private_key_file,omitempty"`
 	PrivateKeyPassphrase string        `yaml:"private_key_passphrase,omitempty"`
 	UseAgent             bool          `yaml:"use_agent,omitempty"`
@@ -272,17 +391,238 @@ func loadTarget(spec TargetSpec, path string) (TargetConfig, error) {
 	if err != nil {
 		return TargetConfig{}, fmt.Errorf("target %q: read %q: %w", spec.Name, filepath.Join(path, "strangle.yml"), err)
 	}
-	var t TargetConfig
-	if err := yaml.Unmarshal(data, &t); err != nil {
+	var file targetFile
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&file); err != nil && !errors.Is(err, io.EOF) {
 		return TargetConfig{}, fmt.Errorf("target %q: parse strangle.yml: %w", spec.Name, err)
 	}
-	t.Name = spec.Name
-	t.Path = path
-	t.Git = spec.Git
-	if err := t.validate(); err != nil {
-		return TargetConfig{}, err
+	if len(file.Playbooks) == 0 {
+		return TargetConfig{}, fmt.Errorf("target %q: playbooks is required (non-empty list of named jobs)", spec.Name)
+	}
+
+	t := TargetConfig{
+		Name: spec.Name,
+		Path: path,
+		Git:  spec.Git,
+	}
+	if file.WorkingDir == "" {
+		t.WorkingDir = path
+	} else if filepath.IsAbs(file.WorkingDir) {
+		t.WorkingDir = file.WorkingDir
+	} else {
+		t.WorkingDir = filepath.Join(path, file.WorkingDir)
+	}
+
+	seen := map[string]struct{}{}
+	for _, ps := range file.Playbooks {
+		if ps.Name == "" {
+			return TargetConfig{}, fmt.Errorf("target %q: every playbook needs a name", spec.Name)
+		}
+		if !validPlaybookName(ps.Name) {
+			return TargetConfig{}, fmt.Errorf("target %q: invalid playbook name %q (use letters, digits, '.', '_' or '-')", spec.Name, ps.Name)
+		}
+		if _, dup := seen[ps.Name]; dup {
+			return TargetConfig{}, fmt.Errorf("target %q: duplicate playbook name %q", spec.Name, ps.Name)
+		}
+		seen[ps.Name] = struct{}{}
+		if ps.Playbook == "" {
+			return TargetConfig{}, fmt.Errorf("target %q: playbook %q needs a playbook file", spec.Name, ps.Name)
+		}
+		if ps.Inventory == "" {
+			return TargetConfig{}, fmt.Errorf("target %q: playbook %q needs an inventory", spec.Name, ps.Name)
+		}
+
+		options, err := resolveOptions(mergeOptions(file.Options, ps.Options), path, ps.Name)
+		if err != nil {
+			return TargetConfig{}, fmt.Errorf("target %q: playbook %q: %w", spec.Name, ps.Name, err)
+		}
+		t.Playbooks = append(t.Playbooks, PlaybookConfig{
+			Name:       ps.Name,
+			TargetName: spec.Name,
+			TargetPath: path,
+			Playbook:   ps.Playbook,
+			Inventory:  ps.Inventory,
+			WorkingDir: t.WorkingDir,
+			Options:    options,
+		})
 	}
 	return t, nil
+}
+
+// validPlaybookName rejects path separators and other characters that would
+// make the name unsafe as an SSH-scope or host-key file suffix.
+func validPlaybookName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.' || r == '_' || r == '-':
+			if i == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// mergeOptions overlays per-playbook options on the target-level defaults.
+func mergeOptions(base, over OptionsSpec) OptionsSpec {
+	out := base
+	if over.User != "" {
+		out.User = over.User
+	}
+	if over.Become != nil {
+		out.Become = over.Become
+	}
+	if over.BecomeMethod != "" {
+		out.BecomeMethod = over.BecomeMethod
+	}
+	if over.BecomeUser != "" {
+		out.BecomeUser = over.BecomeUser
+	}
+	if over.BecomePasswordFile != "" {
+		out.BecomePasswordFile = over.BecomePasswordFile
+	}
+	if over.ConnectionPasswordFile != "" {
+		out.ConnectionPasswordFile = over.ConnectionPasswordFile
+	}
+	if over.VaultPasswordFile != "" {
+		out.VaultPasswordFile = over.VaultPasswordFile
+	}
+	if over.SSH != nil {
+		if base.SSH == nil {
+			out.SSH = over.SSH
+		} else {
+			merged := mergeSSH(*base.SSH, *over.SSH)
+			out.SSH = &merged
+		}
+	}
+	return out
+}
+
+// mergeSSH overlays a playbook's SSH options on the target-level SSH defaults.
+func mergeSSH(base, over SSHSpec) SSHSpec {
+	out := base
+	if over.Enabled != nil {
+		out.Enabled = over.Enabled
+	}
+	if over.User != "" {
+		out.User = over.User
+	}
+	if over.Port != nil {
+		out.Port = over.Port
+	}
+	if over.PrivateKeyFile != "" {
+		out.PrivateKeyFile = over.PrivateKeyFile
+	}
+	if over.PrivateKeyPassphrase != "" {
+		out.PrivateKeyPassphrase = over.PrivateKeyPassphrase
+	}
+	if over.UseAgent != nil {
+		out.UseAgent = over.UseAgent
+	}
+	if over.Password != "" {
+		out.Password = over.Password
+	}
+	if over.HostKeyPolicy != "" {
+		out.HostKeyPolicy = over.HostKeyPolicy
+	}
+	if over.KnownHostsFile != "" {
+		out.KnownHostsFile = over.KnownHostsFile
+	}
+	if len(over.CAFiles) > 0 {
+		out.CAFiles = over.CAFiles
+	}
+	if over.AutoAcceptFile != "" {
+		out.AutoAcceptFile = over.AutoAcceptFile
+	}
+	if over.PendingFile != "" {
+		out.PendingFile = over.PendingFile
+	}
+	return out
+}
+
+// resolveOptions turns a YAML options block into concrete values and applies
+// the SSH defaults. Host-key files are scoped per playbook so two jobs with
+// different policies cannot overwrite each other's trust decisions.
+func resolveOptions(spec OptionsSpec, targetPath, playbookName string) (PlaybookOptions, error) {
+	o := PlaybookOptions{
+		User:                   spec.User,
+		Become:                 boolOr(spec.Become, false),
+		BecomeMethod:           spec.BecomeMethod,
+		BecomeUser:             spec.BecomeUser,
+		BecomePasswordFile:     spec.BecomePasswordFile,
+		ConnectionPasswordFile: spec.ConnectionPasswordFile,
+		VaultPasswordFile:      spec.VaultPasswordFile,
+	}
+	if spec.SSH == nil {
+		return o, nil
+	}
+
+	s := spec.SSH
+	o.SSH = SSHConfig{
+		Enabled:              boolOr(s.Enabled, false),
+		User:                 s.User,
+		Port:                 intOr(s.Port, 0),
+		PrivateKeyFile:       s.PrivateKeyFile,
+		PrivateKeyPassphrase: s.PrivateKeyPassphrase,
+		UseAgent:             boolOr(s.UseAgent, false),
+		Password:             s.Password,
+		HostKeyPolicy:        s.HostKeyPolicy,
+		KnownHostsFile:       s.KnownHostsFile,
+		CAFiles:              s.CAFiles,
+		AutoAcceptFile:       s.AutoAcceptFile,
+		PendingFile:          s.PendingFile,
+	}
+	if !o.SSH.Enabled {
+		return o, nil
+	}
+	if o.SSH.User == "" {
+		o.SSH.User = o.User
+	}
+	if o.SSH.Port == 0 {
+		o.SSH.Port = 22
+	}
+	if o.SSH.HostKeyPolicy == "" {
+		o.SSH.HostKeyPolicy = PolicyAPI
+	}
+	if !o.SSH.HostKeyPolicy.Valid() {
+		return o, fmt.Errorf("ssh.host_key_policy must be one of %s, %s, %s, %s, %s (got %q)",
+			PolicyAPI, PolicyKnownHosts, PolicyCA, PolicyAuto, PolicyInsecure, o.SSH.HostKeyPolicy)
+	}
+	if o.SSH.HostKeyPolicy == PolicyCA && len(o.SSH.CAFiles) == 0 {
+		return o, errors.New("ssh.host_key_policy ca requires at least one ssh.ca_files entry")
+	}
+	prefix := filepath.Join(targetPath, "strangle."+playbookName)
+	if o.SSH.KnownHostsFile == "" {
+		o.SSH.KnownHostsFile = prefix + ".known_hosts"
+	}
+	if o.SSH.AutoAcceptFile == "" {
+		o.SSH.AutoAcceptFile = prefix + ".auto.json"
+	}
+	if o.SSH.PendingFile == "" {
+		o.SSH.PendingFile = prefix + ".pending.json"
+	}
+	return o, nil
+}
+
+func boolOr(p *bool, fallback bool) bool {
+	if p == nil {
+		return fallback
+	}
+	return *p
+}
+
+func intOr(p *int, fallback int) int {
+	if p == nil {
+		return fallback
+	}
+	return *p
 }
 
 // validate checks the server configuration and applies defaults.
@@ -302,97 +642,4 @@ func (s *ServerConfig) validate() error {
 		s.Interval = 15 * time.Minute
 	}
 	return nil
-}
-
-// validate checks the target configuration and applies defaults that depend
-// on other settings.
-func (t *TargetConfig) validate() error {
-	if len(t.Playbooks) == 0 {
-		return fmt.Errorf("target %q: playbooks is required (ordered list of playbook files)", t.Name)
-	}
-	if t.Inventory == "" {
-		return fmt.Errorf("target %q: inventory is required", t.Name)
-	}
-	if t.WorkingDir == "" {
-		t.WorkingDir = t.Path
-	} else if !filepath.IsAbs(t.WorkingDir) {
-		t.WorkingDir = filepath.Join(t.Path, t.WorkingDir)
-	}
-
-	if !t.SSH.Enabled {
-		return nil
-	}
-	if t.SSH.User == "" {
-		t.SSH.User = t.User
-	}
-	if t.SSH.Port == 0 {
-		t.SSH.Port = 22
-	}
-	if t.SSH.HostKeyPolicy == "" {
-		t.SSH.HostKeyPolicy = PolicyAPI
-	}
-	if !t.SSH.HostKeyPolicy.Valid() {
-		return fmt.Errorf("target %q: ssh.host_key_policy must be one of %s, %s, %s, %s, %s (got %q)",
-			t.Name, PolicyAPI, PolicyKnownHosts, PolicyCA, PolicyAuto, PolicyInsecure, t.SSH.HostKeyPolicy)
-	}
-	if t.SSH.HostKeyPolicy == PolicyCA && len(t.SSH.CAFiles) == 0 {
-		return fmt.Errorf("target %q: ssh.host_key_policy ca requires at least one ssh.ca_files entry", t.Name)
-	}
-	if t.SSH.KnownHostsFile == "" {
-		t.SSH.KnownHostsFile = filepath.Join(t.Path, "known_hosts.strangle")
-	}
-	if t.SSH.AutoAcceptFile == "" {
-		t.SSH.AutoAcceptFile = filepath.Join(t.Path, "known_hosts.auto.json")
-	}
-	if t.SSH.PendingFile == "" {
-		t.SSH.PendingFile = filepath.Join(t.Path, "hostkeys.pending.json")
-	}
-	return nil
-}
-
-// PlaybookPath resolves a playbook name against WorkingDir.
-func (t TargetConfig) PlaybookPath(playbook string) string {
-	if filepath.IsAbs(playbook) {
-		return playbook
-	}
-	return filepath.Join(t.WorkingDir, playbook)
-}
-
-// InventoryPath resolves the inventory against WorkingDir.
-func (t TargetConfig) InventoryPath() string {
-	if filepath.IsAbs(t.Inventory) {
-		return t.Inventory
-	}
-	return filepath.Join(t.WorkingDir, t.Inventory)
-}
-
-// Args builds the ansible-playbook argument list for the given playbook.
-// --diff is always included. The become flags are only passed when become is
-// enabled.
-func (t TargetConfig) Args(playbook string) []string {
-	args := []string{"--diff", "-i", t.Inventory}
-
-	if t.User != "" {
-		args = append(args, "-u", t.User)
-	}
-	if t.Become {
-		args = append(args, "-b")
-		if t.BecomeMethod != "" {
-			args = append(args, "--become-method", t.BecomeMethod)
-		}
-		if t.BecomeUser != "" {
-			args = append(args, "--become-user", t.BecomeUser)
-		}
-		if t.BecomePasswordFile != "" {
-			args = append(args, "--become-password-file", t.BecomePasswordFile)
-		}
-	}
-	if t.ConnectionPasswordFile != "" {
-		args = append(args, "--connection-password-file", t.ConnectionPasswordFile)
-	}
-	if t.VaultPasswordFile != "" {
-		args = append(args, "--vault-password-file", t.VaultPasswordFile)
-	}
-
-	return append(args, playbook)
 }

@@ -119,20 +119,22 @@ func run(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// buildSSH creates one SSH manager per target that enables the Go-managed SSH
-// transport, and a dispatcher over them. The result is nil when no target
-// uses the transport.
+// buildSSH creates one SSH manager per playbook that enables the Go-managed
+// SSH transport, and a dispatcher over them. The result is nil when no
+// playbook uses the transport.
 func buildSSH(targets []config.TargetConfig) (*sshpool.Multi, error) {
 	managers := map[string]*sshpool.Manager{}
 	for _, t := range targets {
-		if !t.SSH.Enabled {
-			continue
+		for _, pb := range t.Playbooks {
+			if !pb.Options.SSH.Enabled {
+				continue
+			}
+			mgr, err := sshpool.New(pb.Options.SSH)
+			if err != nil {
+				return nil, fmt.Errorf("target %q playbook %q: %w", t.Name, pb.Name, err)
+			}
+			managers[pb.SSHKey()] = mgr
 		}
-		mgr, err := sshpool.New(t.SSH)
-		if err != nil {
-			return nil, fmt.Errorf("target %q: %w", t.Name, err)
-		}
-		managers[t.Name] = mgr
 	}
 	return sshpool.NewMulti(managers)
 }

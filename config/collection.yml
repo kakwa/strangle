@@ -2,16 +2,12 @@
 # Loaded by default (override with -c).
 #
 # Each entry names a target and points at the directory of an Ansible
-# project, which must contain its own strangle.yml with the project's
-# playbooks, inventory and SSH settings. Relative paths resolve against this
-# file's directory. Targets run in list order, serialized through the single
-# embedded interpreter.
+# project, which must contain its own strangle.yml with the project's named
+# playbooks (each with its own inventory and options). Relative paths resolve
+# against this file's directory. Targets run in list order, serialized through
+# the single embedded interpreter.
 
 targets:
-  # Local demo: a playbook against localhost, defined in the demo/ directory.
-  - name: demo
-    path: ../demo
-
   # The home.tf Ansible project.
   - name: home
     path: /home/kakwa/Geek/GitHub/home.tf/ansible

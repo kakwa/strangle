@@ -6,21 +6,21 @@ import (
 	"sync"
 )
 
-// Multi dispatches bridge requests to one of several per-target managers.
+// Multi dispatches bridge requests to one of several per-playbook managers.
 //
 // A single embedded Python interpreter serves every target and all of their
 // runs are serialized through one bridge, so a bridge request does not say
-// which target it belongs to. Instead the runner marks the active target
+// which playbook it belongs to. Instead the runner marks the active scope
 // before every run (SetActive), and every request until the next switch is
-// served by that target's manager.
+// served by that playbook's manager.
 type Multi struct {
-	mu      sync.Mutex
+	mu       sync.Mutex
 	managers map[string]*Manager
 	active   string
 }
 
-// NewMulti builds a dispatcher over the given per-target managers. A nil
-// Multi is returned when no target uses the Go-managed SSH transport, in
+// NewMulti builds a dispatcher over the given per-playbook managers. A nil
+// Multi is returned when no playbook uses the Go-managed SSH transport, in
 // which case no connection plugin is installed.
 func NewMulti(managers map[string]*Manager) (*Multi, error) {
 	if len(managers) == 0 {
@@ -29,20 +29,28 @@ func NewMulti(managers map[string]*Manager) (*Multi, error) {
 	return &Multi{managers: managers}, nil
 }
 
-// SetActive marks the target whose manager will serve the bridge requests of
-// the upcoming run. Callers must serialize runs (they do, through the
-// applier's mutex).
-func (m *Multi) SetActive(target string) error {
+// SetActive marks the playbook scope whose manager will serve the bridge
+// requests of the upcoming run. Callers must serialize runs (they do, through
+// the applier's mutex).
+func (m *Multi) SetActive(scope string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.managers[target]; !ok {
-		return fmt.Errorf("ssh: no SSH manager for target %q", target)
+	if _, ok := m.managers[scope]; !ok {
+		return fmt.Errorf("ssh: no SSH manager for scope %q", scope)
 	}
-	m.active = target
+	m.active = scope
 	return nil
 }
 
-// Active returns the currently active target name.
+// ClearActive drops the active scope. It is called before jobs that do not
+// use the Go-managed transport so a stale manager cannot serve their requests.
+func (m *Multi) ClearActive() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.active = ""
+}
+
+// Active returns the currently active SSH scope.
 func (m *Multi) Active() string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -53,12 +61,12 @@ func (m *Multi) activeManager() (*Manager, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.active == "" {
-		return nil, fmt.Errorf("ssh: no active target (set one before running playbooks)")
+		return nil, fmt.Errorf("ssh: no active scope (set one before running playbooks)")
 	}
 	return m.managers[m.active], nil
 }
 
-// Targets returns the names of all targets with an SSH manager.
+// Targets returns the keys of all playbook scopes with an SSH manager.
 func (m *Multi) Targets() []string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -70,7 +78,7 @@ func (m *Multi) Targets() []string {
 	return out
 }
 
-// manager returns the manager of one target, for API use.
+// manager returns the manager of one playbook scope, for API use.
 func (m *Multi) manager(target string) (*Manager, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -105,8 +113,8 @@ func (m *Multi) Fetch(ep Endpoint, remotePath string) ([]byte, error) {
 	return mgr.Fetch(ep, remotePath)
 }
 
-// PendingHostKeys aggregates the pending host keys of every target, tagged
-// with their target name.
+// PendingHostKeys aggregates the pending host keys of every playbook scope,
+// tagged with their scope key (<target>/<playbook name>).
 func (m *Multi) PendingHostKeys() []HostKey {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -126,25 +134,25 @@ func (m *Multi) PendingHostKeys() []HostKey {
 	return out
 }
 
-// ApproveHostKey approves a pending host key of one target.
-func (m *Multi) ApproveHostKey(target, host, fingerprint string) error {
-	mgr, ok := m.manager(target)
+// ApproveHostKey approves a pending host key of one playbook scope.
+func (m *Multi) ApproveHostKey(scope, host, fingerprint string) error {
+	mgr, ok := m.manager(scope)
 	if !ok {
-		return fmt.Errorf("ssh: no SSH manager for target %q", target)
+		return fmt.Errorf("ssh: no SSH manager for scope %q", scope)
 	}
 	return mgr.HostKeys().Approve(host, fingerprint)
 }
 
-// RejectHostKey removes a pending host key of one target.
-func (m *Multi) RejectHostKey(target, host string) error {
-	mgr, ok := m.manager(target)
+// RejectHostKey removes a pending host key of one playbook scope.
+func (m *Multi) RejectHostKey(scope, host string) error {
+	mgr, ok := m.manager(scope)
 	if !ok {
-		return fmt.Errorf("ssh: no SSH manager for target %q", target)
+		return fmt.Errorf("ssh: no SSH manager for scope %q", scope)
 	}
 	return mgr.HostKeys().Reject(host)
 }
 
-// Stats returns the pool counters of every target, keyed by target name.
+// Stats returns the pool counters of every playbook scope, keyed by scope.
 func (m *Multi) Stats() map[string]Stats {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -155,7 +163,7 @@ func (m *Multi) Stats() map[string]Stats {
 	return out
 }
 
-// Close closes the pooled connections of every target.
+// Close closes the pooled connections of every playbook scope.
 func (m *Multi) Close() {
 	if m == nil {
 		return

@@ -109,7 +109,7 @@ func (s *Server) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, changes)
 	})
 
-	// /api/playbooks maps target name to its playbook list.
+	// /api/playbooks maps target name to the names of its configured jobs.
 	mux.HandleFunc("GET /api/playbooks", func(w http.ResponseWriter, _ *http.Request) {
 		out := map[string][]string{}
 		for _, target := range s.applier.TargetNames() {
@@ -139,6 +139,7 @@ func (s *Server) Routes() http.Handler {
 			writeError(w, http.StatusNotFound, fmt.Errorf("unknown playbook %q for target %q", req.Playbook, req.Target))
 			return
 		}
+		// req.Playbook is the job name from strangle.yml, not a file path.
 		// The run happens in the background; the UI sees it appear in
 		// /api/runs when it finishes (runs are serialized anyway).
 		go func() {
@@ -159,6 +160,8 @@ func (s *Server) Routes() http.Handler {
 		})
 	})
 
+	// Host-key endpoints identify an SSH scope as "<target>/<playbook name>"
+	// in their `target` field (or the JSON response's `target` key).
 	mux.HandleFunc("GET /api/hostkeys", func(w http.ResponseWriter, _ *http.Request) {
 		keys := []sshpool.HostKey{}
 		if s.ssh != nil {

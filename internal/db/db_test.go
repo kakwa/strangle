@@ -2,7 +2,9 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,6 +30,31 @@ func openTestDB(t *testing.T) *DB {
 		}
 	}
 	return d
+}
+
+// An empty database must serialize per_playbook as [] rather than null: the
+// web UI calls .length/.map on it and used to crash on a fresh install.
+func TestDBStatsEmpty(t *testing.T) {
+	d := openTestDB(t)
+	defer d.Close()
+
+	stats, err := d.Stats(context.Background())
+	if err != nil {
+		t.Fatalf("Stats() error: %v", err)
+	}
+	if stats.PerPlaybook == nil {
+		t.Fatal("Stats().PerPlaybook is nil, want an empty slice")
+	}
+	if len(stats.PerPlaybook) != 0 {
+		t.Fatalf("Stats().PerPlaybook = %v, want empty", stats.PerPlaybook)
+	}
+	b, err := json.Marshal(stats)
+	if err != nil {
+		t.Fatalf("json.Marshal() error: %v", err)
+	}
+	if !strings.Contains(string(b), `"per_playbook":[]`) {
+		t.Fatalf("Stats JSON = %s, want per_playbook: []", b)
+	}
 }
 
 func TestDBRoundTrip(t *testing.T) {
