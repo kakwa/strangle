@@ -9,7 +9,7 @@
 
 targets:
   # The home.tf Ansible project.
-  - name: home
+  - name: homelab
     path: /home/kakwa/Geek/GitHub/home.tf/ansible
     # Git upstream. Placeholder: parsed but not used yet.
     # git:
