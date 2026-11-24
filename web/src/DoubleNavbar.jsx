@@ -12,6 +12,7 @@ import {
   Tooltip,
   UnstyledButton,
 } from '@mantine/core'
+import { Link as RouterLink } from 'react-router-dom'
 import classes from './DoubleNavbar.module.css'
 
 const mainLinks = [
@@ -31,7 +32,6 @@ export function DoubleNavbar({
   onSection,
   hosts,
   selectedHost,
-  onSelectHost,
   playbooks,
 }) {
   const activeSection = active.toLowerCase()
@@ -55,18 +55,14 @@ export function DoubleNavbar({
   ))
 
   const hostLinks = hosts.map((h) => (
-    <a
+    <RouterLink
       className={classes.link}
       data-active={selectedHost === h.name || undefined}
-      href="#"
-      onClick={(event) => {
-        event.preventDefault()
-        onSelectHost(h.name)
-      }}
+      to={`/hosts/${encodeURIComponent(h.name)}`}
       key={h.name}
     >
       {h.name}
-    </a>
+    </RouterLink>
   ))
 
   return (

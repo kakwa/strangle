@@ -28,6 +28,14 @@ import {
 } from '@mantine/core'
 import { useMantineColorScheme, useMantineTheme } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
+import {
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+  useParams,
+} from 'react-router-dom'
 import { DoubleNavbar } from './DoubleNavbar'
 
 const POLL_INTERVAL_MS = 10_000
@@ -646,14 +654,46 @@ function ColorSchemeToggle() {
   )
 }
 
+// Maps a URL path to the (section, selected host) pair the shell renders.
+// Unknown paths fall back to the dashboard so a stale deep link never breaks
+// the app.
+function sectionFromPath(pathname) {
+  const safeDecode = (s) => {
+    try {
+      return decodeURIComponent(s)
+    } catch {
+      return s
+    }
+  }
+  const hostMatch = pathname.match(/^\/hosts\/(.+)$/)
+  if (hostMatch) {
+    return { section: 'Hosts', selectedHost: safeDecode(hostMatch[1]) }
+  }
+  if (pathname === '/hosts') return { section: 'Hosts', selectedHost: null }
+  if (pathname === '/playbooks') return { section: 'Playbooks', selectedHost: null }
+  return { section: 'Dashboard', selectedHost: null }
+}
+
+// Route element for /hosts/:host — checks the host against the normalized
+// host list so the detail view and the "host not found" state agree.
+function HostDetailRoute({ hosts, onBack }) {
+  const { host } = useParams()
+  if (!hosts.some((h) => h.name === host)) {
+    return (
+      <Alert color="gray" title="Host not found">
+        It may have been removed from the inventory.
+      </Alert>
+    )
+  }
+  return <HostDetail host={host} onBack={onBack} />
+}
+
 export default function App() {
   const [stats, setStats] = useState(null)
   const [runs, setRuns] = useState([])
   const [hosts, setHosts] = useState([])
   const [playbooks, setPlaybooks] = useState({})
   const [error, setError] = useState(null)
-  const [section, setSection] = useState('Dashboard')
-  const [selectedHost, setSelectedHost] = useState(null)
   const [hostFilter, setHostFilter] = useState('all')
   // Manual runs in flight, keyed by "<target>:<playbook>" with the trigger
   // time in ms. Runs are only persisted after they finish, so the UI tracks
@@ -662,6 +702,12 @@ export default function App() {
   const [runError, setRunError] = useState(null)
   const [mobileOpened, { toggle: toggleMobile, close: closeMobile }] =
     useDisclosure(false)
+
+  // The section and the selected host are derived from the URL, so every
+  // screen (dashboard, host list, a single host, playbooks) is bookmarkable.
+  const location = useLocation()
+  const navigate = useNavigate()
+  const { section, selectedHost } = sectionFromPath(location.pathname)
 
   const refresh = useCallback(async () => {
     try {
@@ -730,15 +776,16 @@ export default function App() {
   }, [refresh])
 
   const openHost = (name) => {
-    setSelectedHost(name)
-    setSection('Hosts')
+    closeMobile()
+    navigate(`/hosts/${encodeURIComponent(name)}`)
   }
 
-  const backToHosts = () => {
-    setSelectedHost(null)
+  const goSection = (label) => {
+    closeMobile()
+    if (label === 'Hosts') navigate('/hosts')
+    else if (label === 'Playbooks') navigate('/playbooks')
+    else navigate('/')
   }
-
-  const host = selectedHost ? hosts.find((h) => h.name === selectedHost) : null
 
   const headerTitle =
     section === 'Hosts' && selectedHost ? selectedHost : section
@@ -770,13 +817,9 @@ export default function App() {
       <AppShell.Navbar p={0}>
         <DoubleNavbar
           active={section}
-          onSection={(s) => {
-            setSection(s)
-            closeMobile()
-          }}
+          onSection={goSection}
           hosts={hosts}
           selectedHost={selectedHost}
-          onSelectHost={openHost}
           playbooks={playbooks}
         />
       </AppShell.Navbar>
@@ -795,31 +838,42 @@ export default function App() {
             </Center>
           )}
 
-          {stats && section === 'Dashboard' && (
-            <Dashboard stats={stats} runs={runs} hosts={hosts} onHost={openHost} />
-          )}
-
-          {stats && section === 'Hosts' && !selectedHost && (
-            <HostsTable hosts={hosts} onHost={openHost} filter={hostFilter} setFilter={setHostFilter} />
-          )}
-
-          {stats && section === 'Hosts' && selectedHost && (
-            host ? (
-              <HostDetail host={selectedHost} onBack={backToHosts} />
-            ) : (
-              <Alert color="gray" title="Host not found">
-                It may have been removed from the inventory.
-              </Alert>
-            )
-          )}
-
-          {stats && section === 'Playbooks' && (
-            <PlaybooksView
-              playbooks={playbooks}
-              onRun={triggerRun}
-              pendingRuns={pendingRuns}
-              runError={runError}
-            />
+          {stats && (
+            <Routes>
+              <Route
+                path="/"
+                element={<Dashboard stats={stats} runs={runs} hosts={hosts} onHost={openHost} />}
+              />
+              <Route
+                path="/hosts"
+                element={
+                  <HostsTable
+                    hosts={hosts}
+                    onHost={openHost}
+                    filter={hostFilter}
+                    setFilter={setHostFilter}
+                  />
+                }
+              />
+              <Route
+                path="/hosts/:host(.*)"
+                element={
+                  <HostDetailRoute hosts={hosts} onBack={() => navigate('/hosts')} />
+                }
+              />
+              <Route
+                path="/playbooks"
+                element={
+                  <PlaybooksView
+                    playbooks={playbooks}
+                    onRun={triggerRun}
+                    pendingRuns={pendingRuns}
+                    runError={runError}
+                  />
+                }
+              />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
           )}
         </Stack>
       </AppShell.Main>
