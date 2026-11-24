@@ -130,6 +130,14 @@ func (s *HostKeyStore) verify(host string, _ net.Addr, key ssh.PublicKey) error 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Reload from disk: the trust decision may have been made in another
+	// process (the master or a worker) since this store was constructed.
+	if s.policy == config.PolicyAPI || s.policy == config.PolicyAuto {
+		if err := s.load(); err != nil {
+			return err
+		}
+	}
+
 	known, ok := s.db.Approved[host]
 	if !ok {
 		if s.policy == config.PolicyAPI {
@@ -156,10 +164,14 @@ func (s *HostKeyStore) verify(host string, _ net.Addr, key ssh.PublicKey) error 
 	return nil
 }
 
-// Pending lists host keys waiting for approval.
+// Pending lists host keys waiting for approval. It re-reads the pending file
+// so keys created by another process (a worker) are visible.
 func (s *HostKeyStore) Pending() []HostKey {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.policy == config.PolicyAPI || s.policy == config.PolicyAuto {
+		_ = s.load()
+	}
 	result := make([]HostKey, 0, len(s.db.Pending))
 	for _, key := range s.db.Pending {
 		result = append(result, key)
@@ -171,6 +183,12 @@ func (s *HostKeyStore) Pending() []HostKey {
 func (s *HostKeyStore) Approve(host, fingerprint string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.policy == config.PolicyAPI || s.policy == config.PolicyAuto {
+		if err := s.load(); err != nil {
+			return err
+		}
+	}
 
 	key, ok := s.db.Pending[host]
 	if !ok {
@@ -190,6 +208,12 @@ func (s *HostKeyStore) Approve(host, fingerprint string) error {
 func (s *HostKeyStore) Reject(host string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.policy == config.PolicyAPI || s.policy == config.PolicyAuto {
+		if err := s.load(); err != nil {
+			return err
+		}
+	}
 
 	if _, ok := s.db.Pending[host]; !ok {
 		return fmt.Errorf("no pending host key for %s", host)

@@ -1,5 +1,9 @@
 // Command strangle applies Ansible playbooks on a schedule and reports on
 // the results through an HTTP API and web UI.
+//
+// The master process (the root command) spawns worker child processes that
+// each own one embedded Ansible interpreter and dispatch playbook runs to
+// them over unix sockets (the "worker" subcommand).
 package main
 
 import (
@@ -20,14 +24,18 @@ import (
 	"github.com/kakwa/strangle/internal/server"
 	"github.com/kakwa/strangle/internal/sshpool"
 	"github.com/kakwa/strangle/internal/store"
+	"github.com/kakwa/strangle/internal/worker"
+	"github.com/kakwa/strangle/proto/strangle/v1"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"google.golang.org/grpc"
 )
 
 var (
 	serverConfigPath     string
 	collectionConfigPath string
+	socketPath           string
 )
 
 func main() {
@@ -47,10 +55,27 @@ func main() {
 	root.Flags().StringVarP(&serverConfigPath, "server-config", "s", "config/server.yml", "path to the server configuration file")
 	root.Flags().StringVarP(&collectionConfigPath, "collection-config", "c", "config/collection.yml", "path to the collection configuration file")
 
+	root.AddCommand(workerCmd())
+
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// workerCmd is the subcommand run inside a worker child process: it serves
+// the Runner gRPC service over a unix socket.
+func workerCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "worker",
+		Short: "Run as a worker child process (started by the master, not for direct use).",
+		RunE:  runWorker,
+	}
+	cmd.Flags().StringVar(&socketPath, "socket", "", "unix socket path to serve the Runner gRPC service on (required)")
+	cmd.Flags().StringVarP(&serverConfigPath, "server-config", "s", "config/server.yml", "path to the server configuration file")
+	cmd.Flags().StringVarP(&collectionConfigPath, "collection-config", "c", "config/collection.yml", "path to the collection configuration file")
+	_ = cmd.MarkFlagRequired("socket")
+	return cmd
 }
 
 func run(cmd *cobra.Command, args []string) error {
@@ -65,24 +90,34 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = logger.Sync() }()
 
-	multi, err := buildSSH(cfg.Targets)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+
+	// The master keeps its own SSH multi for the host-key approval API; the
+	// trust decisions are shared with the workers through the per-scope
+	// files on disk.
+	multi, err := sshpool.BuildMulti(cfg.Targets)
 	if err != nil {
 		return fmt.Errorf("failed to initialize SSH transport: %w", err)
 	}
 	defer multi.Close()
 
-	runner, err := ansible.NewRunner(multi)
+	// Spawn the worker child processes that actually run the playbooks.
+	binPath, err := os.Executable()
 	if err != nil {
-		return fmt.Errorf("failed to initialize embedded Python: %w", err)
+		return fmt.Errorf("resolve executable path: %w", err)
+	}
+	mgr, err := worker.NewManager(ctx, binPath, serverConfigPath, collectionConfigPath, cfg.Server.Workers, logger)
+	if err != nil {
+		return fmt.Errorf("failed to start workers: %w", err)
 	}
 
 	var st store.Store
 	if cfg.Server.Database.DSN != "" {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		d, err := db.Open(ctx, cfg.Server.Database.DSN)
+		dctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		d, err := db.Open(dctx, cfg.Server.Database.DSN)
 		cancel()
 		if err != nil {
-			runner.Close()
+			_ = mgr.Stop()
 			return fmt.Errorf("failed to open database: %w", err)
 		}
 		st = d
@@ -92,11 +127,9 @@ func run(cmd *cobra.Command, args []string) error {
 		logger.Warn("no database DSN configured, using in-memory store")
 	}
 
-	apr := applier.NewAnsible(cfg.Targets, runner, multi, st, logger)
+	apr := applier.NewAnsible(cfg.Targets, mgr, st, logger)
 	sched := scheduler.New(cfg.Server.Interval, apr.RunCycle, logger)
 	srv := server.New(cfg.Server.ListenAddr, apr, st, multi, logger)
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
 	done := make(chan struct{})
 	go func() {
@@ -107,36 +140,57 @@ func run(cmd *cobra.Command, args []string) error {
 	logger.Info("starting strangle",
 		zap.String("addr", cfg.Server.ListenAddr),
 		zap.Duration("interval", cfg.Server.Interval),
+		zap.Int("workers", cfg.Server.Workers),
 		zap.Strings("targets", apr.TargetNames()),
 	)
 	if err := srv.ListenAndServe(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("server failed", zap.Error(err))
-		shutdown(stop, done, runner, st, logger)
+		shutdown(stop, done, mgr, st, logger)
 		return err
 	}
-	shutdown(stop, done, runner, st, logger)
+	shutdown(stop, done, mgr, st, logger)
 	logger.Info("strangle stopped")
 	return nil
 }
 
-// buildSSH creates one SSH manager per playbook that enables the Go-managed
-// SSH transport, and a dispatcher over them. The result is nil when no
-// playbook uses the transport.
-func buildSSH(targets []config.TargetConfig) (*sshpool.Multi, error) {
-	managers := map[string]*sshpool.Manager{}
-	for _, t := range targets {
-		for _, pb := range t.Playbooks {
-			if !pb.Options.SSH.Enabled {
-				continue
-			}
-			mgr, err := sshpool.New(pb.Options.SSH)
-			if err != nil {
-				return nil, fmt.Errorf("target %q playbook %q: %w", t.Name, pb.Name, err)
-			}
-			managers[pb.SSHKey()] = mgr
-		}
+// runWorker serves the Runner gRPC service inside a worker child process.
+func runWorker(cmd *cobra.Command, args []string) error {
+	if socketPath == "" {
+		return errors.New("--socket is required")
 	}
-	return sshpool.NewMulti(managers)
+
+	cfg, err := config.Load(serverConfigPath, collectionConfigPath)
+	if err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	logger, err := newLogger(cfg.Server.LogLevel)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = logger.Sync() }()
+
+	multi, err := sshpool.BuildMulti(cfg.Targets)
+	if err != nil {
+		return fmt.Errorf("failed to initialize SSH transport: %w", err)
+	}
+	defer multi.Close()
+
+	runner, err := ansible.NewRunner(multi)
+	if err != nil {
+		return fmt.Errorf("failed to initialize embedded Python: %w", err)
+	}
+	defer runner.Close()
+
+	srv := worker.NewServer(runner, multi)
+	grpcServer := grpc.NewServer(grpc.MaxRecvMsgSize(worker.MaxRecvBytes))
+	v1.RegisterRunnerServer(grpcServer, srv)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	logger.Info("starting worker", zap.Int("pid", os.Getpid()), zap.String("socket", socketPath))
+	return worker.Run(ctx, socketPath, grpcServer, logger, 10*time.Second)
 }
 
 // newLogger builds a JSON logger on stderr at the given level.
@@ -161,13 +215,15 @@ func newLogger(level string) (*zap.Logger, error) {
 }
 
 // shutdown stops the scheduler (waiting for any in-progress playbook run and
-// its persistence to drain), then closes the runner and the store in that
-// order: the runner must be closed first because an in-progress run may still
-// be writing to the store while it finishes.
-func shutdown(stop context.CancelFunc, done <-chan struct{}, runner *ansible.Runner, st store.Store, logger *zap.Logger) {
+// its persistence to drain), then terminates the workers and closes the
+// store in that order: in-progress runs may still be writing to the store
+// while they finish.
+func shutdown(stop context.CancelFunc, done <-chan struct{}, mgr *worker.Manager, st store.Store, logger *zap.Logger) {
 	stop()
 	<-done
-	runner.Close()
+	if err := mgr.Stop(); err != nil {
+		logger.Warn("failed to stop workers", zap.Error(err))
+	}
 	if err := st.Close(); err != nil {
 		logger.Warn("failed to close store", zap.Error(err))
 	}

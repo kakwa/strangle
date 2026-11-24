@@ -1,0 +1,47 @@
+// Runner is the gRPC service served by every strangle worker process over a
+// unix socket. A worker owns one embedded Ansible interpreter and executes
+// the playbooks the master server dispatches to it.
+syntax = "proto3";
+
+package strangle.v1;
+
+option go_package = "github.com/kakwa/strangle/proto/strangle/v1;v1";
+
+service Runner {
+  // Ping checks that the worker is alive and ready to run playbooks.
+  rpc Ping(PingRequest) returns (PingResponse);
+
+  // RunPlaybook executes one playbook in the worker's embedded interpreter
+  // and returns its exit code and captured output.
+  rpc RunPlaybook(RunPlaybookRequest) returns (RunPlaybookResponse);
+}
+
+message PingRequest {}
+
+message PingResponse {
+  bool ok = 1;
+}
+
+message RunPlaybookRequest {
+  // scope is the SSH scope key ("<target>/<playbook name>") whose manager
+  // should serve the Go-managed SSH transport during this run. Empty when
+  // the playbook does not use the transport.
+  string scope = 1;
+
+  // working_dir is the directory the playbook runs from.
+  string working_dir = 2;
+
+  // args are the ansible-playbook arguments (inventory, flags, playbook).
+  repeated string args = 3;
+}
+
+message RunPlaybookResponse {
+  int32 exit_code = 1;
+
+  // output is the captured stdout/stderr of the run.
+  string output = 2;
+
+  // error is set when the run failed outside the interpreter (setup, I/O or
+  // a closed worker). Empty when the run reached ansible-playbook.
+  string error = 3;
+}

@@ -15,6 +15,11 @@ interval: 2m
 database:
   dsn: postgres://postgres@127.0.0.1:5432/strangle
 
+# How many worker child processes to spawn for running playbooks. Each worker
+# owns one embedded Ansible interpreter; runs on one worker are serialized,
+# so more workers allow more concurrent runs. Defaults to 1.
+workers: 2
+
 # Authentication. Placeholder: parsed but not enforced yet.
 # auth:
 #   token: change-me

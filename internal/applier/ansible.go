@@ -7,41 +7,39 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"sync"
 	"time"
 
-	"github.com/kakwa/strangle/internal/ansible"
 	"github.com/kakwa/strangle/internal/config"
 	"github.com/kakwa/strangle/internal/inventory"
 	"github.com/kakwa/strangle/internal/parser"
-	"github.com/kakwa/strangle/internal/sshpool"
 	"github.com/kakwa/strangle/internal/store"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
 
-// Ansible applies playbooks for every configured target with the embedded
-// ansible-playbook and records the results in a store.
-type Ansible struct {
-	targets map[string]config.TargetConfig
-	runner  *ansible.Runner
-	multi   *sshpool.Multi
-	store   store.Store
-	logger  *zap.Logger
-
-	// mu serializes playbook runs: the embedded interpreter is
-	// single-threaded and the working directory is process-wide.
-	mu sync.Mutex
+// Executor runs one playbook and reports its outcome: the ansible-playbook
+// exit code, the captured output and an error for failures outside the
+// interpreter (setup, transport or a closed worker). The master's worker
+// pool implements it; tests can provide their own.
+type Executor interface {
+	RunPlaybook(ctx context.Context, scope, workingDir string, args ...string) (int, string, error)
 }
 
-// NewAnsible returns an Applier for the given targets, backed by an embedded
-// Ansible interpreter. multi may be nil when no target uses the Go-managed
-// SSH transport.
-func NewAnsible(targets []config.TargetConfig, runner *ansible.Runner, multi *sshpool.Multi, st store.Store, logger *zap.Logger) *Ansible {
+// Ansible applies playbooks for every configured target by dispatching each
+// run to a worker process and records the results in a store.
+type Ansible struct {
+	targets map[string]config.TargetConfig
+	exec    Executor
+	store   store.Store
+	logger  *zap.Logger
+}
+
+// NewAnsible returns an Applier for the given targets. Runs are executed by
+// the given executor (a pool of worker processes in production).
+func NewAnsible(targets []config.TargetConfig, exec Executor, st store.Store, logger *zap.Logger) *Ansible {
 	a := &Ansible{
 		targets: map[string]config.TargetConfig{},
-		runner:  runner,
-		multi:   multi,
+		exec:    exec,
 		store:   st,
 		logger:  logger,
 	}
@@ -97,9 +95,6 @@ func (a *Ansible) KnownPlaybook(target, name string) bool {
 // results. It returns the first error encountered; playbooks after a failure
 // still run.
 func (a *Ansible) RunCycle(ctx context.Context) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	var firstErr error
 	for _, name := range a.TargetNames() {
 		if err := ctx.Err(); err != nil {
@@ -116,7 +111,8 @@ func (a *Ansible) RunCycle(ctx context.Context) error {
 }
 
 // Trigger runs one named job of a target now. It blocks until the run
-// finishes (waiting for any in-progress cycle first).
+// finishes. Runs dispatched through different workers may overlap with an
+// in-progress cycle.
 func (a *Ansible) Trigger(ctx context.Context, target, name string) error {
 	t, ok := a.targets[target]
 	if !ok {
@@ -126,9 +122,6 @@ func (a *Ansible) Trigger(ctx context.Context, target, name string) error {
 	if !ok {
 		return fmt.Errorf("unknown playbook %q for target %q", name, target)
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	return a.runTarget(ctx, t, nil, pb)
 }
 
@@ -146,16 +139,11 @@ func (a *Ansible) runTarget(ctx context.Context, t config.TargetConfig, firstErr
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		// Bridge requests carry no target information, so point the SSH
-		// dispatcher at this job's manager just before running it.
-		if a.multi != nil {
-			if pb.Options.SSH.Enabled {
-				if err := a.multi.SetActive(pb.SSHKey()); err != nil {
-					return err
-				}
-			} else {
-				a.multi.ClearActive()
-			}
+		// The worker's bridge carries no scope information, so tell it which
+		// SSH manager should serve this job.
+		sshScope := ""
+		if pb.Options.SSH.Enabled {
+			sshScope = pb.SSHKey()
 		}
 		inv, invHosts := a.loadInventory(pb)
 		a.logger.Info("running playbook",
@@ -163,7 +151,7 @@ func (a *Ansible) runTarget(ctx context.Context, t config.TargetConfig, firstErr
 			zap.String("playbook", pb.Name),
 			zap.String("file", pb.PlaybookPath()),
 		)
-		if err := a.runPlaybook(ctx, pb, scopeNames(inv, pb.PlaybookPath()), invHosts); err != nil {
+		if err := a.runPlaybook(ctx, pb, sshScope, scopeNames(inv, pb.PlaybookPath()), invHosts); err != nil {
 			a.logger.Error("playbook failed",
 				zap.String("target", t.Name),
 				zap.String("playbook", pb.Name),
@@ -180,18 +168,17 @@ func (a *Ansible) runTarget(ctx context.Context, t config.TargetConfig, firstErr
 	return targetErr
 }
 
-// runPlaybook executes one playbook, parses the output and persists the
-// results. The caller must hold a.mu.
-func (a *Ansible) runPlaybook(ctx context.Context, pb config.PlaybookConfig, scope []string, invHosts []store.InventoryHost) error {
+// runPlaybook dispatches one playbook to the worker pool, parses the output
+// and persists the results.
+func (a *Ansible) runPlaybook(ctx context.Context, pb config.PlaybookConfig, sshScope string, scope []string, invHosts []store.InventoryHost) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
 	started := time.Now().UTC()
-	result, runErr := a.runner.RunDir(pb.WorkingDir, pb.Args()...)
+	exitCode, output, runErr := a.exec.RunPlaybook(ctx, sshScope, pb.WorkingDir, pb.Args()...)
 	finished := time.Now().UTC()
 
-	output := result.Output
 	if runErr != nil {
 		if output != "" {
 			output += "\n"
@@ -207,8 +194,8 @@ func (a *Ansible) runPlaybook(ctx context.Context, pb config.PlaybookConfig, sco
 		StartedAt:    started,
 		FinishedAt:   finished,
 		DurationMS:   finished.Sub(started).Milliseconds(),
-		ExitCode:     result.ExitCode,
-		Success:      runErr == nil && result.ExitCode == 0,
+		ExitCode:     exitCode,
+		Success:      runErr == nil && exitCode == 0,
 		Hosts:        len(summaries),
 		ChangedHosts: countStatus(summaries, "changed"),
 		FailedHosts:  countStatus(summaries, "failed"),
@@ -259,7 +246,7 @@ func (a *Ansible) runPlaybook(ctx context.Context, pb config.PlaybookConfig, sco
 	a.logger.Info("playbook recorded",
 		zap.String("target", pb.TargetName),
 		zap.String("playbook", pb.Name),
-		zap.Int("exit_code", result.ExitCode),
+		zap.Int("exit_code", exitCode),
 		zap.Bool("success", run.Success),
 		zap.Int("hosts", run.Hosts),
 		zap.Int64("duration_ms", run.DurationMS),
@@ -268,8 +255,8 @@ func (a *Ansible) runPlaybook(ctx context.Context, pb config.PlaybookConfig, sco
 	if runErr != nil {
 		return runErr
 	}
-	if result.ExitCode != 0 {
-		return fmt.Errorf("ansible-playbook exited with code %d", result.ExitCode)
+	if exitCode != 0 {
+		return fmt.Errorf("ansible-playbook exited with code %d", exitCode)
 	}
 	return nil
 }

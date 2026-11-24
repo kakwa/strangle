@@ -56,6 +56,10 @@ type ServerConfig struct {
 	Interval time.Duration `yaml:"interval,omitempty"`
 	// Database configures the run-history database.
 	Database DatabaseConfig `yaml:"database,omitempty"`
+	// Workers is how many worker child processes the master spawns to
+	// execute playbook jobs. Each worker owns one embedded Ansible
+	// interpreter, so more workers allow more concurrent runs. Defaults to 1.
+	Workers int `yaml:"workers,omitempty"`
 	// Auth configures API authentication. Placeholder: parsed and validated
 	// but not enforced yet.
 	Auth AuthConfig `yaml:"auth,omitempty"`
@@ -640,6 +644,9 @@ func (s *ServerConfig) validate() error {
 	}
 	if s.Interval <= 0 {
 		s.Interval = 15 * time.Minute
+	}
+	if s.Workers <= 0 {
+		s.Workers = 1
 	}
 	return nil
 }
