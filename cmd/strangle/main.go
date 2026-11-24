@@ -111,6 +111,13 @@ func run(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to start workers: %w", err)
 	}
+	// Supervise the pool: a worker that dies or stops answering health
+	// pings is restarted (with backoff) by the manager.
+	mgr.Start(ctx)
+	go func() {
+		<-mgr.Down()
+		logger.Error("a worker slot is permanently down; playbook runs will fail until the master is restarted")
+	}()
 
 	var st store.Store
 	if cfg.Server.Database.DSN != "" {
@@ -169,7 +176,7 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	sched := scheduler.New(cfg.Server.Interval, enqueueCycle, logger)
-	srv := server.New(cfg.Server.ListenAddr, apr, st, multi, enqueue, logger)
+	srv := server.New(cfg.Server.ListenAddr, apr, st, multi, enqueue, mgr, logger)
 
 	done := make(chan struct{})
 	go func() {

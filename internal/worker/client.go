@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/connectivity"
+	"google.golang.org/grpc/credentials/insecure"
 
 	runnerv1 "github.com/kakwa/strangle/proto/strangle/v1"
 )

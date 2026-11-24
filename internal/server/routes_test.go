@@ -12,8 +12,18 @@ import (
 	"github.com/kakwa/strangle/internal/applier"
 	"github.com/kakwa/strangle/internal/config"
 	"github.com/kakwa/strangle/internal/store"
+	"github.com/kakwa/strangle/internal/worker"
 	"go.uber.org/zap"
 )
+
+// fakeWorkers is a canned WorkerReporter for the /api/workers tests.
+type fakeWorkers struct {
+	statuses []worker.WorkerStatus
+}
+
+func (f *fakeWorkers) WorkerStatuses(context.Context) []worker.WorkerStatus {
+	return f.statuses
+}
 
 // testTargets is the configuration used by the route tests: one target with
 // two playbooks.
@@ -28,7 +38,7 @@ var testTargets = []config.TargetConfig{{
 // newTestServerWithStore builds a Server over the given store.
 func newTestServerWithStore(enq RunEnqueuer, st store.Store) *Server {
 	apr := applier.NewAnsible(testTargets, stubExecutor{}, st, zap.NewNop())
-	return New("test", apr, st, nil, enq, zap.NewNop())
+	return New("test", apr, st, nil, enq, nil, zap.NewNop())
 }
 
 func doGet(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {
@@ -322,10 +332,53 @@ func TestIntQuery(t *testing.T) {
 	}
 }
 
+func TestGetWorkers(t *testing.T) {
+	rep := &fakeWorkers{statuses: []worker.WorkerStatus{
+		{ID: 0, PID: 1234, Socket: "/tmp/w0.sock", Alive: true, Jobs: 1, Restarts: 2},
+		{ID: 1, PID: 0, Socket: "/tmp/w1.sock", Alive: false},
+	}}
+	s := newTestServerWithStore(&recEnqueuer{status: "queued"}, store.NewMem())
+	s.workers = rep
+
+	rec := doGet(t, s, "/api/workers")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var out []worker.WorkerStatus
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("workers = %d entries, want 2", len(out))
+	}
+	if !out[0].Alive || out[0].PID != 1234 || out[0].Jobs != 1 || out[0].Restarts != 2 {
+		t.Errorf("workers[0] = %+v, want alive pid 1234 with 1 job and 2 restarts", out[0])
+	}
+	if out[1].Alive {
+		t.Errorf("workers[1] = %+v, want not alive", out[1])
+	}
+}
+
+func TestGetWorkersNilReporter(t *testing.T) {
+	s := newTestServer(&recEnqueuer{status: "queued"})
+
+	rec := doGet(t, s, "/api/workers")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var out []worker.WorkerStatus
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out) != 0 {
+		t.Errorf("workers = %v, want empty", out)
+	}
+}
+
 func TestListenAndServe(t *testing.T) {
 	s := New("127.0.0.1:0",
 		applier.NewAnsible(testTargets, stubExecutor{}, store.NewMem(), zap.NewNop()),
-		store.NewMem(), nil, &recEnqueuer{status: "queued"}, zap.NewNop())
+		store.NewMem(), nil, &recEnqueuer{status: "queued"}, nil, zap.NewNop())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)

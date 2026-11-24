@@ -16,6 +16,7 @@ import (
 	"github.com/kakwa/strangle/internal/applier"
 	"github.com/kakwa/strangle/internal/sshpool"
 	"github.com/kakwa/strangle/internal/store"
+	"github.com/kakwa/strangle/internal/worker"
 	"github.com/kakwa/strangle/web"
 	"go.uber.org/zap"
 )
@@ -28,6 +29,12 @@ type RunEnqueuer interface {
 	EnqueueRun(ctx context.Context, target, playbook string) (string, error)
 }
 
+// WorkerReporter reports the state of the master's worker pool. It is nil
+// when no workers are managed.
+type WorkerReporter interface {
+	WorkerStatuses(ctx context.Context) []worker.WorkerStatus
+}
+
 // Server is the strangle HTTP server.
 type Server struct {
 	addr    string
@@ -35,6 +42,7 @@ type Server struct {
 	store   store.Store
 	ssh     *sshpool.Multi
 	run     RunEnqueuer
+	workers WorkerReporter
 	logger  *zap.Logger
 }
 
@@ -61,14 +69,16 @@ var uiFS = func() fs.FS {
 // New returns a Server. The web UI is embedded in the binary; build it with
 // `make web` (or `make build`) before compiling. ssh may be nil when no
 // target uses the Go-managed SSH transport. run accepts manual playbook runs
-// (a river job in production, a direct run without a database).
-func New(addr string, apr *applier.Ansible, st store.Store, ssh *sshpool.Multi, run RunEnqueuer, logger *zap.Logger) *Server {
+// (a river job in production, a direct run without a database). workers may
+// be nil when no worker pool is managed.
+func New(addr string, apr *applier.Ansible, st store.Store, ssh *sshpool.Multi, run RunEnqueuer, workers WorkerReporter, logger *zap.Logger) *Server {
 	return &Server{
 		addr:    addr,
 		applier: apr,
 		store:   st,
 		ssh:     ssh,
 		run:     run,
+		workers: workers,
 		logger:  logger,
 	}
 }
@@ -165,6 +175,16 @@ func (s *Server) Routes() http.Handler {
 			out[target] = pbs
 		}
 		writeJSON(w, http.StatusOK, out)
+	})
+
+	// /api/workers reports the master's worker pool: one entry per worker
+	// process, with liveness probed over gRPC.
+	mux.HandleFunc("GET /api/workers", func(w http.ResponseWriter, r *http.Request) {
+		if s.workers == nil {
+			writeJSON(w, http.StatusOK, []worker.WorkerStatus{})
+			return
+		}
+		writeJSON(w, http.StatusOK, s.workers.WorkerStatuses(r.Context()))
 	})
 
 	mux.HandleFunc("POST /api/run", func(w http.ResponseWriter, r *http.Request) {
