@@ -18,7 +18,6 @@ import {
   Center,
   Group,
   Loader,
-  ScrollArea,
   SimpleGrid,
   Stack,
   Table,
@@ -186,6 +185,19 @@ function diffLineColor(line, colors) {
   return undefined
 }
 
+// Code-block look for diff and error output: theme-aware background, border
+// and padding, with vertical and horizontal scrolling for long content.
+const CODE_BLOCK_STYLE = {
+  flex: 1,
+  minWidth: 0,
+  overflow: 'auto',
+  maxHeight: 300,
+  background: 'var(--mantine-color-gray-1)',
+  border: '1px solid var(--mantine-color-default-border)',
+  borderRadius: 'var(--mantine-radius-md)',
+  padding: 'var(--mantine-spacing-sm)',
+}
+
 function DiffBlock({ diff, error }) {
   const { colors } = useMantineTheme()
   if (!diff && !error) return null
@@ -201,18 +213,18 @@ function DiffBlock({ diff, error }) {
   return (
     <Group gap={0} align="start" wrap="nowrap">
       {diff && (
-        <ScrollArea.Autosize mah={300} style={{ flex: 1, minWidth: 0 }}>
-          <Text component="pre" size="xs" ff="monospace">
+        <div style={CODE_BLOCK_STYLE}>
+          <Text component="pre" size="xs" ff="monospace" style={{ margin: 0 }}>
             {colorized(diff)}
           </Text>
-        </ScrollArea.Autosize>
+        </div>
       )}
       {error && (
-        <ScrollArea.Autosize mah={300} style={{ flex: 1, minWidth: 0 }}>
-          <Text component="pre" size="xs" ff="monospace" c="red">
+        <div style={CODE_BLOCK_STYLE}>
+          <Text component="pre" size="xs" ff="monospace" c="red" style={{ margin: 0 }}>
             {error}
           </Text>
-        </ScrollArea.Autosize>
+        </div>
       )}
     </Group>
   )
