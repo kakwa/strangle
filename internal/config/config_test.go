@@ -38,7 +38,7 @@ vault_password_file: /run/secrets/vault
 		t.Errorf("playbook/inventory = %q/%q", cfg.Ansible.Playbook, cfg.Ansible.Inventory)
 	}
 
-	args := strings.Join(cfg.Ansible.Args(), " ")
+	args := strings.Join(cfg.Ansible.Args(cfg.Ansible.Playbook), " ")
 	for _, want := range []string{
 		"--diff",
 		"-i hosts.ini",
@@ -72,6 +72,50 @@ func TestLoadRequiresPlaybookAndInventory(t *testing.T) {
 	}
 }
 
+func TestLoadPlaybooksList(t *testing.T) {
+	path := writeConfig(t, `
+working_dir: /opt/ansible
+playbooks:
+  - site.yml
+  - dns.yml
+inventory: inventory
+`)
+	t.Setenv("STRANGLE_CONFIG", path)
+	t.Setenv("STRANGLE_DSN", "postgres://u:p@localhost/db")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if got := cfg.Ansible.PlaybookList(); len(got) != 2 || got[0] != "site.yml" || got[1] != "dns.yml" {
+		t.Errorf("PlaybookList() = %v", got)
+	}
+	if cfg.Ansible.PlaybookPath("site.yml") != "/opt/ansible/site.yml" {
+		t.Errorf("PlaybookPath = %q", cfg.Ansible.PlaybookPath("site.yml"))
+	}
+	if cfg.Ansible.InventoryPath() != "/opt/ansible/inventory" {
+		t.Errorf("InventoryPath = %q", cfg.Ansible.InventoryPath())
+	}
+	if cfg.Database.DSN != "postgres://u:p@localhost/db" {
+		t.Errorf("Database.DSN = %q (env var should win)", cfg.Database.DSN)
+	}
+}
+
+func TestPlaybookListPrefersListOverLegacy(t *testing.T) {
+	a := AnsibleConfig{
+		Playbooks: []string{"a.yml"},
+		Playbook:  "legacy.yml",
+	}
+	if got := a.PlaybookList(); len(got) != 1 || got[0] != "a.yml" {
+		t.Errorf("PlaybookList() = %v, want [a.yml]", got)
+	}
+	a = AnsibleConfig{Playbook: "legacy.yml"}
+	if got := a.PlaybookList(); len(got) != 1 || got[0] != "legacy.yml" {
+		t.Errorf("PlaybookList() = %v, want [legacy.yml]", got)
+	}
+}
+
 func TestArgsAlwaysAddsDiffAndDefaultsBecomeMethod(t *testing.T) {
 	path := writeConfig(t, "playbook: site.yml\ninventory: hosts.ini\n")
 	t.Setenv("STRANGLE_CONFIG", path)
@@ -83,8 +127,8 @@ func TestArgsAlwaysAddsDiffAndDefaultsBecomeMethod(t *testing.T) {
 	if cfg.Ansible.BecomeMethod != "sudo" {
 		t.Errorf("BecomeMethod = %q, want sudo", cfg.Ansible.BecomeMethod)
 	}
-	if !slices.Contains(cfg.Ansible.Args(), "--diff") {
-		t.Errorf("Args() = %v, want --diff", cfg.Ansible.Args())
+	if !slices.Contains(cfg.Ansible.Args("site.yml"), "--diff") {
+		t.Errorf("Args() = %v, want --diff", cfg.Ansible.Args("site.yml"))
 	}
 }
 

@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,8 +22,8 @@ import (
 // Server is the strangle HTTP server.
 type Server struct {
 	addr       string
-	jobs       []applier.Job
-	store      *store.Store
+	applier    *applier.Ansible
+	store      store.Store
 	sshManager *sshpool.Manager
 	logger     *slog.Logger
 	uiDir      string
@@ -29,10 +31,10 @@ type Server struct {
 
 // New returns a Server. The web UI is served from uiDir
 // (expected to be the built output in web/dist).
-func New(addr string, jobs []applier.Job, st *store.Store, sshManager *sshpool.Manager, logger *slog.Logger) *Server {
+func New(addr string, apr *applier.Ansible, st store.Store, sshManager *sshpool.Manager, logger *slog.Logger) *Server {
 	return &Server{
 		addr:       addr,
-		jobs:       jobs,
+		applier:    apr,
 		store:      st,
 		sshManager: sshManager,
 		logger:     logger,
@@ -48,12 +50,84 @@ func (s *Server) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	mux.HandleFunc("GET /api/jobs", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, s.jobs)
+	mux.HandleFunc("GET /api/stats", func(w http.ResponseWriter, r *http.Request) {
+		stats, err := s.store.Stats(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, stats)
 	})
 
-	mux.HandleFunc("GET /api/reports", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, s.store.List())
+	mux.HandleFunc("GET /api/runs", func(w http.ResponseWriter, r *http.Request) {
+		limit := intQuery(r, "limit", 50)
+		runs, err := s.store.ListRuns(r.Context(), limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, runs)
+	})
+
+	mux.HandleFunc("GET /api/hosts", func(w http.ResponseWriter, r *http.Request) {
+		hosts, err := s.store.ListHosts(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, hosts)
+	})
+
+	mux.HandleFunc("GET /api/hosts/{host}/runs", func(w http.ResponseWriter, r *http.Request) {
+		limit := intQuery(r, "limit", 10)
+		runs, err := s.store.HostRuns(r.Context(), r.PathValue("host"), limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, runs)
+	})
+
+	mux.HandleFunc("GET /api/hosts/{host}/changes", func(w http.ResponseWriter, r *http.Request) {
+		limit := intQuery(r, "limit", 200)
+		changes, err := s.store.HostChanges(r.Context(), r.PathValue("host"), limit)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, changes)
+	})
+
+	mux.HandleFunc("GET /api/playbooks", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, s.applier.Playbooks())
+	})
+
+	mux.HandleFunc("POST /api/run", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Playbook string `json:"playbook"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if req.Playbook == "" {
+			writeError(w, http.StatusBadRequest, errors.New("playbook is required"))
+			return
+		}
+		if !s.applier.KnownPlaybook(req.Playbook) {
+			writeError(w, http.StatusNotFound, fmt.Errorf("unknown playbook %q", req.Playbook))
+			return
+		}
+		// The run happens in the background; the UI sees it appear in
+		// /api/runs when it finishes (runs are serialized anyway).
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+			defer cancel()
+			if err := s.applier.Trigger(ctx, req.Playbook); err != nil {
+				s.logger.Error("manual run failed", "playbook", req.Playbook, "error", err)
+			}
+		}()
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "started", "playbook": req.Playbook})
 	})
 
 	mux.HandleFunc("GET /api/hostkeys", func(w http.ResponseWriter, _ *http.Request) {
@@ -145,6 +219,18 @@ func spaHandler(dir string) http.Handler {
 		}
 		http.ServeFile(w, r, filepath.Join(dir, "index.html"))
 	})
+}
+
+func intQuery(r *http.Request, name string, def int) int {
+	v := r.URL.Query().Get(name)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

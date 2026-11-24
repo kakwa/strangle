@@ -19,8 +19,26 @@ import (
 // setupScript defines the helpers used for capturing Python output and for
 // clearing the global state that prevents Ansible's CLI from being run twice
 // in the same interpreter.
+//
+// It also installs a guard around signal.signal. Ansible's TaskQueueManager
+// replaces the process-wide SIGINT/SIGTERM handlers with its own during a
+// run, clobbering the C-level handlers the host runtime (Go's os/signal)
+// installed for signal delivery, and the Python API cannot restore arbitrary
+// C handlers afterwards. Refusing to install handlers for those signals keeps
+// SIGINT/SIGTERM delivery working for the life of the process.
 const setupScript = `
 import io as _strangle_io
+import signal as _strangle_signal
+
+_strangle_orig_signal = _strangle_signal.signal
+_strangle_protected = (_strangle_signal.SIGINT, _strangle_signal.SIGTERM)
+
+def _strangle_guarded_signal(signum, handler):
+    if signum in _strangle_protected:
+        return _strangle_signal.getsignal(signum)
+    return _strangle_orig_signal(signum, handler)
+
+_strangle_signal.signal = _strangle_guarded_signal
 
 class _StrangleBuffer(_strangle_io.RawIOBase):
     def __init__(self):
@@ -49,6 +67,20 @@ def _strangle_reset_ansible():
     from ansible.utils.context_objects import GlobalCLIArgs
     VaultSecretsContext._current = None
     GlobalCLIArgs._Singleton__instance = None
+
+    # Ansible modules each create their own Display() instance at import
+    # time, and every instance deduplicates messages for the life of the
+    # process. Clear the memory of all live instances so messages repeated
+    # from a new run are shown again.
+    import sys as _strangle_sys
+    from ansible.utils.display import Display as _strangle_Display
+    for _mod in list(_strangle_sys.modules.values()):
+        for _attr in ('display', '_display'):
+            _d = getattr(_mod, _attr, None)
+            if isinstance(_d, _strangle_Display):
+                _d._errors.clear()
+                _d._warns.clear()
+                _d._deprecations.clear()
 `
 
 // Result is the outcome of a playbook run.
@@ -61,6 +93,7 @@ type Result struct {
 
 type request struct {
 	args  []string
+	dir   string
 	reply chan response
 }
 
@@ -134,7 +167,7 @@ func (r *Runner) serve(ready chan<- error) {
 	ready <- nil
 
 	for req := range r.requests {
-		result, err := run(req.args)
+		result, err := run(req.dir, req.args)
 		req.reply <- response{result: result, err: err}
 	}
 }
@@ -142,12 +175,20 @@ func (r *Runner) serve(ready chan<- error) {
 // Run invokes ansible-playbook with args in the embedded interpreter and
 // returns its exit code and captured output.
 func (r *Runner) Run(args ...string) (Result, error) {
+	return r.RunDir("", args...)
+}
+
+// RunDir is like Run but changes the working directory of the embedded
+// interpreter for the duration of the call. Ansible resolves ansible.cfg,
+// relative playbook paths and roles relative to the working directory, so
+// runs of a project's playbooks should use that project's directory.
+func (r *Runner) RunDir(dir string, args ...string) (Result, error) {
 	if len(args) == 0 {
 		return Result{}, errors.New("ansible: no arguments given")
 	}
 
 	reply := make(chan response, 1)
-	req := request{args: append([]string(nil), args...), reply: reply}
+	req := request{args: append([]string(nil), args...), dir: dir, reply: reply}
 
 	select {
 	case r.requests <- req:
@@ -173,15 +214,33 @@ func (r *Runner) Close() {
 	})
 }
 
-func run(args []string) (result Result, err error) {
+func run(dir string, args []string) (result Result, err error) {
 	if rc := cpy.PyRun_SimpleString("_strangle_reset_ansible()"); rc != 0 {
 		return Result{}, pythonError("ansible: failed to reset state")
 	}
 
-	argv := cpy.PyList_New(len(args))
+	if dir != "" {
+		snippet := "import os as _strangle_os\n" +
+			"_strangle_cwd = _strangle_os.getcwd()\n" +
+			"_strangle_os.chdir(" + pyString(dir) + ")"
+		if rc := cpy.PyRun_SimpleString(snippet); rc != 0 {
+			return Result{}, pythonError("ansible: failed to change working directory")
+		}
+		defer func() {
+			_ = cpy.PyRun_SimpleString("_strangle_os.chdir(_strangle_cwd)")
+		}()
+	}
+
+	// The ansible CLI parses sys.argv[1:] and treats sys.argv[0] as the
+	// program name, so the list must start with one; otherwise the first
+	// real argument (e.g. --diff) is silently dropped.
+	argv := cpy.PyList_New(len(args) + 1)
 	defer argv.DecRef()
+	if cpy.PyList_SetItem(argv, 0, cpy.PyUnicode_FromString("ansible-playbook")) != 0 {
+		return Result{}, pythonError("ansible: failed to build argv")
+	}
 	for i, arg := range args {
-		if cpy.PyList_SetItem(argv, i, cpy.PyUnicode_FromString(arg)) != 0 {
+		if cpy.PyList_SetItem(argv, i+1, cpy.PyUnicode_FromString(arg)) != 0 {
 			return Result{}, pythonError("ansible: failed to build argv")
 		}
 	}
@@ -259,6 +318,28 @@ func run(args []string) (result Result, err error) {
 	decRef(inner)
 
 	return result, err
+}
+
+// pyString renders s as a single-quoted Python string literal.
+func pyString(s string) string {
+	var b strings.Builder
+	b.WriteByte('\'')
+	for _, r := range s {
+		switch r {
+		case '\'':
+			b.WriteString(`\'`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('\'')
+	return b.String()
 }
 
 func pythonError(what string) error {

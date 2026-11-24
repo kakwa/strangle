@@ -1,70 +1,54 @@
-// Package scheduler runs the applier periodically over a set of jobs
-// and records the reports in the store.
+// Package scheduler runs a cycle function periodically.
 package scheduler
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
-
-	"github.com/kakwa/strangle/internal/applier"
-	"github.com/kakwa/strangle/internal/store"
 )
 
-// Scheduler applies to a fixed list of jobs on a fixed interval.
+// Scheduler runs the given cycle function immediately, then on every tick of
+// the interval, until ctx is canceled.
 type Scheduler struct {
 	interval time.Duration
-	jobs     []applier.Job
-	applier  applier.Applier
-	store    *store.Store
+	cycle    func(ctx context.Context) error
 	logger   *slog.Logger
 }
 
 // New returns a Scheduler.
-func New(interval time.Duration, jobs []applier.Job, applier applier.Applier, store *store.Store, logger *slog.Logger) *Scheduler {
-	return &Scheduler{
-		interval: interval,
-		jobs:     jobs,
-		applier:  applier,
-		store:    store,
-		logger:   logger,
-	}
+func New(interval time.Duration, cycle func(ctx context.Context) error, logger *slog.Logger) *Scheduler {
+	return &Scheduler{interval: interval, cycle: cycle, logger: logger}
 }
 
-// Run applies to all jobs immediately, then on every tick of the interval,
-// until ctx is canceled.
+// Run executes the cycle immediately and on every tick until ctx is canceled.
 func (s *Scheduler) Run(ctx context.Context) {
+	s.runCycle(ctx, "startup")
+
 	t := time.NewTicker(s.interval)
 	defer t.Stop()
-
-	s.runOnce(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.runOnce(ctx)
+			s.runCycle(ctx, "interval")
 		}
 	}
 }
 
-func (s *Scheduler) runOnce(ctx context.Context) {
-	s.logger.Info("run started", "jobs", len(s.jobs))
-	for _, job := range s.jobs {
-		report, err := s.applier.Apply(ctx, job)
-		if err != nil {
-			s.logger.Error("apply failed", "job", job.ID, "error", err)
-			report = applier.Report{
-				JobID:     job.ID,
-				JobTitle:  job.Title,
-				Company:   job.Company,
-				AppliedAt: time.Now().UTC(),
-				ExitCode:  -1,
-				Success:   false,
-				Message:   err.Error(),
-			}
-		}
-		s.store.Add(report)
+func (s *Scheduler) runCycle(ctx context.Context, trigger string) {
+	if err := ctx.Err(); err != nil {
+		return
 	}
-	s.logger.Info("run finished", "jobs", len(s.jobs))
+	s.logger.Info("run started", "trigger", trigger)
+	started := time.Now()
+	if err := s.cycle(ctx); err != nil {
+		if errors.Is(err, context.Canceled) {
+			s.logger.Info("run canceled", "trigger", trigger)
+			return
+		}
+		s.logger.Error("run failed", "trigger", trigger, "error", err)
+	}
+	s.logger.Info("run finished", "trigger", trigger, "duration", time.Since(started).Round(time.Millisecond).String())
 }

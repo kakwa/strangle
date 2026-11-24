@@ -1,9 +1,19 @@
 # Base configuration for strangle.
 # The path to this file can be overridden with STRANGLE_CONFIG.
 
-# Required: playbook to run and inventory to run it against.
-playbook: playbook.yml
+# Required: the playbooks to run, in order (relative to working_dir if set).
+playbooks:
+  - playbook.yml
+
+# Legacy single-playbook form (equivalent to playbooks: [playbook.yml]):
+# playbook: playbook.yml
+
+# Required: inventory file or directory (relative to working_dir if set).
 inventory: inventory.ini
+
+# The directory the playbooks run from: Ansible resolves ansible.cfg,
+# relative paths and roles relative to it (optional).
+# working_dir: /path/to/ansible
 
 # Optional: connect to hosts as this user (-u).
 # user: deploy

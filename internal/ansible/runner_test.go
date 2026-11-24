@@ -2,9 +2,12 @@ package ansible
 
 import (
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestRunner(t *testing.T) {
@@ -57,6 +60,88 @@ func TestRunner(t *testing.T) {
 		}
 		if !strings.Contains(result.Output, "expected failure") {
 			t.Errorf("Output does not contain the failure message:\n%s", result.Output)
+		}
+	})
+
+	// These subtests verify that output is not degraded when playbooks run
+	// repeatedly in the same process: --diff output must appear every time
+	// (the CLI args are rebuilt per run) and repeated error messages must
+	// not be swallowed by Ansible's process-wide display deduplication.
+	local := []string{"-i", "localhost,", "-e", "ansible_connection=local"}
+
+	t.Run("diff", func(t *testing.T) {
+		dest := filepath.Join(dir, "diff.txt")
+		playbook := writePlaybook(t, dir, "diff.yml", `
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: Write marker
+      ansible.builtin.copy:
+        content: "marker\n"
+        dest: ` + dest + `
+`)
+		_ = os.Remove(dest)
+		result, err := runner.Run(append([]string{"--diff"}, append(local, playbook)...)...)
+		skipIfAnsibleMissing(t, err)
+		if err != nil {
+			t.Fatalf("Run() error: %v", err)
+		}
+		if !strings.Contains(result.Output, "--- before") || !strings.Contains(result.Output, "+++ after:") {
+			t.Errorf("Output does not contain the diff block:\n%s", result.Output)
+		}
+	})
+
+	t.Run("repeated error", func(t *testing.T) {
+		playbook := writePlaybook(t, dir, "repeat-fail.yml", `
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: Fail on purpose
+      ansible.builtin.fail:
+        msg: repeat-me failure
+`)
+		args := append([]string{"--diff"}, append(local, playbook)...)
+		for i := 0; i < 2; i++ {
+			result, err := runner.Run(args...)
+			skipIfAnsibleMissing(t, err)
+			if err != nil {
+				t.Fatalf("Run() error: %v", err)
+			}
+			if !strings.Contains(result.Output, "[ERROR]:") {
+				t.Fatalf("Run %d output does not contain the error block:\n%s", i+1, result.Output)
+			}
+			if !strings.Contains(result.Output, "repeat-me failure") {
+				t.Fatalf("Run %d output does not contain the failure message:\n%s", i+1, result.Output)
+			}
+		}
+	})
+
+	// Regression: Ansible's TaskQueueManager replaces the process-wide
+	// SIGINT/SIGTERM handlers with its own during a run, which used to
+	// clobber the C-level handler os/signal installs. After a playbook run
+	// the signal must still be delivered to a Notify channel.
+	t.Run("signal delivery", func(t *testing.T) {
+		ch := make(chan os.Signal, 1)
+		signal.Notify(ch, syscall.SIGTERM)
+		defer signal.Stop(ch)
+
+		result, err := runner.Run(append([]string{"--diff"}, append(local, okPlaybook)...)...)
+		skipIfAnsibleMissing(t, err)
+		if err != nil {
+			t.Fatalf("Run() error: %v", err)
+		}
+		if result.ExitCode != 0 {
+			t.Fatalf("ExitCode = %d, want 0; output:\n%s", result.ExitCode, result.Output)
+		}
+
+		syscall.Kill(os.Getpid(), syscall.SIGTERM)
+		select {
+		case s := <-ch:
+			if s != syscall.SIGTERM {
+				t.Fatalf("received unexpected signal %v", s)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("SIGTERM was not delivered to the os/signal channel after a playbook run")
 		}
 	})
 }
