@@ -1,6 +1,7 @@
-# Per-target configuration for the `demo` target (this directory), listed in
-# config/collection.yml. Every target directory carries its own live
-# strangle.yml — see config/strangle.yml for a documented reference.
+# Per-target configuration for the `demo` target (this directory). Add a
+# `demo` entry to config/collection.yml pointing at this directory to run it.
+# Every target directory carries its own live strangle.yml — see
+# config/strangle.yml for a documented reference.
 
 playbooks:
   - name: demo
