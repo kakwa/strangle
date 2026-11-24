@@ -64,6 +64,42 @@ function normalizeStats(value) {
   }
 }
 
+// Host records are scoped per (target, host) on the server, but the host view
+// shows one row per host name. Merge the per-target records of a host so a
+// host that appears in several targets (collections) is listed only once.
+function ts(t) {
+  return t ? new Date(t).getTime() : 0
+}
+
+function mergeHost(a, b) {
+  const primary = ts(b.last_run_at) > ts(a.last_run_at) ? b : a
+  const secondary = primary === a ? b : a
+  const later = (x, y) => (ts(y) > ts(x) ? y : x)
+  return {
+    ...primary,
+    ip: primary.ip || secondary.ip || '',
+    user: primary.user || secondary.user || '',
+    groups: [...new Set([...(primary.groups || []), ...(secondary.groups || [])])],
+    in_inventory: primary.in_inventory || secondary.in_inventory,
+    active: primary.active || secondary.active,
+    first_seen_at:
+      ts(secondary.first_seen_at) < ts(primary.first_seen_at)
+        ? secondary.first_seen_at
+        : primary.first_seen_at,
+    last_change_at: later(primary.last_change_at, secondary.last_change_at),
+  }
+}
+
+function normalizeHosts(value) {
+  const byName = new Map()
+  for (const h of asArray(value)) {
+    if (!h?.name) continue
+    const cur = byName.get(h.name)
+    byName.set(h.name, cur ? mergeHost(cur, h) : h)
+  }
+  return [...byName.values()]
+}
+
 function normalizePlaybooks(value) {
   return Object.fromEntries(
     Object.entries(asObject(value)).map(([target, pbs]) => [
@@ -609,7 +645,7 @@ export default function App() {
       const newRuns = asArray(await runsRes.json())
       setStats(normalizeStats(await statsRes.json()))
       setRuns(newRuns)
-      setHosts(asArray(await hostsRes.json()))
+      setHosts(normalizeHosts(await hostsRes.json()))
       setPlaybooks(normalizePlaybooks(await playbooksRes.json()))
       // A manual run is done once any run of the same (target, playbook)
       // started at or after the trigger has been persisted.
