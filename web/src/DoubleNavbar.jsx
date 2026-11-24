@@ -127,8 +127,8 @@ export function DoubleNavbar({
                     {target}
                   </span>
                   {pbs.map((pb) => (
-                    <span key={pb} className={classes.link} style={{ cursor: 'default', paddingLeft: 20 }}>
-                      {pb}
+                    <span key={pb.name} className={classes.link} style={{ cursor: 'default', paddingLeft: 20 }}>
+                      {pb.name}
                     </span>
                   ))}
                 </div>

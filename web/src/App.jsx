@@ -11,6 +11,7 @@ import {
   AppShell,
   Badge,
   Burger,
+  Button,
   Card,
   Center,
   Group,
@@ -343,33 +344,77 @@ function HostsTable({ hosts, onHost, filter, setFilter }) {
   )
 }
 
-function PlaybooksView({ playbooks }) {
+function PlaybooksView({ playbooks, onRun, pendingRuns, runError }) {
+  const entries = Object.entries(playbooks)
   return (
     <Card withBorder>
       <Title order={4} mb="sm">Targets & playbooks</Title>
+      {runError && (
+        <Alert color="red" title="Run failed" mb="md">
+          {runError}
+        </Alert>
+      )}
       <Table>
         <Table.Thead>
           <Table.Tr>
-            <Table.Th>Target</Table.Th>
-            <Table.Th>Playbooks</Table.Th>
+            <Table.Th>Collection</Table.Th>
+            <Table.Th>Playbook</Table.Th>
+            <Table.Th>Inventory</Table.Th>
+            <Table.Th>Status</Table.Th>
+            <Table.Th w={110}>Action</Table.Th>
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
-          {Object.entries(playbooks).map(([target, pbs]) => (
-            <Table.Tr key={target}>
-              <Table.Td><Text fw="bold">{target}</Text></Table.Td>
-              <Table.Td>
-                <Group gap={4} wrap="wrap">
-                  {pbs.map((pb) => (
-                    <Badge key={pb} size="xs" variant="subtle">{pb}</Badge>
-                  ))}
-                </Group>
-              </Table.Td>
-            </Table.Tr>
-          ))}
-          {Object.keys(playbooks).length === 0 && (
+          {entries.flatMap(([target, pbs]) =>
+            pbs.map((pb, pi) => {
+              const key = `${target}:${pb.name}`
+              const pending = pendingRuns[key] !== undefined
+              return (
+                <Table.Tr key={key}>
+                  {pi === 0 && (
+                    <Table.Td td={pbs.length > 1 ? { rowSpan: pbs.length } : undefined}>
+                      <Text fw="bold">{target}</Text>
+                    </Table.Td>
+                  )}
+                  <Table.Td>
+                    <Group gap="xs" wrap="nowrap">
+                      <Text fw="semibold">{pb.name}</Text>
+                      {pb.playbook && pb.playbook !== pb.name && (
+                        <Text size="xs" c="dimmed" ff="monospace">{pb.playbook}</Text>
+                      )}
+                    </Group>
+                  </Table.Td>
+                  <Table.Td>
+                    <Text size="sm" ff="monospace">{pb.inventory || '—'}</Text>
+                  </Table.Td>
+                  <Table.Td>
+                    {pb.last_status ? (
+                      <Group gap="xs" wrap="nowrap">
+                        <StatusBadge status={pb.last_status} />
+                        <Text size="xs" c="dimmed">{fmtAgo(pb.last_run_at)}</Text>
+                      </Group>
+                    ) : (
+                      <Text size="xs" c="dimmed">never run</Text>
+                    )}
+                  </Table.Td>
+                  <Table.Td>
+                    <Button
+                      size="xs"
+                      variant="light"
+                      leftSection={pending ? <Loader size={12} /> : <IconPlayerPlay size={14} />}
+                      onClick={() => onRun(target, pb.name)}
+                      disabled={pending}
+                    >
+                      {pending ? 'Running…' : 'Run'}
+                    </Button>
+                  </Table.Td>
+                </Table.Tr>
+              )
+            })
+          )}
+          {entries.length === 0 && (
             <Table.Tr>
-              <Table.Td colSpan={2}>No targets configured</Table.Td>
+              <Table.Td colSpan={5}>No targets configured</Table.Td>
             </Table.Tr>
           )}
         </Table.Tbody>
@@ -519,6 +564,11 @@ export default function App() {
   const [section, setSection] = useState('Dashboard')
   const [selectedHost, setSelectedHost] = useState(null)
   const [hostFilter, setHostFilter] = useState('all')
+  // Manual runs in flight, keyed by "<target>:<playbook>" with the trigger
+  // time in ms. Runs are only persisted after they finish, so the UI tracks
+  // them until a matching run appears in /api/runs.
+  const [pendingRuns, setPendingRuns] = useState({})
+  const [runError, setRunError] = useState(null)
   const [mobileOpened, { toggle: toggleMobile, close: closeMobile }] =
     useDisclosure(false)
 
@@ -533,13 +583,52 @@ export default function App() {
       if (!statsRes.ok || !runsRes.ok || !hostsRes.ok || !playbooksRes.ok) {
         throw new Error(`HTTP ${statsRes.status}/${runsRes.status}/${hostsRes.status}/${playbooksRes.status}`)
       }
+      const newRuns = asArray(await runsRes.json())
       setStats(normalizeStats(await statsRes.json()))
-      setRuns(asArray(await runsRes.json()))
+      setRuns(newRuns)
       setHosts(asArray(await hostsRes.json()))
       setPlaybooks(normalizePlaybooks(await playbooksRes.json()))
+      // A manual run is done once any run of the same (target, playbook)
+      // started at or after the trigger has been persisted.
+      setPendingRuns((prev) => {
+        let changed = false
+        const next = { ...prev }
+        for (const [key, triggeredAt] of Object.entries(prev)) {
+          const [target, playbook] = key.split(':')
+          if (newRuns.some((r) =>
+            r.target === target &&
+            r.playbook === playbook &&
+            new Date(r.started_at).getTime() >= triggeredAt - 5000
+          )) {
+            delete next[key]
+            changed = true
+          }
+        }
+        return changed ? next : prev
+      })
       setError(null)
     } catch (err) {
       setError(err.message)
+    }
+  }, [])
+
+  const triggerRun = useCallback(async (target, playbook) => {
+    setRunError(null)
+    try {
+      const res = await fetch('/api/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target, playbook }),
+      })
+      if (res.status === 202) {
+        const key = `${target}:${playbook}`
+        setPendingRuns((p) => ({ ...p, [key]: Date.now() }))
+      } else {
+        const body = await res.json().catch(() => ({}))
+        setRunError(body.error || `HTTP ${res.status}`)
+      }
+    } catch (err) {
+      setRunError(err.message)
     }
   }, [])
 
@@ -636,7 +725,12 @@ export default function App() {
           )}
 
           {stats && section === 'Playbooks' && (
-            <PlaybooksView playbooks={playbooks} />
+            <PlaybooksView
+              playbooks={playbooks}
+              onRun={triggerRun}
+              pendingRuns={pendingRuns}
+              runError={runError}
+            />
           )}
         </Stack>
       </AppShell.Main>
