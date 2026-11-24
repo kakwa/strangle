@@ -1,0 +1,13 @@
+---
+- name: Strangle SSH demo
+  hosts: remote
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Show remote user
+      ansible.builtin.command: whoami
+      register: who_result
+
+    - name: Report remote user
+      ansible.builtin.debug:
+        msg: "connected as {{ who_result.stdout }}"

@@ -11,10 +11,12 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/kakwa/strangle/internal/ansible"
 	"github.com/kakwa/strangle/internal/applier"
 	"github.com/kakwa/strangle/internal/config"
 	"github.com/kakwa/strangle/internal/scheduler"
 	"github.com/kakwa/strangle/internal/server"
+	"github.com/kakwa/strangle/internal/sshpool"
 	"github.com/kakwa/strangle/internal/store"
 )
 
@@ -28,12 +30,33 @@ var jobs = []applier.Job{
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 
-	cfg := config.Load()
+	cfg, err := config.Load()
+	if err != nil {
+		logger.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
+
+	sshManager, err := sshpool.New(cfg.SSH)
+	if err != nil {
+		logger.Error("failed to initialize SSH transport", "error", err)
+		os.Exit(1)
+	}
+	if sshManager != nil {
+		defer sshManager.Close()
+	}
+
+	runner, err := ansible.NewRunner(sshManager)
+	if err != nil {
+		logger.Error("failed to initialize embedded Python", "error", err)
+		os.Exit(1)
+	}
+	defer runner.Close()
+
 	st := store.New(100)
-	apr := applier.NewStub(logger)
+	apr := applier.NewAnsible(cfg.Ansible, runner, logger)
 
 	sched := scheduler.New(cfg.Interval, jobs, apr, st, logger)
-	srv := server.New(cfg.ListenAddr, jobs, st, logger)
+	srv := server.New(cfg.ListenAddr, jobs, st, sshManager, logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

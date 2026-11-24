@@ -1,5 +1,10 @@
 GO := go
 
+# go.nhat.io/cpy/v3 asks pkg-config for python-3.12-embed; map it to the
+# python3-embed package installed on this machine so Go builds work with any
+# CPython version that provides the development headers.
+export PKG_CONFIG := $(CURDIR)/scripts/pkg-config-cpy
+
 .PHONY: all build run test coverage tidy vet web web-dev
 
 all: build

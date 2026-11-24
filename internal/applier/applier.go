@@ -21,6 +21,7 @@ type Report struct {
 	JobTitle  string    `json:"job_title"`
 	Company   string    `json:"company"`
 	AppliedAt time.Time `json:"applied_at"`
+	ExitCode  int       `json:"exit_code"`
 	Success   bool      `json:"success"`
 	Message   string    `json:"message"`
 }

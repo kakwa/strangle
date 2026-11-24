@@ -33,6 +33,12 @@ go.work.sum
 node_modules/
 web/dist/
 
+# Generated SSH host-key state
+known_hosts.strangle
+known_hosts.accepted.json
+known_hosts.auto.json
+hostkeys.pending.json
+
 # env file
 .env
 

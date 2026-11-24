@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# go.nhat.io/cpy/v3 asks pkg-config for "python-3.12-embed". Map that name to
+# the python3-embed package installed on this machine so the bindings can be
+# compiled against whatever CPython development headers are available.
+set -euo pipefail
+
+real_pkg_config="${REAL_PKG_CONFIG:-$(command -v pkg-config)}"
+
+args=()
+for arg in "$@"; do
+  if [[ "$arg" == "python-3.12-embed" ]]; then
+    arg=python3-embed
+  fi
+  args+=("$arg")
+done
+
+exec "$real_pkg_config" "${args[@]}"

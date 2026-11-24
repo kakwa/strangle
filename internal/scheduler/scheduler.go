@@ -59,6 +59,7 @@ func (s *Scheduler) runOnce(ctx context.Context) {
 				JobTitle:  job.Title,
 				Company:   job.Company,
 				AppliedAt: time.Now().UTC(),
+				ExitCode:  -1,
 				Success:   false,
 				Message:   err.Error(),
 			}

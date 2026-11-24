@@ -1,0 +1,8 @@
+---
+- name: Strangle demo
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Report the connected host
+      ansible.builtin.debug:
+        msg: "strangle ran on {{ inventory_hostname }}"
