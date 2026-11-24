@@ -6,10 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +17,7 @@ import (
 	"github.com/kakwa/strangle/internal/applier"
 	"github.com/kakwa/strangle/internal/sshpool"
 	"github.com/kakwa/strangle/internal/store"
+	"github.com/kakwa/strangle/web"
 )
 
 // Server is the strangle HTTP server.
@@ -26,11 +27,21 @@ type Server struct {
 	store      store.Store
 	sshManager *sshpool.Manager
 	logger     *slog.Logger
-	uiDir      string
 }
 
-// New returns a Server. The web UI is served from uiDir
-// (expected to be the built output in web/dist).
+// uiFS is the built web UI, embedded in the binary at compile time
+// (see package web), rooted at web/dist.
+var uiFS = func() fs.FS {
+	ui, err := fs.Sub(web.FS, "dist")
+	if err != nil {
+		// dist is embedded at compile time and always present.
+		panic(err)
+	}
+	return ui
+}()
+
+// New returns a Server. The web UI is embedded in the binary; build it with
+// `make web` (or `make build`) before compiling.
 func New(addr string, apr *applier.Ansible, st store.Store, sshManager *sshpool.Manager, logger *slog.Logger) *Server {
 	return &Server{
 		addr:       addr,
@@ -38,7 +49,6 @@ func New(addr string, apr *applier.Ansible, st store.Store, sshManager *sshpool.
 		store:      st,
 		sshManager: sshManager,
 		logger:     logger,
-		uiDir:      filepath.Join("web", "dist"),
 	}
 }
 
@@ -183,7 +193,7 @@ func (s *Server) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "rejected", "host": req.Host})
 	})
 
-	mux.Handle("/", spaHandler(s.uiDir))
+	mux.Handle("/", spaHandler(uiFS))
 
 	return mux
 }
@@ -207,17 +217,24 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	return err
 }
 
-// spaHandler serves static files from dir, falling back to index.html
+// spaHandler serves static files from fsys, falling back to index.html
 // so client-side routing works.
-func spaHandler(dir string) http.Handler {
-	fs := http.FileServer(http.Dir(dir))
+func spaHandler(fsys fs.FS) http.Handler {
+	files := http.FileServer(http.FS(fsys))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p := filepath.Join(dir, filepath.Clean(strings.TrimPrefix(r.URL.Path, "/")))
-		if st, err := os.Stat(p); err == nil && !st.IsDir() {
-			fs.ServeHTTP(w, r)
-			return
+		name := path.Clean(strings.TrimPrefix(r.URL.Path, "/"))
+		if name == "" {
+			name = "."
 		}
-		http.ServeFile(w, r, filepath.Join(dir, "index.html"))
+		if f, err := fsys.Open(name); err == nil {
+			if st, err := f.Stat(); err == nil && !st.IsDir() {
+				f.Close()
+				files.ServeHTTP(w, r)
+				return
+			}
+			f.Close()
+		}
+		http.ServeFileFS(w, r, fsys, "index.html")
 	})
 }
 

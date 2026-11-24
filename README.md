@@ -28,7 +28,8 @@ internal/
   db/                GORM/PostgreSQL implementation of the Store
   server/            HTTP API + serves the built web UI
   sshpool/           Go-managed persistent SSH connections with host-key policies
-web/                 React (Vite) web UI, styled with Mantine
+web/                 React (Vite) web UI, styled with Mantine; built assets are
+                     embedded into the binary (go:embed)
 strangle.yaml        base configuration
 strangle-remote.yaml example using the Go-managed SSH transport
 ```
@@ -152,14 +153,19 @@ then approve the fingerprint and re-run. Check `GET /api/ssh/stats` to confirm
 
 ## Running
 
-Requires Go (with cgo enabled), `pkg-config`, Python 3 development headers and
-Ansible importable from that Python. The `make` targets configure `PKG_CONFIG`
-to map cpy/v3's `python-3.12-embed` lookup onto the installed `python3-embed`
-package; use them rather than plain `go build`/`go test` (or set `PKG_CONFIG`
-yourself).
+Requires Go (with cgo enabled), Node.js, `pkg-config`, Python 3 development
+headers and Ansible importable from that Python. The `make` targets configure
+`PKG_CONFIG` to map cpy/v3's `python-3.12-embed` lookup onto the installed
+`python3-embed` package; use them rather than plain `go build`/`go test` (or
+set `PKG_CONFIG` yourself).
+
+The web UI is built with Vite and **embedded into the binary** (`go:embed`),
+so `bin/strangle` is self-contained — no `web/dist` needed at runtime.
+`make build` rebuilds the UI before compiling; a plain `go build` works on a
+fresh checkout via a committed placeholder page, but bakes that placeholder in.
 
 ```sh
-# build and start the server
+# build the UI (into web/dist) and the server, UI embedded
 make build
 STRANGLE_INTERVAL=1m ./bin/strangle
 
@@ -169,7 +175,7 @@ STRANGLE_CONFIG=strangle-remote.yaml STRANGLE_INTERVAL=1m ./bin/strangle
 # web UI (development): Vite dev server on :5173, proxies /api to :8080
 make web-dev
 
-# web UI (production): builds into web/dist, served by the Go server
+# web UI (production): build into web/dist only
 make web
 ```
 

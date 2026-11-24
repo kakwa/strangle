@@ -9,7 +9,10 @@ export PKG_CONFIG := $(CURDIR)/scripts/pkg-config-cpy
 
 all: build
 
-build:
+# Build the web UI into web/dist first: the output is embedded into the Go
+# binary at compile time (see web/web.go), so a stale or missing dist would
+# end up baked into bin/strangle.
+build: web
 	$(GO) build -o bin/strangle ./cmd/strangle
 
 run: build

@@ -29,9 +29,11 @@ go.work.sum
 # Built binaries
 /bin/
 
-# Web (vite)
+# Web (vite): build output is embedded into the binary; the placeholder
+# dist/index.html is committed so a plain `go build` works before `make web`.
 node_modules/
-web/dist/
+web/dist/*
+!web/dist/index.html
 
 # Generated SSH host-key state
 known_hosts.strangle
