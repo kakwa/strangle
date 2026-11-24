@@ -24,6 +24,7 @@ import {
   ThemeIcon,
   Title,
 } from '@mantine/core'
+import { useMantineTheme } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import { DoubleNavbar } from './DoubleNavbar'
 
@@ -135,14 +136,35 @@ function StatusBadge({ status }) {
   return <Badge color={color} variant="light">{status || 'unknown'}</Badge>
 }
 
+// diffLineColor maps one line of a unified diff (ansible --diff) to a Mantine
+// theme color: hunk headers blue, added lines green, removed lines red, file
+// headers gray. Returns undefined for context lines.
+function diffLineColor(line, colors) {
+  if (line.startsWith('@@')) return colors.blue[7]
+  if (line.startsWith('+')) return line.startsWith('+++') ? colors.gray[5] : colors.green[7]
+  if (line.startsWith('-')) return line.startsWith('---') ? colors.gray[5] : colors.red[7]
+  if (line.startsWith('diff ') || line.startsWith('index ')) return colors.gray[5]
+  return undefined
+}
+
 function DiffBlock({ diff, error }) {
+  const { colors } = useMantineTheme()
   if (!diff && !error) return null
+  const colorized = (text) => {
+    const lines = text.split('\n')
+    return lines.map((line, i) => (
+      <span key={i} style={{ color: diffLineColor(line, colors) }}>
+        {line}
+        {i < lines.length - 1 ? '\n' : ''}
+      </span>
+    ))
+  }
   return (
     <Group gap={0} align="start" wrap="nowrap">
       {diff && (
         <ScrollArea.Autosize mah={300} style={{ flex: 1, minWidth: 0 }}>
-          <Text component="pre" size="xs" ff="monospace" c={error ? 'red' : 'dark'}>
-            {diff}
+          <Text component="pre" size="xs" ff="monospace">
+            {colorized(diff)}
           </Text>
         </ScrollArea.Autosize>
       )}
