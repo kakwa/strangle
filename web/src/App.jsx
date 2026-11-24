@@ -347,79 +347,80 @@ function HostsTable({ hosts, onHost, filter, setFilter }) {
 function PlaybooksView({ playbooks, onRun, pendingRuns, runError }) {
   const entries = Object.entries(playbooks)
   return (
-    <Card withBorder>
-      <Title order={4} mb="sm">Targets & playbooks</Title>
+    <Stack gap="md">
       {runError && (
-        <Alert color="red" title="Run failed" mb="md">
+        <Alert color="red" title="Run failed">
           {runError}
         </Alert>
       )}
-      <Table>
-        <Table.Thead>
-          <Table.Tr>
-            <Table.Th>Collection</Table.Th>
-            <Table.Th>Playbook</Table.Th>
-            <Table.Th>Inventory</Table.Th>
-            <Table.Th>Status</Table.Th>
-            <Table.Th w={110}>Action</Table.Th>
-          </Table.Tr>
-        </Table.Thead>
-        <Table.Tbody>
-          {entries.flatMap(([target, pbs]) =>
-            pbs.map((pb, pi) => {
-              const key = `${target}:${pb.name}`
-              const pending = pendingRuns[key] !== undefined
-              return (
-                <Table.Tr key={key}>
-                  {pi === 0 && (
-                    <Table.Td td={pbs.length > 1 ? { rowSpan: pbs.length } : undefined}>
-                      <Text fw="bold">{target}</Text>
-                    </Table.Td>
-                  )}
-                  <Table.Td>
-                    <Group gap="xs" wrap="nowrap">
-                      <Text fw="semibold">{pb.name}</Text>
-                      {pb.playbook && pb.playbook !== pb.name && (
-                        <Text size="xs" c="dimmed" ff="monospace">{pb.playbook}</Text>
-                      )}
-                    </Group>
-                  </Table.Td>
-                  <Table.Td>
-                    <Text size="sm" ff="monospace">{pb.inventory || '—'}</Text>
-                  </Table.Td>
-                  <Table.Td>
-                    {pb.last_status ? (
+      {entries.length === 0 && (
+        <Card withBorder>
+          <Text c="dimmed">No targets configured</Text>
+        </Card>
+      )}
+      {entries.map(([target, pbs]) => (
+        <Card withBorder key={target}>
+          <Title order={4} mb="sm">{target}</Title>
+          <Table>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Playbook</Table.Th>
+                <Table.Th>Inventory</Table.Th>
+                <Table.Th>Status</Table.Th>
+                <Table.Th w={110}>Action</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {pbs.map((pb) => {
+                const key = `${target}:${pb.name}`
+                const pending = pendingRuns[key] !== undefined
+                return (
+                  <Table.Tr key={key}>
+                    <Table.Td>
                       <Group gap="xs" wrap="nowrap">
-                        <StatusBadge status={pb.last_status} />
-                        <Text size="xs" c="dimmed">{fmtAgo(pb.last_run_at)}</Text>
+                        <Text fw="semibold">{pb.name}</Text>
+                        {pb.playbook && pb.playbook !== pb.name && (
+                          <Text size="xs" c="dimmed" ff="monospace">{pb.playbook}</Text>
+                        )}
                       </Group>
-                    ) : (
-                      <Text size="xs" c="dimmed">never run</Text>
-                    )}
-                  </Table.Td>
-                  <Table.Td>
-                    <Button
-                      size="xs"
-                      variant="light"
-                      leftSection={pending ? <Loader size={12} /> : <IconPlayerPlay size={14} />}
-                      onClick={() => onRun(target, pb.name)}
-                      disabled={pending}
-                    >
-                      {pending ? 'Running…' : 'Run'}
-                    </Button>
-                  </Table.Td>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="sm" ff="monospace">{pb.inventory || '—'}</Text>
+                    </Table.Td>
+                    <Table.Td>
+                      {pb.last_status ? (
+                        <Group gap="xs" wrap="nowrap">
+                          <StatusBadge status={pb.last_status} />
+                          <Text size="xs" c="dimmed">{fmtAgo(pb.last_run_at)}</Text>
+                        </Group>
+                      ) : (
+                        <Text size="xs" c="dimmed">never run</Text>
+                      )}
+                    </Table.Td>
+                    <Table.Td>
+                      <Button
+                        size="xs"
+                        variant="light"
+                        leftSection={pending ? <Loader size={12} /> : <IconPlayerPlay size={14} />}
+                        onClick={() => onRun(target, pb.name)}
+                        disabled={pending}
+                      >
+                        {pending ? 'Running…' : 'Run'}
+                      </Button>
+                    </Table.Td>
+                  </Table.Tr>
+                )
+              })}
+              {pbs.length === 0 && (
+                <Table.Tr>
+                  <Table.Td colSpan={4}>No playbooks</Table.Td>
                 </Table.Tr>
-              )
-            })
-          )}
-          {entries.length === 0 && (
-            <Table.Tr>
-              <Table.Td colSpan={5}>No targets configured</Table.Td>
-            </Table.Tr>
-          )}
-        </Table.Tbody>
-      </Table>
-    </Card>
+              )}
+            </Table.Tbody>
+          </Table>
+        </Card>
+      ))}
+    </Stack>
   )
 }
 
