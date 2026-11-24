@@ -74,6 +74,15 @@ func (a *Ansible) Playbooks(target string) []string {
 	return names
 }
 
+// PlaybookConfigs returns the configured jobs of one target, in order.
+func (a *Ansible) PlaybookConfigs(target string) []config.PlaybookConfig {
+	t, ok := a.targets[target]
+	if !ok {
+		return nil
+	}
+	return t.Playbooks
+}
+
 // KnownPlaybook reports whether name is one of the target's job names.
 func (a *Ansible) KnownPlaybook(target, name string) bool {
 	t, ok := a.targets[target]

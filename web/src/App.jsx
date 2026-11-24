@@ -64,7 +64,16 @@ function normalizeStats(value) {
 
 function normalizePlaybooks(value) {
   return Object.fromEntries(
-    Object.entries(asObject(value)).map(([target, pbs]) => [target, asArray(pbs)])
+    Object.entries(asObject(value)).map(([target, pbs]) => [
+      target,
+      asArray(pbs).map((pb) => ({
+        name: pb?.name ?? '',
+        playbook: pb?.playbook ?? '',
+        inventory: pb?.inventory ?? '',
+        last_status: pb?.last_status ?? '',
+        last_run_at: pb?.last_run_at ?? null,
+      })),
+    ])
   )
 }
 

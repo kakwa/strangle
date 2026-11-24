@@ -29,6 +29,15 @@ type Server struct {
 	logger  *zap.Logger
 }
 
+// playbookInfo describes one configured job with its latest run outcome.
+type playbookInfo struct {
+	Name       string     `json:"name"`
+	Playbook   string     `json:"playbook"`
+	Inventory  string     `json:"inventory"`
+	LastStatus string     `json:"last_status,omitempty"` // ok | failed | ""
+	LastRunAt  *time.Time `json:"last_run_at,omitempty"`
+}
+
 // uiFS is the built web UI, embedded in the binary at compile time
 // (see package web), rooted at web/dist.
 var uiFS = func() fs.FS {
@@ -109,11 +118,40 @@ func (s *Server) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, changes)
 	})
 
-	// /api/playbooks maps target name to the names of its configured jobs.
-	mux.HandleFunc("GET /api/playbooks", func(w http.ResponseWriter, _ *http.Request) {
-		out := map[string][]string{}
+	// /api/playbooks maps each target to its configured jobs, with the
+	// latest run outcome of each job.
+	mux.HandleFunc("GET /api/playbooks", func(w http.ResponseWriter, r *http.Request) {
+		runs, err := s.store.ListRuns(r.Context(), 1000)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		latest := map[string]store.RunRecord{}
+		for _, run := range runs {
+			key := run.Target + "\x00" + run.Playbook
+			if cur, ok := latest[key]; !ok || run.FinishedAt.After(cur.FinishedAt) {
+				latest[key] = run
+			}
+		}
+
+		out := map[string][]playbookInfo{}
 		for _, target := range s.applier.TargetNames() {
-			out[target] = s.applier.Playbooks(target)
+			configs := s.applier.PlaybookConfigs(target)
+			pbs := make([]playbookInfo, 0, len(configs))
+			for _, pb := range configs {
+				info := playbookInfo{
+					Name:      pb.Name,
+					Playbook:  strings.TrimPrefix(pb.Playbook, "./"),
+					Inventory: strings.TrimPrefix(pb.Inventory, "./"),
+				}
+				if run, ok := latest[target+"\x00"+pb.Name]; ok {
+					info.LastStatus = map[bool]string{true: "ok", false: "failed"}[run.Success]
+					at := run.FinishedAt
+					info.LastRunAt = &at
+				}
+				pbs = append(pbs, info)
+			}
+			out[target] = pbs
 		}
 		writeJSON(w, http.StatusOK, out)
 	})
