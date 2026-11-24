@@ -695,9 +695,6 @@ export default function App() {
             />
             <Title order={4}>{headerTitle}</Title>
           </Group>
-          <Badge variant="subtle" color="gray" size="sm">
-            polling every {POLL_INTERVAL_MS / 1000}s
-          </Badge>
         </Group>
       </AppShell.Header>
 
