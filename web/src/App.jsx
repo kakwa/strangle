@@ -2,8 +2,10 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   IconBook,
   IconClock,
+  IconMoonStars,
   IconPlayerPlay,
   IconServer,
+  IconSun,
 } from '@tabler/icons-react'
 import {
   Accordion,
@@ -23,8 +25,9 @@ import {
   Text,
   ThemeIcon,
   Title,
+  UnstyledButton,
 } from '@mantine/core'
-import { useMantineTheme } from '@mantine/core'
+import { useMantineColorScheme, useMantineTheme } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import { DoubleNavbar } from './DoubleNavbar'
 
@@ -614,6 +617,23 @@ function HostDetail({ host, onBack }) {
   )
 }
 
+function ColorSchemeToggle() {
+  const { colorScheme, toggleColorScheme } = useMantineColorScheme()
+  return (
+    <UnstyledButton
+      onClick={toggleColorScheme}
+      title={colorScheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+      aria-label="Toggle dark mode"
+    >
+      {colorScheme === 'dark' ? (
+        <IconSun size={18} stroke={1.5} />
+      ) : (
+        <IconMoonStars size={18} stroke={1.5} />
+      )}
+    </UnstyledButton>
+  )
+}
+
 export default function App() {
   const [stats, setStats] = useState(null)
   const [runs, setRuns] = useState([])
@@ -731,6 +751,7 @@ export default function App() {
             />
             <Title order={4}>{headerTitle}</Title>
           </Group>
+          <ColorSchemeToggle />
         </Group>
       </AppShell.Header>
 

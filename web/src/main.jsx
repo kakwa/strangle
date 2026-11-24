@@ -6,14 +6,13 @@ import App from './App.jsx'
 import './index.css'
 
 const theme = createTheme({
-  colorScheme: 'dark',
   fontFamily:
     'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
 })
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <MantineProvider theme={theme}>
+    <MantineProvider theme={theme} defaultColorScheme="auto">
       <App />
     </MantineProvider>
   </StrictMode>,
