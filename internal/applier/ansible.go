@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/kakwa/strangle/internal/config"
@@ -28,6 +29,7 @@ type Executor interface {
 // Ansible applies playbooks for every configured target by dispatching each
 // run to a worker process and records the results in a store.
 type Ansible struct {
+	mu      sync.RWMutex
 	targets map[string]config.TargetConfig
 	exec    Executor
 	store   store.Store
@@ -49,8 +51,20 @@ func NewAnsible(targets []config.TargetConfig, exec Executor, st store.Store, lo
 	return a
 }
 
+// UpdateTargets updates the configured targets, e.g. after a git sync has
+// reloaded a target's strangle.yml.
+func (a *Ansible) UpdateTargets(targets []config.TargetConfig) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, t := range targets {
+		a.targets[t.Name] = t
+	}
+}
+
 // TargetNames returns the names of all configured targets, sorted.
 func (a *Ansible) TargetNames() []string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	names := make([]string, 0, len(a.targets))
 	for name := range a.targets {
 		names = append(names, name)
@@ -61,6 +75,8 @@ func (a *Ansible) TargetNames() []string {
 
 // Playbooks returns the names of the configured jobs of one target.
 func (a *Ansible) Playbooks(target string) []string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	t, ok := a.targets[target]
 	if !ok {
 		return nil
@@ -74,6 +90,8 @@ func (a *Ansible) Playbooks(target string) []string {
 
 // PlaybookConfigs returns the configured jobs of one target, in order.
 func (a *Ansible) PlaybookConfigs(target string) []config.PlaybookConfig {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	t, ok := a.targets[target]
 	if !ok {
 		return nil
@@ -83,6 +101,8 @@ func (a *Ansible) PlaybookConfigs(target string) []config.PlaybookConfig {
 
 // KnownPlaybook reports whether name is one of the target's job names.
 func (a *Ansible) KnownPlaybook(target, name string) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	t, ok := a.targets[target]
 	if !ok {
 		return false
@@ -95,13 +115,21 @@ func (a *Ansible) KnownPlaybook(target, name string) bool {
 // results. It returns the first error encountered; playbooks after a failure
 // still run.
 func (a *Ansible) RunCycle(ctx context.Context) error {
+	a.mu.RLock()
+	targets := make([]config.TargetConfig, 0, len(a.targets))
+	for _, t := range a.targets {
+		targets = append(targets, t)
+	}
+	a.mu.RUnlock()
+	sort.Slice(targets, func(i, j int) bool { return targets[i].Name < targets[j].Name })
+
 	var firstErr error
-	for _, name := range a.TargetNames() {
+	for _, t := range targets {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := a.runTarget(ctx, a.targets[name], &firstErr); err != nil {
-			a.logger.Error("target cycle failed", zap.String("target", name), zap.Error(err))
+		if err := a.runTarget(ctx, t, &firstErr); err != nil {
+			a.logger.Error("target cycle failed", zap.String("target", t.Name), zap.Error(err))
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -114,7 +142,9 @@ func (a *Ansible) RunCycle(ctx context.Context) error {
 // finishes. Runs dispatched through different workers may overlap with an
 // in-progress cycle.
 func (a *Ansible) Trigger(ctx context.Context, target, name string) error {
+	a.mu.RLock()
 	t, ok := a.targets[target]
+	a.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("unknown target %q", target)
 	}
@@ -126,8 +156,9 @@ func (a *Ansible) Trigger(ctx context.Context, target, name string) error {
 }
 
 // runTarget runs the given target's playbooks (or just one, when specified)
-// and records the results. The caller must hold a.mu. It returns the first
-// error encountered; playbooks after a failure still run.
+// and records the results. The target is a snapshot, safe to run without
+// holding a.mu. It returns the first error encountered; playbooks after a
+// failure still run.
 func (a *Ansible) runTarget(ctx context.Context, t config.TargetConfig, firstErr *error, only ...config.PlaybookConfig) error {
 	playbooks := t.Playbooks
 	if len(only) > 0 {

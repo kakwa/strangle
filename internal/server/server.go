@@ -3,6 +3,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/internal/applier"
+	"github.com/kakwa/strangle/internal/collection"
+	"github.com/kakwa/strangle/internal/config"
 	"github.com/kakwa/strangle/internal/sshpool"
 	"github.com/kakwa/strangle/internal/store"
 	"github.com/kakwa/strangle/internal/worker"
@@ -35,15 +38,27 @@ type WorkerReporter interface {
 	WorkerStatuses(ctx context.Context) []worker.WorkerStatus
 }
 
+// Syncer syncs a git-backed collection target: moves its checkout to the
+// tracked ref and reloads its strangle.yml. It is nil when no target has a
+// git upstream.
+type Syncer interface {
+	Sync(ctx context.Context, target, branch string) (string, bool, error)
+	// Targets reports the resolved target configs, so the applier's view
+	// can be refreshed after a sync.
+	Targets() []config.TargetConfig
+}
+
 // Server is the strangle HTTP server.
 type Server struct {
-	addr    string
-	applier *applier.Ansible
-	store   store.Store
-	ssh     *sshpool.Multi
-	run     RunEnqueuer
-	workers WorkerReporter
-	logger  *zap.Logger
+	addr      string
+	applier   *applier.Ansible
+	store     store.Store
+	ssh       *sshpool.Multi
+	run       RunEnqueuer
+	workers   WorkerReporter
+	syncer    Syncer
+	authToken string
+	logger    *zap.Logger
 }
 
 // playbookInfo describes one configured job with its latest run outcome.
@@ -70,16 +85,20 @@ var uiFS = func() fs.FS {
 // `make web` (or `make build`) before compiling. ssh may be nil when no
 // target uses the Go-managed SSH transport. run accepts manual playbook runs
 // (a river job in production, a direct run without a database). workers may
-// be nil when no worker pool is managed.
-func New(addr string, apr *applier.Ansible, st store.Store, ssh *sshpool.Multi, run RunEnqueuer, workers WorkerReporter, logger *zap.Logger) *Server {
+// be nil when no worker pool is managed. syncer may be nil when no target
+// has a git upstream. authToken, when non-empty, is required as a bearer
+// token on the sync endpoint (webhook protection).
+func New(addr string, apr *applier.Ansible, st store.Store, ssh *sshpool.Multi, run RunEnqueuer, workers WorkerReporter, syncer Syncer, authToken string, logger *zap.Logger) *Server {
 	return &Server{
-		addr:    addr,
-		applier: apr,
-		store:   st,
-		ssh:     ssh,
-		run:     run,
-		workers: workers,
-		logger:  logger,
+		addr:      addr,
+		applier:   apr,
+		store:     st,
+		ssh:       ssh,
+		run:       run,
+		workers:   workers,
+		syncer:    syncer,
+		authToken: authToken,
+		logger:    logger,
 	}
 }
 
@@ -224,6 +243,54 @@ func (s *Server) Routes() http.Handler {
 		})
 	})
 
+	// /api/sync is the webhook for git-backed collections: it moves the
+	// target's checkout to its tracked ref (or to the given branch, which
+	// becomes the new tracked ref) and reloads its strangle.yml. When
+	// auth.token is set in server.yml, a matching bearer token is required.
+	mux.HandleFunc("POST /api/sync", func(w http.ResponseWriter, r *http.Request) {
+		if s.syncer == nil {
+			writeError(w, http.StatusNotFound, errors.New("no git-backed collection is configured"))
+			return
+		}
+		if s.authToken != "" && !s.bearerTokenOK(r) {
+			writeError(w, http.StatusUnauthorized, errors.New("missing or invalid bearer token"))
+			return
+		}
+		var req struct {
+			Target string `json:"target"`
+			Branch string `json:"branch"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if req.Target == "" {
+			writeError(w, http.StatusBadRequest, errors.New("target is required"))
+			return
+		}
+		rev, changed, err := s.syncer.Sync(r.Context(), req.Target, req.Branch)
+		if err != nil {
+			switch {
+			case errors.Is(err, collection.ErrUnknownTarget):
+				writeError(w, http.StatusNotFound, err)
+			case errors.Is(err, collection.ErrNotGit):
+				writeError(w, http.StatusBadRequest, err)
+			default:
+				// A git failure (network, auth, broken strangle.yml).
+				writeError(w, http.StatusBadGateway, err)
+			}
+			return
+		}
+		// The sync may have changed the target's playbooks (a branch
+		// switch, a new strangle.yml); refresh the applier's view.
+		s.applier.UpdateTargets(s.syncer.Targets())
+		writeJSON(w, http.StatusOK, map[string]any{
+			"target":  req.Target,
+			"rev":     rev,
+			"changed": changed,
+		})
+	})
+
 	// Host-key endpoints identify an SSH scope as "<target>/<playbook name>"
 	// in their `target` field (or the JSON response's `target` key).
 	mux.HandleFunc("GET /api/hostkeys", func(w http.ResponseWriter, _ *http.Request) {
@@ -326,6 +393,21 @@ func spaHandler(fsys fs.FS) http.Handler {
 		}
 		http.ServeFileFS(w, r, fsys, "index.html")
 	})
+}
+
+// bearerTokenOK reports whether r carries the configured API token, either
+// as an Authorization: Bearer header or as an X-Strangle-Token header (the
+// latter is friendlier for webhook integrations).
+func (s *Server) bearerTokenOK(r *http.Request) bool {
+	auth := r.Header.Get("Authorization")
+	if token := r.Header.Get("X-Strangle-Token"); token != "" && auth == "" {
+		auth = "Bearer " + token
+	}
+	token, ok := strings.CutPrefix(auth, "Bearer ")
+	if !ok || token == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(token), []byte(s.authToken)) == 1
 }
 
 func intQuery(r *http.Request, name string, def int) int {

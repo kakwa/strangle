@@ -6,12 +6,22 @@
 # playbooks (each with its own inventory and options). Relative paths resolve
 # against this file's directory. Targets run in list order, serialized through
 # the single embedded interpreter.
+#
+# A target may carry a `git` upstream: strangle clones the repository into
+# `path` and pins it to the tracked ref (branch, tag or commit) on startup
+# and on every sync. POST /api/sync re-syncs one target (and, with a
+# `branch` field, switches the tracked branch). In a git target's
+# strangle.yml the `working_dir`, `playbook` and `inventory` fields may use
+# `{{ .Branch }}` and `{{ .Name }}` templates, e.g. to load a different
+# inventory per branch.
 
 targets:
   # The home.tf Ansible project.
   - name: homelab
     path: /home/kakwa/Geek/GitHub/home.tf/ansible
-    # Git upstream. Placeholder: parsed but not used yet.
+    # Git upstream. When set, strangle clones the repository into `path` and
+    # keeps it pinned to the tracked ref.
     # git:
     #   url: https://github.com/kakwa/home.tf.git
-    #   branch: main
+    #   branch: main            # or `ref:` for a tag or commit
+    #   token: <ghp_...>        # optional, embedded in https URLs

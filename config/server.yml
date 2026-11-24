@@ -20,6 +20,8 @@ database:
 # so more workers allow more concurrent runs. Defaults to 1.
 workers: 2
 
-# Authentication. Placeholder: parsed but not enforced yet.
+# API authentication. When set, POST /api/sync (the git collection webhook)
+# requires the token as a bearer token: `Authorization: Bearer <token>` or
+# the `X-Strangle-Token` header. Other endpoints are not gated yet.
 # auth:
 #   token: change-me

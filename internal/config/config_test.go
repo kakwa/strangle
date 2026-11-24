@@ -41,9 +41,15 @@ const (
 targets:
   - name: one
     path: __TARGET__
+`
+	collGit = `
+targets:
+  - name: one
+    path: __TARGET__
     git:
       url: https://example.com/one.git
       branch: main
+      token: abc
 `
 	strangleMinimal = `
 playbooks:
@@ -110,8 +116,8 @@ auth:
 	if tr.Name != "one" || tr.Path != targetDir {
 		t.Errorf("target identity = %q %q, want one %q", tr.Name, tr.Path, targetDir)
 	}
-	if tr.Git.URL != "https://example.com/one.git" || tr.Git.Branch != "main" {
-		t.Errorf("Git = %+v", tr.Git)
+	if tr.Git.IsSet() {
+		t.Errorf("Git = %+v, want unset", tr.Git)
 	}
 	if tr.WorkingDir != wd {
 		t.Errorf("WorkingDir = %q, want %q", tr.WorkingDir, wd)
@@ -229,6 +235,131 @@ playbooks:
 	if got := pb.Args(); !slices.Equal(got, []string{"--diff", "-i", "/abs/inventory", "/abs/site.yml"}) {
 		t.Errorf("Args() = %v", got)
 	}
+}
+
+func TestLoadGitTarget(t *testing.T) {
+	// A git-backed target's strangle.yml lives inside the repository and is
+	// loaded by the collection manager once the checkout is in place. Load
+	// returns a placeholder (no playbooks) without failing on the missing
+	// file, whether or not one happens to exist at the path.
+	for _, withFile := range []bool{false, true} {
+		name := "without strangle.yml"
+		strangle := ""
+		if withFile {
+			name = "with strangle.yml"
+			strangle = strangleMinimal
+		}
+		t.Run(name, func(t *testing.T) {
+			serverPath, collectionPath := writeTree(t, "listen_addr: \":9000\"\n", collGit, strangle)
+
+			cfg, err := Load(serverPath, collectionPath)
+			if err != nil {
+				t.Fatalf("Load() error: %v", err)
+			}
+			tr := cfg.Targets[0]
+			targetDir := filepath.Join(filepath.Dir(collectionPath), "proj")
+			if tr.Path != targetDir {
+				t.Errorf("Path = %q, want resolved %q", tr.Path, targetDir)
+			}
+			if tr.WorkingDir != targetDir {
+				t.Errorf("WorkingDir = %q, want %q", tr.WorkingDir, targetDir)
+			}
+			if len(tr.Playbooks) != 0 {
+				t.Errorf("Playbooks = %+v, want empty placeholder", tr.Playbooks)
+			}
+			if tr.Git.URL != "https://example.com/one.git" || tr.Git.Branch != "main" || tr.Git.Token != "abc" {
+				t.Errorf("Git = %+v", tr.Git)
+			}
+			if got, want := tr.Git.EffectiveRef(), "main"; got != want {
+				t.Errorf("EffectiveRef() = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestGitConfig(t *testing.T) {
+	if (GitConfig{URL: "u"}).IsSet() != true || (GitConfig{}).IsSet() != false {
+		t.Error("IsSet() = wrong result")
+	}
+	cases := []struct {
+		name string
+		git  GitConfig
+		want string
+	}{
+		{"empty", GitConfig{}, ""},
+		{"branch only", GitConfig{Branch: "dev"}, "dev"},
+		{"ref only", GitConfig{Ref: "v1.0"}, "v1.0"},
+		{"ref beats branch", GitConfig{Ref: "abc123", Branch: "dev"}, "abc123"},
+	}
+	for _, tc := range cases {
+		if got := tc.git.EffectiveRef(); got != tc.want {
+			t.Errorf("%s: EffectiveRef() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestLoadTargetTemplating(t *testing.T) {
+	dir := t.TempDir()
+	spec := TargetSpec{Name: "one", Path: dir}
+
+	t.Run("branch and name variables", func(t *testing.T) {
+		writeFile(t, filepath.Join(dir, "strangle.yml"), `
+working_dir: work/{{ .Branch }}
+playbooks:
+  - name: site
+    playbook: "{{ .Name }}.yml"
+    inventory: inventories/{{ .Branch }}.ini
+`)
+		tr, err := LoadTarget(spec, dir, map[string]string{"Name": "one", "Branch": "main"})
+		if err != nil {
+			t.Fatalf("LoadTarget() error: %v", err)
+		}
+		if got, want := tr.WorkingDir, filepath.Join(dir, "work", "main"); got != want {
+			t.Errorf("WorkingDir = %q, want %q", got, want)
+		}
+		pb := tr.Playbooks[0]
+		if pb.Playbook != "one.yml" || pb.Inventory != "inventories/main.ini" {
+			t.Errorf("playbook = %q %q, want one.yml inventories/main.ini", pb.Playbook, pb.Inventory)
+		}
+	})
+
+	t.Run("plain strings pass through", func(t *testing.T) {
+		writeFile(t, filepath.Join(dir, "strangle.yml"), strangleMinimal)
+		tr, err := LoadTarget(spec, dir, nil)
+		if err != nil {
+			t.Fatalf("LoadTarget() error: %v", err)
+		}
+		pb := tr.Playbooks[0]
+		if pb.Playbook != "site.yml" || pb.Inventory != "inventory" {
+			t.Errorf("playbook = %q %q, want site.yml inventory", pb.Playbook, pb.Inventory)
+		}
+	})
+
+	t.Run("unknown template variable", func(t *testing.T) {
+		writeFile(t, filepath.Join(dir, "strangle.yml"), `
+playbooks:
+  - name: site
+    playbook: site.yml
+    inventory: "{{ .Nope }}.ini"
+`)
+		_, err := LoadTarget(spec, dir, map[string]string{"Branch": "main"})
+		if err == nil || !strings.Contains(err.Error(), "inventory") {
+			t.Fatalf("LoadTarget() error = %v, want an inventory template error", err)
+		}
+	})
+
+	t.Run("empty branch renders to empty inventory", func(t *testing.T) {
+		writeFile(t, filepath.Join(dir, "strangle.yml"), `
+playbooks:
+  - name: site
+    playbook: site.yml
+    inventory: "{{ .Branch }}"
+`)
+		_, err := LoadTarget(spec, dir, map[string]string{"Branch": ""})
+		if err == nil || !strings.Contains(err.Error(), "needs an inventory") {
+			t.Fatalf("LoadTarget() error = %v, want empty inventory error", err)
+		}
+	})
 }
 
 func TestLoadErrors(t *testing.T) {

@@ -18,6 +18,7 @@ import (
 
 	"github.com/kakwa/strangle/internal/ansible"
 	"github.com/kakwa/strangle/internal/applier"
+	"github.com/kakwa/strangle/internal/collection"
 	"github.com/kakwa/strangle/internal/config"
 	"github.com/kakwa/strangle/internal/db"
 	"github.com/kakwa/strangle/internal/riverqueue"
@@ -93,10 +94,20 @@ func run(cmd *cobra.Command, args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
+	// Git-backed targets are cloned into their configured path and pinned
+	// to their tracked ref. A failure is reported, not fatal: the target
+	// can be synced later through POST /api/sync.
+	collMgr := collection.New(cfg.Targets, logger)
+	if collMgr.HasGit() {
+		if err := collMgr.InitialSync(ctx); err != nil {
+			logger.Error("collection sync failed at startup", zap.Error(err))
+		}
+	}
+
 	// The master keeps its own SSH multi for the host-key approval API; the
 	// trust decisions are shared with the workers through the per-scope
 	// files on disk.
-	multi, err := sshpool.BuildMulti(cfg.Targets)
+	multi, err := sshpool.BuildMulti(collMgr.Targets())
 	if err != nil {
 		return fmt.Errorf("failed to initialize SSH transport: %w", err)
 	}
@@ -135,7 +146,7 @@ func run(cmd *cobra.Command, args []string) error {
 		logger.Warn("no database DSN configured, using in-memory store")
 	}
 
-	apr := applier.NewAnsible(cfg.Targets, mgr, st, logger)
+	apr := applier.NewAnsible(collMgr.Targets(), mgr, st, logger)
 
 	// With a database, playbook runs flow through a postgres-backed River
 	// queue: each cycle enqueues one job per (target, playbook) pair and a
@@ -153,8 +164,10 @@ func run(cmd *cobra.Command, args []string) error {
 		}
 		enqueue = queue
 		enqueueCycle = func(ctx context.Context) error {
+			// Read the live target list: git-backed targets gain their
+			// playbooks only after a sync.
 			var firstErr error
-			for _, t := range cfg.Targets {
+			for _, t := range collMgr.Targets() {
 				for _, pb := range t.Playbooks {
 					if _, err := queue.EnqueueRun(ctx, t.Name, pb.Name); err != nil {
 						logger.Error("failed to enqueue playbook",
@@ -176,7 +189,11 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	sched := scheduler.New(cfg.Server.Interval, enqueueCycle, logger)
-	srv := server.New(cfg.Server.ListenAddr, apr, st, multi, enqueue, mgr, logger)
+	var syncer server.Syncer
+	if collMgr.HasGit() {
+		syncer = collMgr
+	}
+	srv := server.New(cfg.Server.ListenAddr, apr, st, multi, enqueue, mgr, syncer, cfg.Server.Auth.Token, logger)
 
 	done := make(chan struct{})
 	go func() {
@@ -259,7 +276,15 @@ func runWorker(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = logger.Sync() }()
 
-	multi, err := sshpool.BuildMulti(cfg.Targets)
+	// The worker shares the master's checkouts: resolve the playbooks of
+	// git-backed targets from disk so its SSH managers match what the
+	// master will dispatch. Reload does not touch git.
+	collMgr := collection.New(cfg.Targets, logger)
+	if err := collMgr.Reload(); err != nil {
+		logger.Error("failed to fully resolve collection for worker", zap.Error(err))
+	}
+
+	multi, err := sshpool.BuildMulti(collMgr.Targets())
 	if err != nil {
 		return fmt.Errorf("failed to initialize SSH transport: %w", err)
 	}

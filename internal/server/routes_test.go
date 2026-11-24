@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/internal/applier"
+	"github.com/kakwa/strangle/internal/collection"
 	"github.com/kakwa/strangle/internal/config"
 	"github.com/kakwa/strangle/internal/store"
 	"github.com/kakwa/strangle/internal/worker"
@@ -38,7 +41,7 @@ var testTargets = []config.TargetConfig{{
 // newTestServerWithStore builds a Server over the given store.
 func newTestServerWithStore(enq RunEnqueuer, st store.Store) *Server {
 	apr := applier.NewAnsible(testTargets, stubExecutor{}, st, zap.NewNop())
-	return New("test", apr, st, nil, enq, nil, zap.NewNop())
+	return New("test", apr, st, nil, enq, nil, nil, "", zap.NewNop())
 }
 
 func doGet(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {
@@ -378,7 +381,7 @@ func TestGetWorkersNilReporter(t *testing.T) {
 func TestListenAndServe(t *testing.T) {
 	s := New("127.0.0.1:0",
 		applier.NewAnsible(testTargets, stubExecutor{}, store.NewMem(), zap.NewNop()),
-		store.NewMem(), nil, &recEnqueuer{status: "queued"}, nil, zap.NewNop())
+		store.NewMem(), nil, &recEnqueuer{status: "queued"}, nil, nil, "", zap.NewNop())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -393,6 +396,196 @@ func TestListenAndServe(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("ListenAndServe did not return after ctx cancel")
+	}
+}
+
+// fakeSyncer is a canned Syncer for the /api/sync tests.
+type fakeSyncer struct {
+	targets []config.TargetConfig
+	called  int
+	lastTgt string
+	lastBr  string
+	rev     string
+	changed bool
+	syncErr error
+}
+
+func (f *fakeSyncer) Sync(ctx context.Context, target, branch string) (string, bool, error) {
+	f.called++
+	f.lastTgt = target
+	f.lastBr = branch
+	return f.rev, f.changed, f.syncErr
+}
+
+func (f *fakeSyncer) Targets() []config.TargetConfig {
+	return f.targets
+}
+
+// newSyncTestServer builds a Server with the given syncer and auth token.
+// It returns the server and the applier so tests can inspect the applier's
+// view of the targets after a sync.
+func newSyncTestServer(syncer Syncer, token string) (*Server, *applier.Ansible) {
+	apr := applier.NewAnsible(testTargets, stubExecutor{}, store.NewMem(), zap.NewNop())
+	s := New("test", apr, store.NewMem(), nil, &recEnqueuer{status: "queued"}, nil, syncer, token, zap.NewNop())
+	return s, apr
+}
+
+func postSync(t *testing.T, s *Server, body string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/sync", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rec, req)
+	return rec
+}
+
+func TestSyncEndpointSuccess(t *testing.T) {
+	// The syncer reports a refreshed playbook list for the target.
+	refreshed := []config.TargetConfig{{
+		Name: "home",
+		Playbooks: []config.PlaybookConfig{
+			{Name: "site", Playbook: "site.yml", Inventory: "inventory.ini"},
+			{Name: "newjob", Playbook: "newjob.yml", Inventory: "inventory.ini"},
+		},
+	}}
+	fake := &fakeSyncer{targets: refreshed, rev: "abc123", changed: true}
+	s, apr := newSyncTestServer(fake, "")
+
+	if got := apr.Playbooks("home"); len(got) != 2 || got[1] != "other" {
+		t.Fatalf("initial playbooks = %v, want [site other]", got)
+	}
+
+	rec := postSync(t, s, `{"target":"home","branch":"develop"}`, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var out struct {
+		Target  string `json:"target"`
+		Rev     string `json:"rev"`
+		Changed bool   `json:"changed"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Target != "home" || out.Rev != "abc123" || !out.Changed {
+		t.Errorf("response = %+v, want home/abc123/true", out)
+	}
+	if fake.called != 1 || fake.lastTgt != "home" || fake.lastBr != "develop" {
+		t.Errorf("syncer called with %q/%q (%d calls), want home/develop (1)", fake.lastTgt, fake.lastBr, fake.called)
+	}
+	// The applier's view was refreshed from the syncer's targets.
+	if got := apr.Playbooks("home"); len(got) != 2 || got[1] != "newjob" {
+		t.Errorf("applier playbooks after sync = %v, want [site newjob]", got)
+	}
+}
+
+func TestSyncEndpointErrors(t *testing.T) {
+	// Unknown target.
+	fake := &fakeSyncer{syncErr: fmt.Errorf("%w: %q", collection.ErrUnknownTarget, "ghost")}
+	s, _ := newSyncTestServer(fake, "")
+	rec := postSync(t, s, `{"target":"ghost"}`, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("unknown target: status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+
+	// Target without a git upstream.
+	fake.syncErr = fmt.Errorf("%w: %q", collection.ErrNotGit, "local")
+	rec = postSync(t, s, `{"target":"local"}`, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("not git: status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	// A git failure (network, auth, broken strangle.yml).
+	fake.syncErr = errors.New("git clone: connection refused")
+	rec = postSync(t, s, `{"target":"home"}`, nil)
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("git failure: status = %d, want %d", rec.Code, http.StatusBadGateway)
+	}
+
+	// Empty target.
+	rec = postSync(t, s, `{"branch":"main"}`, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("empty target: status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	// Malformed body.
+	rec = postSync(t, s, `{`, nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("malformed body: status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+
+	// No syncer configured.
+	none, _ := newSyncTestServer(nil, "")
+	rec = postSync(t, none, `{"target":"home"}`, nil)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("nil syncer: status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestSyncEndpointAuth(t *testing.T) {
+	fake := &fakeSyncer{targets: testTargets, rev: "abc123"}
+	s, _ := newSyncTestServer(fake, "sekrit")
+
+	body := `{"target":"home"}`
+
+	// Missing token.
+	rec := postSync(t, s, body, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("missing token: status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+
+	// Wrong token.
+	rec = postSync(t, s, body, map[string]string{"Authorization": "Bearer wrong"})
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("wrong token: status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+
+	// Correct bearer token.
+	rec = postSync(t, s, body, map[string]string{"Authorization": "Bearer sekrit"})
+	if rec.Code != http.StatusOK {
+		t.Errorf("bearer token: status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	// Correct webhook-friendly token.
+	rec = postSync(t, s, body, map[string]string{"X-Strangle-Token": "sekrit"})
+	if rec.Code != http.StatusOK {
+		t.Errorf("X-Strangle-Token: status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	if fake.called != 2 {
+		t.Errorf("syncer called %d times, want 2", fake.called)
+	}
+}
+
+func TestBearerTokenOK(t *testing.T) {
+	s := New("test",
+		applier.NewAnsible(testTargets, stubExecutor{}, store.NewMem(), zap.NewNop()),
+		store.NewMem(), nil, &recEnqueuer{status: "queued"}, nil, nil, "sekrit", zap.NewNop())
+
+	cases := []struct {
+		name    string
+		headers map[string]string
+		want    bool
+	}{
+		{"no headers", nil, false},
+		{"empty bearer", map[string]string{"Authorization": "Bearer "}, false},
+		{"wrong token", map[string]string{"Authorization": "Bearer wrong"}, false},
+		{"right bearer", map[string]string{"Authorization": "Bearer sekrit"}, true},
+		{"right webhook header", map[string]string{"X-Strangle-Token": "sekrit"}, true},
+		{"webhook header ignored when bearer present", map[string]string{"Authorization": "Bearer wrong", "X-Strangle-Token": "sekrit"}, false},
+		{"non-bearer auth scheme", map[string]string{"Authorization": "Basic aWQ9"}, false},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest(http.MethodPost, "/api/sync", strings.NewReader("{}"))
+		for k, v := range tc.headers {
+			req.Header.Set(k, v)
+		}
+		if got := s.bearerTokenOK(req); got != tc.want {
+			t.Errorf("%s: bearerTokenOK() = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 

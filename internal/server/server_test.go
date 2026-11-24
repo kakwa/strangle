@@ -63,7 +63,7 @@ func newTestServer(enq RunEnqueuer) *Server {
 		},
 	}}
 	apr := applier.NewAnsible(targets, stubExecutor{}, store.NewMem(), zap.NewNop())
-	return New("test", apr, store.NewMem(), nil, enq, nil, zap.NewNop())
+	return New("test", apr, store.NewMem(), nil, enq, nil, nil, "", zap.NewNop())
 }
 
 func postRun(t *testing.T, s *Server, body string) *httptest.ResponseRecorder {

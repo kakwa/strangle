@@ -4,7 +4,8 @@
 //   - server.yml: process-level settings (listen address, log level, run
 //     interval, database, auth placeholder).
 //   - collection.yml: the inventory of Ansible projects (targets) that
-//     strangle applies, with a git-upstream placeholder per target.
+//     strangle applies; a target may carry a git upstream that strangle
+//     clones and keeps in sync.
 //   - strangle.yml: one per target, at the root of the project directory.
 //     Each entry of its `playbooks` list is a named job with its own
 //     playbook file, inventory and Ansible/SSH options.
@@ -19,6 +20,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"text/template"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -96,13 +99,14 @@ type TargetSpec struct {
 	// Path is the directory of the Ansible project (the directory that
 	// contains strangle.yml).
 	Path string `yaml:"path"`
-	// Git describes the upstream repository of the project. Placeholder for
-	// future sync: parsed and validated, but not used yet.
+	// Git describes the upstream repository of the project. When set,
+	// strangle clones the repository into Path and keeps it in sync.
 	Git GitConfig `yaml:"git,omitempty"`
 }
 
-// GitConfig describes the upstream git repository of a target. Parsed but not
-// used yet: git sync is a placeholder.
+// GitConfig describes the upstream git repository of a target. When set,
+// strangle clones the repository into the target's path and keeps it pinned
+// to the tracked ref on every sync.
 type GitConfig struct {
 	// URL is the repository URL.
 	URL string `yaml:"url,omitempty"`
@@ -110,6 +114,20 @@ type GitConfig struct {
 	Ref string `yaml:"ref,omitempty"`
 	// Branch is the tracked branch; shorthand for Ref when Ref is empty.
 	Branch string `yaml:"branch,omitempty"`
+	// Token is an optional credential embedded in https clone/fetch URLs.
+	Token string `yaml:"token,omitempty"`
+}
+
+// IsSet reports whether the target has an upstream repository configured.
+func (g GitConfig) IsSet() bool { return g.URL != "" }
+
+// EffectiveRef returns the ref the checkout is pinned to: Ref when set,
+// otherwise Branch.
+func (g GitConfig) EffectiveRef() string {
+	if g.Ref != "" {
+		return g.Ref
+	}
+	return g.Branch
 }
 
 // TargetConfig is one Ansible project: the collection.yml entry merged with
@@ -367,7 +385,8 @@ func Load(serverPath, collectionPath string) (Config, error) {
 	collDir := filepath.Dir(collectionPath)
 
 	cfg.Targets = make([]TargetConfig, 0, len(coll.Targets))
-	for _, spec := range coll.Targets {
+	for i := range coll.Targets {
+		spec := coll.Targets[i]
 		p := spec.Path
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(collDir, p)
@@ -375,6 +394,19 @@ func Load(serverPath, collectionPath string) (Config, error) {
 		path, err := filepath.Abs(p)
 		if err != nil {
 			return Config{}, fmt.Errorf("collection: target %q: %w", spec.Name, err)
+		}
+		spec.Path = path
+		if spec.Git.IsSet() {
+			// A git-backed target's strangle.yml lives inside the repository
+			// and may not exist before the first clone; the collection
+			// manager loads it once the checkout is in place.
+			cfg.Targets = append(cfg.Targets, TargetConfig{
+				Name:       spec.Name,
+				Path:       path,
+				Git:        spec.Git,
+				WorkingDir: path,
+			})
+			continue
 		}
 		t, err := loadTarget(spec, path)
 		if err != nil {
@@ -391,6 +423,16 @@ func Load(serverPath, collectionPath string) (Config, error) {
 
 // loadTarget reads and validates the strangle.yml in the target directory.
 func loadTarget(spec TargetSpec, path string) (TargetConfig, error) {
+	return LoadTarget(spec, path, nil)
+}
+
+// LoadTarget reads and validates the strangle.yml in path and returns the
+// resolved target. When vars is non-nil (git-backed targets, reloaded after a
+// sync), its values are substituted as Go templates in the working_dir,
+// playbook and inventory fields, so a branch can select different files, e.g.
+// `inventory: inventories/{{ .Branch }}.ini`. Available variables: Name
+// (the target name) and Branch (the tracked branch or ref).
+func LoadTarget(spec TargetSpec, path string, vars map[string]string) (TargetConfig, error) {
 	data, err := os.ReadFile(filepath.Join(path, "strangle.yml"))
 	if err != nil {
 		return TargetConfig{}, fmt.Errorf("target %q: read %q: %w", spec.Name, filepath.Join(path, "strangle.yml"), err)
@@ -403,6 +445,13 @@ func loadTarget(spec TargetSpec, path string) (TargetConfig, error) {
 	}
 	if len(file.Playbooks) == 0 {
 		return TargetConfig{}, fmt.Errorf("target %q: playbooks is required (non-empty list of named jobs)", spec.Name)
+	}
+
+	td := templateData{Name: spec.Name, Branch: vars["Branch"]}
+	if wd, err := td.render(file.WorkingDir); err != nil {
+		return TargetConfig{}, fmt.Errorf("target %q: working_dir: %w", spec.Name, err)
+	} else {
+		file.WorkingDir = wd
 	}
 
 	t := TargetConfig{
@@ -430,6 +479,12 @@ func loadTarget(spec TargetSpec, path string) (TargetConfig, error) {
 			return TargetConfig{}, fmt.Errorf("target %q: duplicate playbook name %q", spec.Name, ps.Name)
 		}
 		seen[ps.Name] = struct{}{}
+		if ps.Playbook, err = td.render(ps.Playbook); err != nil {
+			return TargetConfig{}, fmt.Errorf("target %q: playbook %q: playbook: %w", spec.Name, ps.Name, err)
+		}
+		if ps.Inventory, err = td.render(ps.Inventory); err != nil {
+			return TargetConfig{}, fmt.Errorf("target %q: playbook %q: inventory: %w", spec.Name, ps.Name, err)
+		}
 		if ps.Playbook == "" {
 			return TargetConfig{}, fmt.Errorf("target %q: playbook %q needs a playbook file", spec.Name, ps.Name)
 		}
@@ -452,6 +507,30 @@ func loadTarget(spec TargetSpec, path string) (TargetConfig, error) {
 		})
 	}
 	return t, nil
+}
+
+// templateData holds the template variables available in strangle.yml fields
+// of git-backed targets.
+type templateData struct {
+	Name   string
+	Branch string
+}
+
+// render substitutes {{ .Name }} and {{ .Branch }} in s. Strings without
+// template actions pass through unchanged.
+func (d templateData) render(s string) (string, error) {
+	if !strings.Contains(s, "{{") {
+		return s, nil
+	}
+	tmpl, err := template.New("strangle").Parse(s)
+	if err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, d); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }
 
 // validPlaybookName rejects path separators and other characters that would
