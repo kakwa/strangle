@@ -1,0 +1,72 @@
+implement having child workers processes and a unix socket IPC between server and child workers (grpc)
+
+implement queuing jobs using river golang scheduler/job queue.
+
+implement master server/scheduler and basic workers manager (pick their jobs through the postgres DB
+
+git backed collection, with webhook and auth token for update, also handle branches and branches templating in strangle.yml file (for example, to load a different inventory file per branch).
+
+fix table with issue: in playbooks do table per collections
+
+color the diff
+
+remove the "polling every 10S"
+
+in the host view, don't repeat the host per run
+
+implement dark mode
+
+implement code blocks and color the diffs when applicable
+
+implement URLs (react router or something, I want to be able to bookmark an host for example).
+
+
+clean-up README.md and initiate a documentation
+
+inspect each screen for issues (broken links for example)
+
+implement cypress tests
+
+Implement UI authentication (backed by either: local user, ldap, oauth, options to bootsrap an admin in the strangle binary)
+
+Implement API/Token self service (for user linked CLIs or webooks/integrations).
+
+Implement per collection access restrictions.
+
+Implement sandboxing (file system isolation between collections)
+
+run detail: GET /api/runs/{id} endpoint and a run view with the full captured output (it is already stored, but the UI has no way to see it); also stop inlining the full output of the last 50 runs into /api/runs on every poll
+
+filter /api/runs by target, playbook, host and time range (+ pagination)
+
+UI for pending SSH host keys (approve/reject) and SSH pool stats: the API endpoints exist but there is no screen for them
+
+per-target or per-playbook interval instead of the single global interval (ideally cron-like)
+
+notify on run failure (webhook, email, slack or similar)
+
+task history: keep the per-task results of every run (currently only the latest state per task is kept, so past diffs and errors are lost)
+
+cancel a running run (API endpoint + UI button); today the only way is to SIGKILL the process
+
+check mode: run a playbook with --check (dry run) from the UI or API
+
+retention: a policy to purge old runs (max age and/or max count); history grows unbounded
+
+host auto clean-up (remove hosts not seen and not targetted by playbooks after a configurable delay)
+
+TLS support for the HTTP server (cert/key in server.yml)
+
+/metrics endpoint (prometheus)
+
+go tests for the server (API over httptest), applier and scheduler packages
+
+host search box in the hosts view (name filter)
+
+ephemeral ssh certificates: short-lived user certificates instead of long-lived keys, signed by an internal CA or through a vault integration (PKI / approle), pluggable as an auth source in the ssh options
+
+swagger/openapi documentation of the API (swaggo comments/annotations), served from the server (e.g. /api/docs)
+
+versioned API: /api/v1 prefix (leave the current routes as aliases for now) so breaking changes can ship later
+
+cli client: strangle CLI subcommands hitting the API (strangle run <target> <playbook>, strangle runs/hosts/host <name>, strangle hostkeys list/accept/reject), with the auth token from config
