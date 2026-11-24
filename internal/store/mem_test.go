@@ -6,9 +6,10 @@ import (
 	"time"
 )
 
-func testRun(playbook string, finished time.Time) RunRecord {
+func testRun(target, playbook string, finished time.Time) RunRecord {
 	started := finished.Add(-time.Duration(len(playbook)) * time.Second)
 	return RunRecord{
+		Target:       target,
 		Playbook:     playbook,
 		StartedAt:    started,
 		FinishedAt:   finished,
@@ -30,14 +31,14 @@ func TestMemSaveRunAndQueries(t *testing.T) {
 	t2 := t1.Add(time.Hour)
 
 	in := RunInput{
-		Run: testRun("site.yml", t1),
+		Run: testRun("home", "site.yml", t1),
 		Hosts: []HostRunRecord{
-			{Host: "h1", Status: "changed", Ok: 10, Changed: 2},
-			{Host: "h2", Status: "ok", Ok: 10},
+			{Target: "home", Host: "h1", Status: "changed", Ok: 10, Changed: 2},
+			{Target: "home", Host: "h2", Status: "ok", Ok: 10},
 		},
 		Tasks: []TaskStateRecord{
-			{Host: "h1", Task: "Install nginx", Status: "changed", LastDiff: "-a\n+b"},
-			{Host: "h1", Task: "Start nginx", Status: "ok"},
+			{Target: "home", Host: "h1", Task: "Install nginx", Status: "changed", LastDiff: "-a\n+b"},
+			{Target: "home", Host: "h1", Task: "Start nginx", Status: "ok"},
 		},
 		ScopeNames: []string{"h1", "h2", "h3"},
 		Inventory:  []InventoryHost{{Name: "h1"}, {Name: "h2"}, {Name: "h3"}},
@@ -99,9 +100,9 @@ func TestMemSaveRunAndQueries(t *testing.T) {
 
 	// A host sharing a prefix must not leak its task states.
 	in2 := RunInput{
-		Run:   testRun("site.yml", t2),
-		Hosts: []HostRunRecord{{Host: "h10", Status: "ok", Ok: 1}},
-		Tasks: []TaskStateRecord{{Host: "h10", Task: "Install nginx", Status: "changed", LastDiff: "x"}},
+		Run:   testRun("home", "site.yml", t2),
+		Hosts: []HostRunRecord{{Target: "home", Host: "h10", Status: "ok", Ok: 1}},
+		Tasks: []TaskStateRecord{{Target: "home", Host: "h10", Task: "Install nginx", Status: "changed", LastDiff: "x"}},
 	}
 	if err := s.SaveRun(ctx, in2); err != nil {
 		t.Fatalf("SaveRun() error: %v", err)
@@ -116,14 +117,50 @@ func TestMemSaveRunAndQueries(t *testing.T) {
 		}
 	}
 
+	// The same host name in another target is a distinct host: host runs and
+	// task states stay scoped per target.
+	in3 := RunInput{
+		Run:   testRun("other", "site.yml", t2.Add(time.Second)),
+		Hosts: []HostRunRecord{{Target: "other", Host: "h1", Status: "ok", Ok: 3}},
+		Tasks: []TaskStateRecord{{Target: "other", Host: "h1", Task: "Reboot", Status: "changed", LastDiff: "y"}},
+	}
+	if err := s.SaveRun(ctx, in3); err != nil {
+		t.Fatalf("SaveRun() #3 error: %v", err)
+	}
+	if hosts, _ := s.ListHosts(ctx); len(hosts) != 5 {
+		t.Errorf("ListHosts() = %d hosts, want 5 (4 home + 1 other)", len(hosts))
+	}
+	hostRuns, err = s.HostRuns(ctx, "h1", 10)
+	if err != nil || len(hostRuns) != 2 {
+		t.Fatalf("HostRuns(h1) = %v, %v; want one per target", hostRuns, err)
+	}
+	targetsSeen := map[string]bool{}
+	for _, hr := range hostRuns {
+		targetsSeen[hr.Target] = true
+	}
+	if !targetsSeen["home"] || !targetsSeen["other"] {
+		t.Errorf("HostRuns(h1) targets = %v, want home and other", targetsSeen)
+	}
+	changes, err = s.HostChanges(ctx, "h1", 10)
+	if err != nil || len(changes) != 3 {
+		t.Fatalf("HostChanges(h1) = %v, %v; want 2 home + 1 other", changes, err)
+	}
+
 	stats, err := s.Stats(ctx)
 	if err != nil {
 		t.Fatalf("Stats() error: %v", err)
 	}
-	if stats.Hosts.Total != 4 || stats.Hosts.InInventory != 3 || stats.Hosts.Disappeared != 1 {
+	if stats.Hosts.Total != 5 || stats.Hosts.InInventory != 3 || stats.Hosts.Active != 4 || stats.Hosts.Disappeared != 1 {
 		t.Errorf("Stats().Hosts = %+v", stats.Hosts)
 	}
-	if stats.Runs.Total != 2 || stats.Runs.Succeeded != 2 {
+	if stats.Runs.Total != 3 || stats.Runs.Succeeded != 3 {
 		t.Errorf("Stats().Runs = %+v", stats.Runs)
+	}
+	perPB := map[string]int{}
+	for _, pb := range stats.PerPlaybook {
+		perPB[pb.Target+"/"+pb.Playbook] = pb.Total
+	}
+	if perPB["home/site.yml"] != 2 || perPB["other/site.yml"] != 1 {
+		t.Errorf("Stats().PerPlaybook = %v", perPB)
 	}
 }

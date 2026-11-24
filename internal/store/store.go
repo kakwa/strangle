@@ -10,8 +10,9 @@ import (
 
 // RunRecord is one playbook execution.
 type RunRecord struct {
-	ID           uint64    `json:"id"`
-	Playbook     string    `json:"playbook"`
+	ID       uint64    `json:"id"`
+	Target   string    `json:"target"`
+	Playbook string    `json:"playbook"`
 	StartedAt    time.Time `json:"started_at"`
 	FinishedAt   time.Time `json:"finished_at"`
 	DurationMS   int64     `json:"duration_ms"`
@@ -23,8 +24,9 @@ type RunRecord struct {
 	Output       string    `json:"output,omitempty"`
 }
 
-// HostRecord is a host's current state.
+// HostRecord is a host's current state, scoped to the target it appears in.
 type HostRecord struct {
+	Target        string     `json:"target"`
 	Name          string     `json:"name"`
 	IP            string     `json:"ip,omitempty"`
 	User          string     `json:"user,omitempty"`
@@ -42,6 +44,7 @@ type HostRecord struct {
 // HostRunRecord is a host's recap line for one run, joined with the run.
 type HostRunRecord struct {
 	RunID        uint64    `json:"run_id"`
+	Target       string    `json:"target"`
 	Host         string    `json:"host"`
 	Playbook     string    `json:"playbook"`
 	StartedAt    time.Time `json:"started_at"`
@@ -60,6 +63,7 @@ type HostRunRecord struct {
 
 // TaskStateRecord is the latest known state of one task on one host.
 type TaskStateRecord struct {
+	Target        string     `json:"target"`
 	Host          string     `json:"host"`
 	Task          string      `json:"task"`
 	Status        string      `json:"status"`
@@ -70,8 +74,9 @@ type TaskStateRecord struct {
 	LastError     string      `json:"last_error,omitempty"`
 }
 
-// PlaybookStats is the per-playbook run breakdown in Stats.
+// PlaybookStats is the per-(target, playbook) run breakdown in Stats.
 type PlaybookStats struct {
+	Target    string    `json:"target"`
 	Playbook  string    `json:"playbook"`
 	Total     int       `json:"total"`
 	Failed    int       `json:"failed"`
@@ -134,10 +139,11 @@ type Store interface {
 	ListRuns(ctx context.Context, limit int) ([]RunRecord, error)
 	// ListHosts returns all known hosts.
 	ListHosts(ctx context.Context) ([]HostRecord, error)
-	// HostRuns returns up to limit of the host's runs, newest first.
+	// HostRuns returns up to limit of the host's runs (across all targets),
+	// newest first.
 	HostRuns(ctx context.Context, host string, limit int) ([]HostRunRecord, error)
-	// HostChanges returns the host's task change traces, most recently
-	// changed first.
+	// HostChanges returns the host's task change traces (across all targets),
+	// most recently changed first.
 	HostChanges(ctx context.Context, host string, limit int) ([]TaskStateRecord, error)
 	// Stats returns aggregate statistics.
 	Stats(ctx context.Context) (*Stats, error)

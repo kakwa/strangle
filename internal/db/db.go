@@ -18,6 +18,7 @@ import (
 // Run is one playbook execution.
 type Run struct {
 	ID           uint64 `gorm:"primaryKey"`
+	Target       string `gorm:"size:255;index"`
 	Playbook     string `gorm:"size:512;index"`
 	StartedAt    time.Time
 	FinishedAt   time.Time `gorm:"index"`
@@ -30,10 +31,11 @@ type Run struct {
 	Output       string `gorm:"type:text"`
 }
 
-// Host is the current state of a host.
+// Host is the current state of a host within one target.
 type Host struct {
 	ID            uint64 `gorm:"primaryKey"`
-	Name          string `gorm:"size:255;uniqueIndex"`
+	Target        string `gorm:"size:255;uniqueIndex:idx_host_target_name"`
+	Name          string `gorm:"size:255;uniqueIndex:idx_host_target_name"`
 	IP            string
 	User          string
 	Groups        string `gorm:"size:2048"` // comma-separated group names
@@ -102,6 +104,13 @@ func Open(ctx context.Context, dsn string) (*DB, error) {
 	if err := gdb.WithContext(ctx).AutoMigrate(&Run{}, &Host{}, &HostRun{}, &TaskState{}); err != nil {
 		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
+
+	// AutoMigrate never drops indexes. Remove the legacy unique index on
+	// hosts.name from single-target builds; hosts are now scoped per target
+	// (idx_host_target_name).
+	if err := gdb.WithContext(ctx).Exec("DROP INDEX IF EXISTS idx_hosts_name").Error; err != nil {
+		return nil, fmt.Errorf("drop legacy hosts index: %w", err)
+	}
 	return &DB{db: gdb}, nil
 }
 
@@ -131,10 +140,14 @@ func (d *DB) SaveRun(ctx context.Context, in store.RunInput) error {
 			nameList = append(nameList, n)
 		}
 
+		target := in.Run.Target
+
+		// Hosts are scoped per target: every lookup is qualified with the
+		// run's target so names can repeat across targets.
 		hostIDs := map[string]uint64{}
 		if len(nameList) > 0 {
 			var existing []Host
-			if err := tx.Where("name IN ?", nameList).Find(&existing).Error; err != nil {
+			if err := tx.Where("target = ? AND name IN ?", target, nameList).Find(&existing).Error; err != nil {
 				return err
 			}
 			for _, h := range existing {
@@ -144,7 +157,7 @@ func (d *DB) SaveRun(ctx context.Context, in store.RunInput) error {
 				if _, ok := hostIDs[n]; ok {
 					continue
 				}
-				h := Host{Name: n, FirstSeenAt: run.FinishedAt}
+				h := Host{Target: target, Name: n, FirstSeenAt: run.FinishedAt}
 				if err := tx.Create(&h).Error; err != nil {
 					return fmt.Errorf("insert host %q: %w", n, err)
 				}
@@ -160,7 +173,7 @@ func (d *DB) SaveRun(ctx context.Context, in store.RunInput) error {
 				"groups":        strings.Join(ih.Groups, ","),
 				"in_inventory":  true,
 			}
-			if err := tx.Model(&Host{}).Where("name = ?", ih.Name).Updates(updates).Error; err != nil {
+			if err := tx.Model(&Host{}).Where("target = ? AND name = ?", target, ih.Name).Updates(updates).Error; err != nil {
 				return err
 			}
 		}
@@ -169,7 +182,7 @@ func (d *DB) SaveRun(ctx context.Context, in store.RunInput) error {
 			for _, ih := range in.Inventory {
 				invNames = append(invNames, ih.Name)
 			}
-			if err := tx.Model(&Host{}).Where("name NOT IN ?", invNames).
+			if err := tx.Model(&Host{}).Where("target = ? AND name NOT IN ?", target, invNames).
 				UpdateColumn("in_inventory", false).Error; err != nil {
 				return err
 			}
@@ -291,7 +304,7 @@ func (d *DB) ListRuns(ctx context.Context, limit int) ([]store.RunRecord, error)
 
 func (d *DB) ListHosts(ctx context.Context) ([]store.HostRecord, error) {
 	var hosts []Host
-	if err := d.db.WithContext(ctx).Order("name").Find(&hosts).Error; err != nil {
+	if err := d.db.WithContext(ctx).Order("target, name").Find(&hosts).Error; err != nil {
 		return nil, err
 	}
 	out := make([]store.HostRecord, 0, len(hosts))
@@ -305,6 +318,7 @@ func (d *DB) HostRuns(ctx context.Context, host string, limit int) ([]store.Host
 	type row struct {
 		HostRun
 		HostName   string    `gorm:"column:hostname"`
+		HostTarget string    `gorm:"column:hosttarget"`
 		Playbook   string    `gorm:"column:playbook"`
 		StartedAt  time.Time `gorm:"column:started_at"`
 		DurationMS int64     `gorm:"column:duration_ms"`
@@ -315,7 +329,7 @@ func (d *DB) HostRuns(ctx context.Context, host string, limit int) ([]store.Host
 	q := d.db.WithContext(ctx).Model(&HostRun{}).
 		Joins("JOIN hosts h ON h.id = host_runs.host_id").
 		Joins("JOIN runs r ON r.id = host_runs.run_id").
-		Select("host_runs.*, h.name AS hostname, r.playbook, r.started_at, r.duration_ms, r.exit_code, r.success").
+		Select("host_runs.*, h.name AS hostname, h.target AS hosttarget, r.playbook, r.started_at, r.duration_ms, r.exit_code, r.success").
 		Where("h.name = ?", host).
 		Order("host_runs.run_id DESC")
 	if limit > 0 {
@@ -328,6 +342,7 @@ func (d *DB) HostRuns(ctx context.Context, host string, limit int) ([]store.Host
 	for _, r := range rows {
 		out = append(out, store.HostRunRecord{
 			RunID:        r.RunID,
+			Target:       r.HostTarget,
 			Host:         r.HostName,
 			Playbook:     r.Playbook,
 			StartedAt:    r.StartedAt,
@@ -350,12 +365,13 @@ func (d *DB) HostRuns(ctx context.Context, host string, limit int) ([]store.Host
 func (d *DB) HostChanges(ctx context.Context, host string, limit int) ([]store.TaskStateRecord, error) {
 	type row struct {
 		TaskState
-		HostName string `gorm:"column:hostname"`
+		HostName   string `gorm:"column:hostname"`
+		HostTarget string `gorm:"column:hosttarget"`
 	}
 	var rows []row
 	q := d.db.WithContext(ctx).Model(&TaskState{}).
 		Joins("JOIN hosts h ON h.id = task_states.host_id").
-		Select("task_states.*, h.name AS hostname").
+		Select("task_states.*, h.name AS hostname, h.target AS hosttarget").
 		Where("h.name = ?", host).
 		Order("COALESCE(task_states.last_changed_at, task_states.last_run_at) DESC")
 	if limit > 0 {
@@ -367,6 +383,7 @@ func (d *DB) HostChanges(ctx context.Context, host string, limit int) ([]store.T
 	out := make([]store.TaskStateRecord, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, store.TaskStateRecord{
+			Target:        r.HostTarget,
 			Host:          r.HostName,
 			Task:          r.Task,
 			Status:        r.LastStatus,
@@ -445,11 +462,11 @@ func (d *DB) Stats(ctx context.Context) (*store.Stats, error) {
 	{
 		var pbs []store.PlaybookStats
 		err := d.db.WithContext(ctx).Model(&Run{}).
-			Select("playbook, COUNT(*) AS total, "+
+			Select("target, playbook, COUNT(*) AS total, "+
 				"COUNT(*) FILTER (WHERE NOT success) AS failed, "+
 				"MAX(finished_at) AS last_run_at").
-			Group("playbook").
-			Order("playbook").
+			Group("target, playbook").
+			Order("target, playbook").
 			Scan(&pbs).Error
 		if err != nil {
 			return nil, err
@@ -471,6 +488,7 @@ func (d *DB) Close() error {
 func toRunModel(r store.RunRecord) Run {
 	return Run{
 		ID:           r.ID,
+		Target:       r.Target,
 		Playbook:     r.Playbook,
 		StartedAt:    r.StartedAt,
 		FinishedAt:   r.FinishedAt,
@@ -487,6 +505,7 @@ func toRunModel(r store.RunRecord) Run {
 func fromRunModel(r Run) store.RunRecord {
 	return store.RunRecord{
 		ID:           r.ID,
+		Target:       r.Target,
 		Playbook:     r.Playbook,
 		StartedAt:    r.StartedAt,
 		FinishedAt:   r.FinishedAt,
@@ -523,6 +542,7 @@ func fromHostModel(h Host) store.HostRecord {
 		}
 	}
 	return store.HostRecord{
+		Target:        h.Target,
 		Name:          h.Name,
 		IP:            h.IP,
 		User:          h.User,

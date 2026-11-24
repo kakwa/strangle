@@ -115,15 +115,15 @@ type Runner struct {
 }
 
 // NewRunner initializes the embedded interpreter and starts its worker thread.
-// A non-nil manager enables the Go-managed SSH connection plugin.
-func NewRunner(manager *sshpool.Manager) (*Runner, error) {
+// A non-nil dispatcher enables the Go-managed SSH connection plugin.
+func NewRunner(multi *sshpool.Multi) (*Runner, error) {
 	r := &Runner{
 		requests: make(chan request),
 		closed:   make(chan struct{}),
 		setup:    setupScript,
 	}
 
-	if manager != nil {
+	if multi != nil {
 		dir, err := installPlugins()
 		if err != nil {
 			return nil, fmt.Errorf("install Ansible plugins: %w", err)
@@ -133,7 +133,7 @@ func NewRunner(manager *sshpool.Manager) (*Runner, error) {
 			return nil, err
 		}
 
-		bridge, err := sshpool.NewBridge(manager)
+		bridge, err := sshpool.NewBridge(multi)
 		if err != nil {
 			_ = os.RemoveAll(dir)
 			return nil, err

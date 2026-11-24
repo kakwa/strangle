@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/kakwa/strangle/internal/parser"
@@ -44,6 +43,8 @@ func (s *Mem) SaveRun(_ context.Context, in RunInput) error {
 	run := in.Run
 	s.runs = append(s.runs, run)
 
+	target := in.Run.Target
+
 	seenInRecap := map[string]HostRunRecord{}
 	for _, h := range in.Hosts {
 		seenInRecap[h.Host] = h
@@ -51,7 +52,7 @@ func (s *Mem) SaveRun(_ context.Context, in RunInput) error {
 
 	// Inventory snapshot.
 	for _, ih := range in.Inventory {
-		host := s.host(ih.Name, run)
+		host := s.host(target, ih.Name, run)
 		host.IP = ih.IP
 		host.User = ih.User
 		host.Groups = ih.Groups
@@ -60,7 +61,7 @@ func (s *Mem) SaveRun(_ context.Context, in RunInput) error {
 
 	// Recap lines: hosts that answered this run.
 	for _, h := range in.Hosts {
-		host := s.host(h.Host, run)
+		host := s.host(target, h.Host, run)
 		host.LastSeenAt = run.FinishedAt
 		host.LastRunAt = run.FinishedAt
 		host.LastStatus = parser.Status(h.Ok, h.Changed, h.Failed, h.Unreachable)
@@ -69,6 +70,7 @@ func (s *Mem) SaveRun(_ context.Context, in RunInput) error {
 
 		rec := h
 		rec.RunID = run.ID
+		rec.Target = target
 		rec.Playbook = run.Playbook
 		rec.StartedAt = run.StartedAt
 		rec.DurationMS = run.DurationMS
@@ -82,7 +84,7 @@ func (s *Mem) SaveRun(_ context.Context, in RunInput) error {
 		if _, ok := seenInRecap[name]; ok {
 			continue
 		}
-		host := s.host(name, run)
+		host := s.host(target, name, run)
 		host.Active = false
 		if host.DisappearedAt == nil {
 			t := run.FinishedAt
@@ -93,12 +95,13 @@ func (s *Mem) SaveRun(_ context.Context, in RunInput) error {
 	// Task states.
 	hostChanged := map[string]bool{}
 	for _, t := range in.Tasks {
-		key := t.Host + "\x00" + t.Task
+		key := target + "\x00" + t.Host + "\x00" + t.Task
 		ts := s.tasks[key]
 		if ts == nil {
 			ts = &TaskStateRecord{}
 			s.tasks[key] = ts
 		}
+		ts.Target = target
 		ts.Host = t.Host
 		ts.Task = t.Task
 		ts.Status = t.Status
@@ -115,7 +118,7 @@ func (s *Mem) SaveRun(_ context.Context, in RunInput) error {
 		}
 	}
 	for host := range hostChanged {
-		if h, ok := s.hosts[host]; ok {
+		if h, ok := s.hosts[target+"\x00"+host]; ok {
 			t := run.FinishedAt
 			h.LastChangeAt = &t
 		}
@@ -124,12 +127,13 @@ func (s *Mem) SaveRun(_ context.Context, in RunInput) error {
 	return nil
 }
 
-// host returns the host record, creating it on first sight.
-func (s *Mem) host(name string, run RunRecord) *HostRecord {
-	h, ok := s.hosts[name]
+// host returns the host record for a target, creating it on first sight.
+func (s *Mem) host(target, name string, run RunRecord) *HostRecord {
+	key := target + "\x00" + name
+	h, ok := s.hosts[key]
 	if !ok {
-		h = &HostRecord{Name: name, FirstSeenAt: run.FinishedAt}
-		s.hosts[name] = h
+		h = &HostRecord{Target: target, Name: name, FirstSeenAt: run.FinishedAt}
+		s.hosts[key] = h
 	}
 	return h
 }
@@ -153,7 +157,12 @@ func (s *Mem) ListHosts(_ context.Context) ([]HostRecord, error) {
 	for _, h := range s.hosts {
 		out = append(out, *h)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Target != out[j].Target {
+			return out[i].Target < out[j].Target
+		}
+		return out[i].Name < out[j].Name
+	})
 	return out, nil
 }
 
@@ -178,9 +187,8 @@ func (s *Mem) HostChanges(_ context.Context, host string, limit int) ([]TaskStat
 	defer s.mu.RUnlock()
 
 	var out []TaskStateRecord
-	prefix := host + "\x00"
-	for key, ts := range s.tasks {
-		if strings.HasPrefix(key, prefix) {
+	for _, ts := range s.tasks {
+		if ts.Host == host {
 			out = append(out, *ts)
 		}
 	}
@@ -234,10 +242,11 @@ func (s *Mem) Stats(_ context.Context) (*Stats, error) {
 		if r.FinishedAt.After(st.Runs.LastRunAt) {
 			st.Runs.LastRunAt = r.FinishedAt
 		}
-		pb := perPB[r.Playbook]
+		key := r.Target + "\x00" + r.Playbook
+		pb := perPB[key]
 		if pb == nil {
-			pb = &PlaybookStats{Playbook: r.Playbook}
-			perPB[r.Playbook] = pb
+			pb = &PlaybookStats{Target: r.Target, Playbook: r.Playbook}
+			perPB[key] = pb
 		}
 		pb.Total++
 		if !r.Success {
@@ -254,6 +263,9 @@ func (s *Mem) Stats(_ context.Context) (*Stats, error) {
 		st.PerPlaybook = append(st.PerPlaybook, *pb)
 	}
 	sort.Slice(st.PerPlaybook, func(i, j int) bool {
+		if st.PerPlaybook[i].Target != st.PerPlaybook[j].Target {
+			return st.PerPlaybook[i].Target < st.PerPlaybook[j].Target
+		}
 		return st.PerPlaybook[i].Playbook < st.PerPlaybook[j].Playbook
 	})
 

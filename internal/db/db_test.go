@@ -40,12 +40,13 @@ func TestDBRoundTrip(t *testing.T) {
 
 	in := store.RunInput{
 		Run: store.RunRecord{
-			Playbook: "site.yml", StartedAt: t1.Add(-30 * time.Second), FinishedAt: t1,
+			Target: "home", Playbook: "site.yml",
+			StartedAt: t1.Add(-30 * time.Second), FinishedAt: t1,
 			DurationMS: 30000, ExitCode: 0, Success: true, Hosts: 2, ChangedHosts: 1,
 		},
 		Hosts: []store.HostRunRecord{
-			{Host: "h1", Status: "changed", Ok: 10, Changed: 2},
-			{Host: "h2", Status: "ok", Ok: 10},
+			{Target: "home", Host: "h1", Status: "changed", Ok: 10, Changed: 2},
+			{Target: "home", Host: "h2", Status: "ok", Ok: 10},
 		},
 		Tasks: []store.TaskStateRecord{
 			{Host: "h1", Task: "Install nginx", Status: "changed", LastRunAt: t1, LastDiff: "-a\n+b"},
@@ -113,10 +114,11 @@ func TestDBRoundTrip(t *testing.T) {
 	// A second run must not duplicate host-run rows.
 	in2 := store.RunInput{
 		Run: store.RunRecord{
-			Playbook: "site.yml", StartedAt: t2.Add(-10 * time.Second), FinishedAt: t2,
+			Target: "home", Playbook: "site.yml",
+			StartedAt: t2.Add(-10 * time.Second), FinishedAt: t2,
 			DurationMS: 10000, ExitCode: 0, Success: true, Hosts: 1,
 		},
-		Hosts: []store.HostRunRecord{{Host: "h2", Status: "ok", Ok: 5}},
+		Hosts: []store.HostRunRecord{{Target: "home", Host: "h2", Status: "ok", Ok: 5}},
 		// h1 is in scope but absent from the recap, so it becomes disappeared.
 		ScopeNames: []string{"h1", "h2"},
 		Inventory: []store.InventoryHost{
@@ -139,17 +141,60 @@ func TestDBRoundTrip(t *testing.T) {
 		t.Errorf("h3 should keep its disappeared state: %+v", byName["h3"])
 	}
 
+	// The same host name in another target is a distinct host.
+	in3 := store.RunInput{
+		Run: store.RunRecord{
+			Target: "other", Playbook: "site.yml",
+			StartedAt: t2.Add(-5 * time.Second), FinishedAt: t2,
+			DurationMS: 5000, ExitCode: 0, Success: true, Hosts: 1,
+		},
+		Hosts:      []store.HostRunRecord{{Target: "other", Host: "h1", Status: "ok", Ok: 3}},
+		ScopeNames: []string{"h1"},
+		Inventory:  []store.InventoryHost{{Name: "h1"}},
+	}
+	if err := d.SaveRun(ctx, in3); err != nil {
+		t.Fatalf("SaveRun() #3 error: %v", err)
+	}
+
+	hosts, _ = d.ListHosts(ctx)
+	if len(hosts) != 4 {
+		t.Fatalf("ListHosts() = %d hosts, want 4 (3 home + 1 other)", len(hosts))
+	}
+	byTarget := map[string]int{}
+	for _, h := range hosts {
+		byTarget[h.Target+"/"+h.Name]++
+	}
+	if byTarget["home/h1"] != 1 || byTarget["other/h1"] != 1 {
+		t.Errorf("hosts by (target, name) = %v", byTarget)
+	}
+
+	hostRuns, err = d.HostRuns(ctx, "h1", 10)
+	if err != nil || len(hostRuns) != 2 {
+		t.Fatalf("HostRuns(h1) = %v, %v; want 1 per target", hostRuns, err)
+	}
+	targetsSeen := map[string]bool{}
+	for _, hr := range hostRuns {
+		targetsSeen[hr.Target] = true
+	}
+	if !targetsSeen["home"] || !targetsSeen["other"] {
+		t.Errorf("HostRuns(h1) targets = %v, want home and other", targetsSeen)
+	}
+
 	stats, err := d.Stats(ctx)
 	if err != nil {
 		t.Fatalf("Stats() error: %v", err)
 	}
-	if stats.Hosts.Total != 3 || stats.Hosts.InInventory != 2 || stats.Hosts.Active != 1 || stats.Hosts.Disappeared != 1 {
+	if stats.Hosts.Total != 4 || stats.Hosts.InInventory != 3 || stats.Hosts.Active != 2 || stats.Hosts.Disappeared != 1 {
 		t.Errorf("Stats().Hosts = %+v", stats.Hosts)
 	}
-	if stats.Runs.Total != 2 {
+	if stats.Runs.Total != 3 {
 		t.Errorf("Stats().Runs = %+v", stats.Runs)
 	}
-	if len(stats.PerPlaybook) != 1 || stats.PerPlaybook[0].Total != 2 {
-		t.Errorf("Stats().PerPlaybook = %+v", stats.PerPlaybook)
+	perPB := map[string]int{}
+	for _, pb := range stats.PerPlaybook {
+		perPB[pb.Target+"/"+pb.Playbook] = pb.Total
+	}
+	if perPB["home/site.yml"] != 2 || perPB["other/site.yml"] != 1 {
+		t.Errorf("Stats().PerPlaybook = %v", perPB)
 	}
 }

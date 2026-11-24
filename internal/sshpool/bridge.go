@@ -39,9 +39,9 @@ type fetchResponse struct {
 }
 
 // Bridge connects the (possibly forked) Ansible Python workers to the Go SSH
-// manager using inherited pipes. No Python code calls back into cgo.
+// managers using inherited pipes. No Python code calls back into cgo.
 type Bridge struct {
-	manager *Manager
+	multi *Multi
 
 	reqR  *os.File
 	reqW  *os.File
@@ -52,9 +52,9 @@ type Bridge struct {
 
 // NewBridge creates the pipes used by the Ansible connection plugin and starts
 // serving requests. The returned fds are inherited by Ansible's forked workers.
-func NewBridge(manager *Manager) (*Bridge, error) {
-	if manager == nil {
-		return nil, fmt.Errorf("ssh bridge requires an SSH manager")
+func NewBridge(multi *Multi) (*Bridge, error) {
+	if multi == nil {
+		return nil, fmt.Errorf("ssh bridge requires an SSH dispatcher")
 	}
 
 	reqFDs, err := blockingPipe()
@@ -71,7 +71,7 @@ func NewBridge(manager *Manager) (*Bridge, error) {
 	}
 
 	b := &Bridge{
-		manager: manager,
+		multi: multi,
 		reqR:    os.NewFile(uintptr(reqFDs[0]), "strangle-ssh-req-r"),
 		reqW:    os.NewFile(uintptr(reqFDs[1]), "strangle-ssh-req-w"),
 		respR:   os.NewFile(uintptr(respFDs[0]), "strangle-ssh-resp-r"),
@@ -142,7 +142,7 @@ func (b *Bridge) handle(req bridgeRequest) bridgeResponse {
 			resp.Error = fmt.Sprintf("decode stdin: %v", err)
 			return resp
 		}
-		result, err := b.manager.Exec(req.Endpoint, req.Command, stdin)
+		result, err := b.multi.Exec(req.Endpoint, req.Command, stdin)
 		if err != nil {
 			resp.Error = err.Error()
 			return resp
@@ -159,13 +159,13 @@ func (b *Bridge) handle(req bridgeRequest) bridgeResponse {
 			resp.Error = fmt.Sprintf("decode content: %v", err)
 			return resp
 		}
-		if err := b.manager.Put(req.Endpoint, req.Path, content, req.Mode); err != nil {
+		if err := b.multi.Put(req.Endpoint, req.Path, content, req.Mode); err != nil {
 			resp.Error = err.Error()
 			return resp
 		}
 		resp.OK = true
 	case "fetch":
-		content, err := b.manager.Fetch(req.Endpoint, req.Path)
+		content, err := b.multi.Fetch(req.Endpoint, req.Path)
 		if err != nil {
 			resp.Error = err.Error()
 			return resp

@@ -4,8 +4,9 @@ package scheduler
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // Scheduler runs the given cycle function immediately, then on every tick of
@@ -13,11 +14,11 @@ import (
 type Scheduler struct {
 	interval time.Duration
 	cycle    func(ctx context.Context) error
-	logger   *slog.Logger
+	logger   *zap.Logger
 }
 
 // New returns a Scheduler.
-func New(interval time.Duration, cycle func(ctx context.Context) error, logger *slog.Logger) *Scheduler {
+func New(interval time.Duration, cycle func(ctx context.Context) error, logger *zap.Logger) *Scheduler {
 	return &Scheduler{interval: interval, cycle: cycle, logger: logger}
 }
 
@@ -41,14 +42,17 @@ func (s *Scheduler) runCycle(ctx context.Context, trigger string) {
 	if err := ctx.Err(); err != nil {
 		return
 	}
-	s.logger.Info("run started", "trigger", trigger)
+	s.logger.Info("run started", zap.String("trigger", trigger))
 	started := time.Now()
 	if err := s.cycle(ctx); err != nil {
 		if errors.Is(err, context.Canceled) {
-			s.logger.Info("run canceled", "trigger", trigger)
+			s.logger.Info("run canceled", zap.String("trigger", trigger))
 			return
 		}
-		s.logger.Error("run failed", "trigger", trigger, "error", err)
+		s.logger.Error("run failed", zap.String("trigger", trigger), zap.Error(err))
 	}
-	s.logger.Info("run finished", "trigger", trigger, "duration", time.Since(started).Round(time.Millisecond).String())
+	s.logger.Info("run finished",
+		zap.String("trigger", trigger),
+		zap.Duration("duration", time.Since(started).Round(time.Millisecond)),
+	)
 }

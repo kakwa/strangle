@@ -131,7 +131,7 @@ func TestHostKeyStoreReject(t *testing.T) {
 }
 
 func TestHostKeyStorePolicies(t *testing.T) {
-	for _, policy := range []string{"api", "auto", "insecure"} {
+	for _, policy := range []config.HostKeyPolicy{"api", "auto", "insecure"} {
 		cfg := config.SSHConfig{HostKeyPolicy: policy, AutoAcceptFile: filepath.Join(t.TempDir(), "keys.json")}
 		if _, err := NewHostKeyStore(cfg); err != nil {
 			t.Errorf("policy %q: %v", policy, err)

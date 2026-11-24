@@ -19,8 +19,8 @@ run duration, change/failed counts — are derived from the stored history.
 cmd/strangle/        entrypoint: config, wiring, graceful shutdown
 internal/
   ansible/           embedded CPython runner + Go-backed Ansible connection plugin
-  config/            YAML config file + environment variables
-  applier/           runs the playbook list, parses output, records results
+  config/            YAML config: server.yml, collection.yml, per-target strangle.yml
+  applier/           runs every target's playbooks, parses output, records results
   parser/            parses ansible-playbook output (recap, task results, diffs)
   inventory/         parses YAML inventory files into host groups and members
   scheduler/         runs a cycle on an interval
@@ -30,19 +30,27 @@ internal/
   sshpool/           Go-managed persistent SSH connections with host-key policies
 web/                 React (Vite) web UI, styled with Mantine; built assets are
                      embedded into the binary (go:embed)
-strangle.yaml        base configuration
-strangle-remote.yaml example using the Go-managed SSH transport
+config/              base configuration, loaded by default
+  server.yml           process-level settings (listen address, interval, DSN)
+  collection.yml       the list of Ansible projects (targets) to apply
+  strangle.yml         sample per-target configuration (reference)
+strangle.yml         per-target configuration for the local demo target (live)
+playbook.yml         demo playbook (target `demo`, applied to localhost)
+inventory.ini        demo inventory for the `demo` target
+playbook-remote.yml  example using the Go-managed SSH transport
+inventory-remote.ini inventory for the SSH-transport example
 ```
 
 ## What is stored
 
-- **Run** — one `ansible-playbook` invocation: playbook, start/finish,
+- **Run** — one `ansible-playbook` invocation: target, playbook, start/finish,
   duration, exit code, host/changed/failed counts, full captured output.
 - **HostRun** — per-run, per-host recap line (`ok`, `changed`, `failed`,
   `unreachable`, `skipped`, `rescued`, `ignored`).
 - **TaskState** — per host × task (play + task name): the last status, when
   it last ran, the last diff and the last error. Updated on every run.
-- **Host** — every host seen in an inventory or recap; `active` tracks
+- **Host** — every host (identified by target + name, so the same name in
+  two targets is two hosts) seen in an inventory or recap; `active` tracks
   whether it was in scope of a run but missing from the recap
   ("disappeared").
 
@@ -54,12 +62,13 @@ strangle-remote.yaml example using the Go-managed SSH transport
 - `GET /api/hosts`       — all hosts with their last status and disappearance state
 - `GET /api/hosts/{host}/runs`    — the last runs that included the host (default 10)
 - `GET /api/hosts/{host}/changes` — the host's task traces, newest first (default 200)
-- `GET /api/playbooks`   — configured playbooks
-- `POST /api/run`        — body `{"playbook": "site.yml"}`; starts the run in
-  the background and returns `202` (unknown playbook names are rejected)
+- `GET /api/playbooks`   — configured playbooks, keyed by target name
+- `POST /api/run`        — body `{"target": "demo", "playbook": "site.yml"}`;
+  starts the run in the background and returns `202` (unknown target or
+  playbook names are rejected)
 - `GET /api/hostkeys`    — host keys pending approval (SSH transport only)
-- `POST /api/hostkeys/accept` — body `{"host": "...", "fingerprint": "..."}`
-- `POST /api/hostkeys/reject` — body `{"host": "..."}`
+- `POST /api/hostkeys/accept` — body `{"target": "demo", "host": "...", "fingerprint": "..."}`
+- `POST /api/hostkeys/reject` — body `{"target": "demo", "host": "..."}`
 - `GET /api/ssh/stats`   — SSH pool counters (`active_connections`, `total_dials`)
 
 ## Web UI
@@ -73,28 +82,52 @@ Single page (React + Mantine) with three views, polled every 10 seconds:
 
 ## Configuration
 
-Runtime settings read from the environment:
+Configuration is file-only: three kinds of YAML files, located with the `-s`
+and `-c` flags (defaults `./config/server.yml` and `./config/collection.yml`).
+There are no environment variables.
 
-| Variable            | Default         | Description                          |
-|---------------------|-----------------|--------------------------------------|
-| `STRANGLE_CONFIG`   | `strangle.yaml` | Path to the YAML config file         |
-| `STRANGLE_ADDR`     | `:8080`         | HTTP listen address                  |
-| `STRANGLE_INTERVAL` | `15m`           | How often the playbook list is run   |
-| `STRANGLE_DSN`      | —               | PostgreSQL DSN; overrides `database.dsn`; without a DSN an in-memory store is used |
+```sh
+strangle [-s config/server.yml] [-c config/collection.yml]
+```
 
-The YAML file holds the Ansible parameters:
+### server.yml — process-level settings
+
+| Key             | Default         | Description                          |
+|-----------------|-----------------|--------------------------------------|
+| `listen_addr`   | `:8080`         | HTTP listen address                  |
+| `log_level`     | `info`          | `debug`, `info`, `warn` or `error`   |
+| `interval`      | `15m`           | How often a full cycle over every target is run |
+| `database.dsn`  | —               | PostgreSQL DSN; without a DSN an in-memory store is used |
+| `auth.token`    | —               | Placeholder, parsed but not enforced yet |
+
+### collection.yml — the targets
+
+The inventory of Ansible projects (targets) that strangle applies. Every
+target is a directory containing a `strangle.yml`. Relative `path` values
+resolve against this file's directory:
 
 ```yaml
-working_dir: /path/to/ansible   # the Ansible project root (optional)
-inventory: inventory            # inventory file or directory, relative to working_dir
-playbooks:                      # ordered list, relative to working_dir
+targets:
+  - name: home
+    path: /path/to/ansible        # the project directory (contains strangle.yml)
+    # git:                        # upstream repository: placeholder, not used yet
+    #   url: https://example.com/repo.git
+    #   branch: main
+```
+
+### strangle.yml — one per target
+
+Lives at the root of the target directory and holds the Ansible parameters:
+
+```yaml
+working_dir: playbooks            # the dir playbooks run from (optional;
+                                  # defaults to the target path)
+inventory: inventory              # inventory file or directory, relative to working_dir
+playbooks:                        # ordered list, relative to working_dir
   - site.yml
   - dns.yml
 
-# Legacy single-playbook form (equivalent to playbooks: [playbook.yml]):
-# playbook: playbook.yml
-
-user: deploy             # optional: -u
+user: deploy             # optional: -u; also the SSH transport's fallback user
 become: true             # optional: -b
 become_method: sudo      # optional: --become-method (default: sudo)
 become_user: root        # optional: --become-user
@@ -103,26 +136,31 @@ become_user: root        # optional: --become-user
 become_password_file: /run/secrets/ansible_become
 connection_password_file: /run/secrets/ansible_connection
 vault_password_file: /run/secrets/ansible_vault
-
-database:
-  dsn: postgres://user:pass@127.0.0.1:5432/strangle?sslmode=disable
 ```
 
 `--diff` is always added by the applier. `working_dir` is chdir'd into for the
 duration of each run, so `ansible.cfg`, relative paths and roles are resolved
-relative to the project.
+relative to the project. The `config/` directory is a working example:
+`config/server.yml` and `config/collection.yml` configure a local `demo`
+target (the repo root, using `playbook.yml` and `inventory.ini`) plus the
+`home.tf` project, and `config/strangle.yml` is a reference for the
+per-target file each target directory carries.
 
 ### Go-managed SSH transport
 
-When `ssh.enabled` is true, Ansible uses a custom `strangle_ssh` connection
-plugin that asks the Go process to perform all SSH operations. Connections are
-created lazily and **kept open** in a pool, so they are reused across tasks and
-across playbook runs. No `ssh` process is spawned.
+Configured per target in its `strangle.yml`. When `ssh.enabled` is true,
+Ansible uses a custom `strangle_ssh` connection plugin that asks the Go
+process to perform all SSH operations for that target. Each target with the
+transport enabled gets its own connection pool, so keys, policies and pending
+host keys are isolated per target. Connections are created lazily and
+**kept open** in a pool, so they are reused across tasks and across playbook
+runs. No `ssh` process is spawned.
 
 ```yaml
 ssh:
   enabled: true
   user: kakwa              # default user when the inventory does not set one
+                           # (defaults to the target-level user key)
   port: 22
   private_key_file: ~/.ssh/id_ed25519  # supports unencrypted or passphrase keys
   private_key_passphrase: ""           # optional
@@ -140,7 +178,7 @@ Host-key policies:
 | Policy        | Behavior |
 |---------------|----------|
 | `api` (default) | Unknown keys are stored as *pending* and rejected until approved via `POST /api/hostkeys/accept`. A changed key for a known host is rejected and queued as pending. |
-| `known_hosts` | Strict verification against `known_hosts_file` (default `known_hosts.strangle`, OpenSSH format). |
+| `known_hosts` | Strict verification against `known_hosts_file` (default `<target path>/known_hosts.strangle`, OpenSSH format). |
 | `ca`          | Trust host certificates signed by a CA public key listed in `ca_files` (authorized_keys format). |
 | `auto`        | Trust the first key seen per host; reject later changes. Accepted keys persist in `auto_accept_file`. |
 | `insecure`    | Accept any key. Development only. |
@@ -167,10 +205,10 @@ fresh checkout via a committed placeholder page, but bakes that placeholder in.
 ```sh
 # build the UI (into web/dist) and the server, UI embedded
 make build
-STRANGLE_INTERVAL=1m ./bin/strangle
+./bin/strangle                      # reads ./config/server.yml and ./config/collection.yml
 
-# build and start with Go-managed SSH
-STRANGLE_CONFIG=strangle-remote.yaml STRANGLE_INTERVAL=1m ./bin/strangle
+# or point at explicit config files
+./bin/strangle -s config/server.yml -c config/collection.yml
 
 # web UI (development): Vite dev server on :5173, proxies /api to :8080
 make web-dev

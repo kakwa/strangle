@@ -16,24 +16,12 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 )
 
-// HostKeyPolicy controls how unknown SSH host keys are handled.
-type HostKeyPolicy string
-
-const (
-	// PolicyKnownHosts verifies against a classic known_hosts file.
-	PolicyKnownHosts HostKeyPolicy = "known_hosts"
-	// PolicyAPI denies unknown keys until they are approved over the API/UI.
-	PolicyAPI HostKeyPolicy = "api"
-	// PolicyCA trusts host certificates signed by a configured CA.
-	PolicyCA HostKeyPolicy = "ca"
-	// PolicyAuto trusts the first key seen for a host and rejects later changes.
-	PolicyAuto HostKeyPolicy = "auto"
-	// PolicyInsecure accepts any host key. For development only.
-	PolicyInsecure HostKeyPolicy = "insecure"
-)
-
 // HostKey describes a key seen for a host.
 type HostKey struct {
+	// Target is the name of the collection target that owns the connection.
+	// It is set when host keys are aggregated across targets (see Multi);
+	// the per-target persistence files leave it empty.
+	Target      string    `json:"target,omitempty"`
 	Host        string    `json:"host"`
 	Fingerprint string    `json:"fingerprint"`
 	PublicKey   string    `json:"public_key"`
@@ -49,7 +37,7 @@ type keyDatabase struct {
 // HostKeyStore persists host key trust decisions and builds SSH callbacks.
 type HostKeyStore struct {
 	mu       sync.Mutex
-	policy   HostKeyPolicy
+	policy   config.HostKeyPolicy
 	cfg      config.SSHConfig
 	db       keyDatabase
 	caKeys   []ssh.PublicKey
@@ -58,9 +46,9 @@ type HostKeyStore struct {
 
 // NewHostKeyStore creates a store from configuration.
 func NewHostKeyStore(cfg config.SSHConfig) (*HostKeyStore, error) {
-	policy := HostKeyPolicy(cfg.HostKeyPolicy)
+	policy := cfg.HostKeyPolicy
 	if policy == "" {
-		policy = PolicyAPI
+		policy = config.PolicyAPI
 	}
 
 	s := &HostKeyStore{
@@ -73,13 +61,13 @@ func NewHostKeyStore(cfg config.SSHConfig) (*HostKeyStore, error) {
 	}
 
 	switch policy {
-	case PolicyKnownHosts:
+	case config.PolicyKnownHosts:
 		cb, err := knownhosts.New(cfg.KnownHostsFile)
 		if err != nil {
 			return nil, fmt.Errorf("load known_hosts %q: %w", cfg.KnownHostsFile, err)
 		}
 		s.callback = cb
-	case PolicyCA:
+	case config.PolicyCA:
 		for _, path := range cfg.CAFiles {
 			data, err := os.ReadFile(path)
 			if err != nil {
@@ -105,12 +93,12 @@ func NewHostKeyStore(cfg config.SSHConfig) (*HostKeyStore, error) {
 			},
 		}
 		s.callback = checker.CheckHostKey
-	case PolicyAPI, PolicyAuto:
+	case config.PolicyAPI, config.PolicyAuto:
 		if err := s.load(); err != nil {
 			return nil, err
 		}
 		s.callback = s.verify
-	case PolicyInsecure:
+	case config.PolicyInsecure:
 		s.callback = ssh.InsecureIgnoreHostKey()
 	default:
 		return nil, fmt.Errorf("unknown host_key_policy %q", policy)
@@ -144,7 +132,7 @@ func (s *HostKeyStore) verify(host string, _ net.Addr, key ssh.PublicKey) error 
 
 	known, ok := s.db.Approved[host]
 	if !ok {
-		if s.policy == PolicyAPI {
+		if s.policy == config.PolicyAPI {
 			record.Status = "pending"
 			s.db.Pending[host] = record
 			_ = s.save()
@@ -157,7 +145,7 @@ func (s *HostKeyStore) verify(host string, _ net.Addr, key ssh.PublicKey) error 
 
 	if known.Fingerprint != fingerprint {
 		err := fmt.Errorf("host key for %s changed: expected %s, got %s", host, known.Fingerprint, fingerprint)
-		if s.policy == PolicyAPI {
+		if s.policy == config.PolicyAPI {
 			record.Status = "rejected"
 			s.db.Pending[host] = record
 			_ = s.save()
