@@ -127,6 +127,8 @@ docs/                documentation: architecture, configuration, API, git collec
   counters per scope
 - `GET /api/v1/orgs/{org}/collections/{collection}/runs/{id}/tasks` — every
   per-task result of one run
+- `POST /api/v1/orgs/{org}/collections/{collection}/runs/{id}/cancel` — cancel
+  a queued or running run; the run detail view offers the same action
 
 Full request/response examples: [docs/api.md](docs/api.md).
 

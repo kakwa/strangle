@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/kakwa/strangle/internal/parser"
 )
@@ -32,20 +33,85 @@ func NewMem() *Mem {
 	}
 }
 
+func (s *Mem) CreateRun(_ context.Context, in *RunRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if in.ID != 0 {
+		for i := range s.runs {
+			if s.runs[i].ID == in.ID {
+				return nil
+			}
+		}
+		if in.ID >= s.nextID {
+			s.nextID = in.ID + 1
+		}
+		s.runs = append(s.runs, *in)
+		return nil
+	}
+	s.nextID++
+	in.ID = s.nextID
+	if in.StartedAt.IsZero() {
+		in.StartedAt = time.Now().UTC()
+	}
+	if in.State == "" {
+		in.State = RunStateQueued
+	}
+	s.runs = append(s.runs, *in)
+	return nil
+}
+
+func (s *Mem) UpdateRun(_ context.Context, in RunRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.runs {
+		if s.runs[i].ID == in.ID {
+			s.runs[i] = in
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
 func (s *Mem) SaveRun(_ context.Context, in RunInput) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	existing := -1
+	if in.Run.ID != 0 {
+		for i := range s.runs {
+			if s.runs[i].ID == in.Run.ID {
+				existing = i
+				break
+			}
+		}
+	}
 	if in.Run.ID == 0 {
 		s.nextID++
 		in.Run.ID = s.nextID
-	} else {
-		if in.Run.ID >= s.nextID {
-			s.nextID = in.Run.ID + 1
-		}
+	} else if in.Run.ID >= s.nextID {
+		s.nextID = in.Run.ID + 1
 	}
 	run := in.Run
-	s.runs = append(s.runs, run)
+	if run.State == "" {
+		run.State = RunStateCompleted
+	}
+	if existing >= 0 {
+		// The job ID is written by the enqueuer after the job is inserted and
+		// can race with a fast worker; never clear it when finalizing a run.
+		if run.JobID == "" {
+			run.JobID = s.runs[existing].JobID
+		}
+		// A cancellation request wins over the worker's final result: the
+		// run stays marked cancelled even if Ansible finishes afterwards.
+		if s.runs[existing].Canceled {
+			run.State = RunStateCancelled
+			run.Canceled = true
+		}
+		s.runs[existing] = run
+	} else {
+		s.runs = append(s.runs, run)
+	}
 
 	target := in.Run.Target
 

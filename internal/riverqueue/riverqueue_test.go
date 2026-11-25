@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -24,6 +25,10 @@ func TestPlaybookWorkerWork(t *testing.T) {
 	var gotTarget, gotPlaybook string
 	w := &PlaybookWorker{
 		Run: func(_ context.Context, target, playbook string) error {
+			gotTarget, gotPlaybook = target, playbook
+			return nil
+		},
+		RunWithID: func(_ context.Context, target, playbook string, _ uint64) error {
 			gotTarget, gotPlaybook = target, playbook
 			return nil
 		},
@@ -53,7 +58,7 @@ func TestPlaybookWorkerWork(t *testing.T) {
 // openTestClient opens the queue against a private, freshly created database
 // so the test never contends with (or steals jobs from) other River clients
 // on the shared development database.
-func openTestClient(t *testing.T, dsn string, workers int, run func(ctx context.Context, target, playbook string) error) *Client {
+func openTestClient(t *testing.T, dsn string, workers int, run func(ctx context.Context, target, playbook string, runID uint64) error) *Client {
 	t.Helper()
 	ctx := context.Background()
 
@@ -97,17 +102,17 @@ func TestClientEndToEnd(t *testing.T) {
 	ctx := context.Background()
 
 	calls := make(chan [2]string, 16)
-	c := openTestClient(t, dsn, 2, func(_ context.Context, target, playbook string) error {
+	c := openTestClient(t, dsn, 2, func(_ context.Context, target, playbook string, _ uint64) error {
 		calls <- [2]string{target, playbook}
 		return nil
 	})
 
-	if status, err := c.EnqueueRun(ctx, "t1", "pb1"); err != nil {
+	if jobID, err := c.EnqueueRun(ctx, "t1", "pb1", 11); err != nil {
 		t.Fatalf("EnqueueRun() error: %v", err)
-	} else if status != "queued" {
-		t.Errorf("EnqueueRun() status = %q, want queued", status)
+	} else if _, err := strconv.ParseInt(jobID, 10, 64); err != nil {
+		t.Errorf("EnqueueRun() job ID = %q, want a numeric River ID: %v", jobID, err)
 	}
-	if _, err := c.EnqueueRun(ctx, "t2", "pb2"); err != nil {
+	if _, err := c.EnqueueRun(ctx, "t2", "pb2", 12); err != nil {
 		t.Fatalf("EnqueueRun() #2 error: %v", err)
 	}
 
@@ -142,12 +147,12 @@ func TestClientFailedRunRetries(t *testing.T) {
 	ctx := context.Background()
 
 	attempts := make(chan struct{}, 16)
-	c := openTestClient(t, dsn, 1, func(context.Context, string, string) error {
+	c := openTestClient(t, dsn, 1, func(context.Context, string, string, uint64) error {
 		attempts <- struct{}{}
 		return errors.New("always fails")
 	})
 
-	if _, err := c.EnqueueRun(ctx, "t1", "pb1"); err != nil {
+	if _, err := c.EnqueueRun(ctx, "t1", "pb1", 13); err != nil {
 		t.Fatalf("EnqueueRun() error: %v", err)
 	}
 	if err := c.Start(ctx); err != nil {
@@ -173,7 +178,7 @@ func TestClientFailedRunRetries(t *testing.T) {
 // so the migration is what surfaces the connection error.
 func TestOpenUnreachable(t *testing.T) {
 	_, err := Open(context.Background(), "postgres://nobody:nothing@127.0.0.1:1/strangle", 1,
-		func(context.Context, string, string) error { return nil }, zap.NewNop())
+		func(context.Context, string, string, uint64) error { return nil }, zap.NewNop())
 	if err == nil {
 		t.Fatal("Open() against an unreachable database: want error, got nil")
 	}

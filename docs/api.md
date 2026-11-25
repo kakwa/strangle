@@ -284,6 +284,21 @@ another collection's log. Unknown IDs are `404`, malformed IDs are `400`.
 }
 ```
 
+## POST /api/v1/orgs/{org}/collections/{collection}/runs/{id}/cancel
+
+Cancels a queued or running playbook run. There is deliberately no flat alias:
+a run belongs to one collection and the membership check must use that
+collection. A run from another collection returns `404`; a run that already
+finished returns `409`. On success the response is
+`{"id":1234,"state":"cancelled"}`. The run record is kept, with `state`
+`cancelled` and `canceled: true`, and its captured output records the
+cancellation.
+
+```sh
+curl -X POST http://localhost:8080/api/v1/orgs/default/collections/home/runs/1234/cancel \
+  -H 'Cookie: strangle_session=...'
+```
+
 ## GET /api/v1/orgs/{org}/collections/{collection}/runs/{id}/tasks
 
 Every per-task result recorded for one run, in task order. Unlike

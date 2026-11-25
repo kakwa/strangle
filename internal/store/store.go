@@ -13,6 +13,15 @@ import (
 // ErrNotFound is returned by Store lookups when no record has that ID.
 var ErrNotFound = errors.New("record not found")
 
+// Run states recorded while a run is in flight. Records without a state are
+// completed runs from earlier versions.
+const (
+	RunStateQueued    = "queued"
+	RunStateRunning   = "running"
+	RunStateCompleted = "completed"
+	RunStateCancelled = "cancelled"
+)
+
 // RunRecord is one playbook execution.
 type RunRecord struct {
 	ID           uint64    `json:"id"`
@@ -27,6 +36,11 @@ type RunRecord struct {
 	ChangedHosts int       `json:"changed_hosts"`
 	FailedHosts  int       `json:"failed_hosts"`
 	Output       string    `json:"output,omitempty"`
+	State        string    `json:"state,omitempty"`
+	// Canceled records when cancellation was requested for the run.
+	Canceled bool `json:"canceled,omitempty"`
+	// JobID is the queue job that executes this run, when available.
+	JobID string `json:"job_id,omitempty"`
 }
 
 // HostRecord is a host's current state, scoped to the target it appears in.
@@ -161,8 +175,15 @@ type InventoryHost struct {
 
 // Store persists and queries run history, host state and task change traces.
 type Store interface {
+	// CreateRun reserves an ID for a run that has not finished yet. Callers
+	// pass a record with Target and Playbook set; the store fills in ID and
+	// started_at. It is idempotent when ID is already set.
+	CreateRun(ctx context.Context, in *RunRecord) error
 	// SaveRun atomically persists one playbook run and updates host state.
 	SaveRun(ctx context.Context, in RunInput) error
+	// UpdateRun updates the mutable fields of an existing run (state, job ID,
+	// output, result). It returns store.ErrNotFound for an unknown ID.
+	UpdateRun(ctx context.Context, in RunRecord) error
 	// ListRuns returns up to limit runs, newest first. Run summaries need not
 	// carry the full captured output.
 	ListRuns(ctx context.Context, limit int) ([]RunRecord, error)

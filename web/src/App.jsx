@@ -704,35 +704,46 @@ function RunDetail({ onBack }) {
   const [run, setRun] = useState(null)
   const [tasks, setTasks] = useState([])
   const [error, setError] = useState(null)
+  const [org, setOrg] = useState(null)
+  const [canceling, setCanceling] = useState(false)
+  const [actionError, setActionError] = useState(null)
+
+  const reload = useCallback(async () => {
+    const res = await fetch(`/api/runs/${encodeURIComponent(id)}`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = asObject(await res.json())
+    setRun(data)
+    return data
+  }, [id])
 
   useEffect(() => {
     let active = true
     setRun(null)
     setTasks([])
     setError(null)
+    setOrg(null)
+    setActionError(null)
     ;(async () => {
       try {
-        const res = await fetch(`/api/runs/${encodeURIComponent(id)}`)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = asObject(await res.json())
+        const data = await reload()
 
-        let org = null
+        let foundOrg = null
         const orgsRes = await fetch(ORGS_PATH).catch(() => null)
         if (orgsRes?.ok) {
           for (const candidate of asArray(await orgsRes.json())) {
             if (asArray(candidate?.collections).some((c) => c?.name === data.target)) {
-              org = candidate.name
+              foundOrg = candidate.name
               break
             }
           }
         }
         let taskData = []
-        if (org) {
-          const taskRes = await fetch(collectionAPI(org, data.target, `runs/${encodeURIComponent(id)}/tasks`))
+        if (foundOrg) {
+          const taskRes = await fetch(collectionAPI(foundOrg, data.target, `runs/${encodeURIComponent(id)}/tasks`))
           if (taskRes.ok) taskData = asArray(await taskRes.json())
         }
         if (active) {
-          setRun(data)
+          setOrg(foundOrg)
           setTasks(taskData)
         }
       } catch (err) {
@@ -740,7 +751,29 @@ function RunDetail({ onBack }) {
       }
     })()
     return () => { active = false }
-  }, [id])
+  }, [id, reload])
+
+  const activeRun = run && (run.state === 'queued' || run.state === 'running')
+
+  const cancelRun = async () => {
+    if (!org || !run) return
+    setCanceling(true)
+    setActionError(null)
+    try {
+      const res = await fetch(collectionAPI(org, run.target, `runs/${encodeURIComponent(id)}/cancel`), {
+        method: 'POST',
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body?.error || `HTTP ${res.status}`)
+      }
+      await reload()
+    } catch (err) {
+      setActionError(err.message)
+    } finally {
+      setCanceling(false)
+    }
+  }
 
   return (
     <Stack gap="md">
@@ -749,15 +782,25 @@ function RunDetail({ onBack }) {
           <Group gap="sm" align="center">
             <Text fw="bold">Run #{id}</Text>
             {run && (
-              <Badge color={run.success ? 'green' : 'red'} variant="light">
-                {run.success ? 'ok' : `exit ${run.exit_code}`}
+              <Badge color={activeRun || run.state === 'cancelled' ? 'orange' : run.success ? 'green' : 'red'} variant="light">
+                {activeRun || run.state === 'cancelled'
+                  ? run.state
+                  : run.success ? 'ok' : `exit ${run.exit_code}`}
               </Badge>
             )}
           </Group>
-          <Text size="sm" c="dimmed" onClick={onBack} style={{ cursor: 'pointer' }}>
-            ← back to dashboard
-          </Text>
+          <Group gap="sm">
+            {activeRun && org && (
+              <Button color="red" variant="light" size="xs" loading={canceling} onClick={cancelRun}>
+                Cancel run
+              </Button>
+            )}
+            <Text size="sm" c="dimmed" onClick={onBack} style={{ cursor: 'pointer' }}>
+              ← back to dashboard
+            </Text>
+          </Group>
         </Group>
+        {actionError && <Alert color="red" mt="md" title="Could not cancel the run">{actionError}</Alert>}
         {run && (
           <Group gap="lg" mt="md" wrap="wrap">
             <Text size="sm"><Text component="span" c="dimmed">Collection:</Text> {run.target}</Text>

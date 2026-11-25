@@ -49,9 +49,9 @@ func (s *Server) Ping(_ context.Context, _ *runnerv1.PingRequest) (*runnerv1.Pin
 // output. Consecutive calls are serialized by s.mu.
 func (s *Server) RunPlaybook(ctx context.Context, req *runnerv1.RunPlaybookRequest) (*runnerv1.RunPlaybookResponse, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if err := ctx.Err(); err != nil {
+		s.mu.Unlock()
 		return &runnerv1.RunPlaybookResponse{Error: err.Error()}, nil
 	}
 
@@ -60,6 +60,7 @@ func (s *Server) RunPlaybook(ctx context.Context, req *runnerv1.RunPlaybookReque
 	if s.multi != nil {
 		if req.Scope != "" {
 			if err := s.multi.SetActive(req.Scope); err != nil {
+				s.mu.Unlock()
 				return &runnerv1.RunPlaybookResponse{Error: err.Error()}, nil
 			}
 		} else {
@@ -67,14 +68,39 @@ func (s *Server) RunPlaybook(ctx context.Context, req *runnerv1.RunPlaybookReque
 		}
 	}
 
-	result, runErr := s.runner.RunDir(req.WorkingDir, req.Args...)
-	factsJSON, _ := json.Marshal(result.Facts)
-	return &runnerv1.RunPlaybookResponse{
-		ExitCode:  int32(result.ExitCode),
-		Output:    result.Output,
-		Error:     errorString(runErr),
-		FactsJson: string(factsJSON),
-	}, nil
+	// RunDir blocks on the embedded interpreter and cannot be interrupted.
+	// Run it in a goroutine so the gRPC call can return promptly when the
+	// master cancels the job. The mutex is released only when the interpreter
+	// finishes, so a new run never overlaps the cancelled one.
+	type runReply struct {
+		result ansible.Result
+		err    error
+	}
+	reply := make(chan runReply, 1)
+	go func() {
+		result, err := s.runner.RunDir(req.WorkingDir, req.Args...)
+		reply <- runReply{result: result, err: err}
+	}()
+
+	select {
+	case res := <-reply:
+		s.mu.Unlock()
+		factsJSON, _ := json.Marshal(res.result.Facts)
+		return &runnerv1.RunPlaybookResponse{
+			ExitCode:  int32(res.result.ExitCode),
+			Output:    res.result.Output,
+			Error:     errorString(res.err),
+			FactsJson: string(factsJSON),
+		}, nil
+	case <-ctx.Done():
+		go func() {
+			<-reply
+			s.mu.Unlock()
+		}()
+		return &runnerv1.RunPlaybookResponse{
+			Error: "playbook run canceled",
+		}, nil
+	}
 }
 
 // Run serves srv on the unix socket at path until ctx is canceled, then

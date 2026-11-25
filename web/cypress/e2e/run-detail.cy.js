@@ -21,6 +21,22 @@ describe('Run detail', () => {
     cy.contains('df: command not found')
   })
 
+  it('cancels a running run from the collection-scoped endpoint', () => {
+    cy.request('POST', '/api/_mock/reset-runs')
+    cy.visit('/runs/5')
+    cy.contains('Run #5').should('be.visible')
+    cy.contains('running').should('be.visible')
+    cy.contains('button', 'Cancel run').click()
+    cy.contains('cancelled').should('be.visible')
+    cy.contains('pre', '[strangle] run canceled')
+    // A second cancel is rejected by the API and surfaced to the user.
+    cy.request({
+      method: 'POST',
+      url: '/api/v1/orgs/default/collections/alpha/runs/5/cancel',
+      failOnStatusCode: false,
+    }).its('status').should('eq', 409)
+  })
+
   it('renders from a bookmarkable URL and navigates back', () => {
     cy.visit('/runs/4')
     cy.contains('Run #4').should('be.visible')

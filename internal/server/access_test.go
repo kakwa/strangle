@@ -32,6 +32,7 @@ func TestCollectionRestrictions(t *testing.T) {
 	st := store.NewMem()
 	seedTargetRun(t, st, "home")
 	seedTargetRun(t, st, "edge")
+	seedRunWithState(t, st, 100, "edge", store.RunStateRunning, "99")
 	users := auth.NewMemUserStore()
 	seedUser(t, users, "alice", "pw")
 	access := auth.NewMemCollectionAccess()
@@ -82,7 +83,7 @@ func TestCollectionRestrictions(t *testing.T) {
 	// Run details carry full output, so they must respect the same membership
 	// rules as the listing.
 	runs, err := st.ListRuns(context.Background(), 10)
-	if err != nil || len(runs) != 2 {
+	if err != nil || len(runs) != 3 {
 		t.Fatalf("ListRuns() = %v, %v", runs, err)
 	}
 	ids := map[string]string{}
@@ -124,6 +125,15 @@ func TestCollectionRestrictions(t *testing.T) {
 	}
 	if enq.called() != 1 || enq.last() != "edge/site" {
 		t.Errorf("enqueuer calls = %v, want one edge/site", enq.calls)
+	}
+
+	// Cancel is collection-scoped: a foreign collection is denied before the
+	// run is looked up.
+	if rec = post("/api/v1/orgs/default/collections/home/runs/100/cancel", ""); rec.Code != http.StatusForbidden {
+		t.Errorf("POST home run cancel: status = %d, want 403", rec.Code)
+	}
+	if len(enq.canceled()) != 0 {
+		t.Fatalf("canceler called for a foreign collection: %v", enq.canceled())
 	}
 
 	// SSH host keys are per collection too: neither the view nor a decision

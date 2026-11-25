@@ -28,6 +28,19 @@ type Executor interface {
 	RunPlaybook(ctx context.Context, collection, scope, workingDir string, args ...string) (int, string, map[string]json.RawMessage, error)
 }
 
+type runIDKey struct{}
+
+// WithRunID attaches the store run ID to a run's context so the applier can
+// update the record created when the job was enqueued.
+func WithRunID(ctx context.Context, id uint64) context.Context {
+	return context.WithValue(ctx, runIDKey{}, id)
+}
+
+func runIDFrom(ctx context.Context) uint64 {
+	id, _ := ctx.Value(runIDKey{}).(uint64)
+	return id
+}
+
 // Ansible applies playbooks for every configured target by dispatching each
 // run to a worker process and records the results in a store.
 type Ansible struct {
@@ -225,6 +238,18 @@ func (a *Ansible) runPlaybook(ctx context.Context, target config.TargetConfig, p
 	}
 
 	started := time.Now().UTC()
+	if id := runIDFrom(ctx); id != 0 && a.store != nil {
+		record, err := a.store.Run(ctx, id)
+		if err == nil {
+			record.State = store.RunStateRunning
+			record.StartedAt = started
+			if err := a.store.UpdateRun(ctx, record); err != nil {
+				a.logger.Warn("failed to mark run as running", zap.Uint64("run", id), zap.Error(err))
+			}
+		} else {
+			a.logger.Warn("run record not found for in-flight run", zap.Uint64("run", id), zap.Error(err))
+		}
+	}
 	exitCode, output, facts, runErr := a.exec.RunPlaybook(ctx, target.Name, sshScope, pb.WorkingDir, pb.Args()...)
 	finished := time.Now().UTC()
 
@@ -237,18 +262,28 @@ func (a *Ansible) runPlaybook(ctx context.Context, target config.TargetConfig, p
 
 	summaries, tasks := parser.Parse(output)
 
+	state := store.RunStateCompleted
+	canceled := false
+	if ctx.Err() != nil {
+		state = store.RunStateCancelled
+		canceled = true
+		output += "\n[strangle] run canceled"
+	}
 	run := store.RunRecord{
+		ID:           runIDFrom(ctx),
 		Target:       pb.TargetName,
 		Playbook:     pb.Name,
 		StartedAt:    started,
 		FinishedAt:   finished,
 		DurationMS:   finished.Sub(started).Milliseconds(),
 		ExitCode:     exitCode,
-		Success:      runErr == nil && exitCode == 0,
+		Success:      !canceled && runErr == nil && exitCode == 0,
 		Hosts:        len(summaries),
 		ChangedHosts: countStatus(summaries, "changed"),
 		FailedHosts:  countStatus(summaries, "failed"),
 		Output:       output,
+		State:        state,
+		Canceled:     canceled,
 	}
 
 	hostRuns := make([]store.HostRunRecord, 0, len(summaries))

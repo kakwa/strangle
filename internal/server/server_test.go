@@ -26,17 +26,32 @@ func (stubExecutor) RunPlaybook(context.Context, string, string, string, ...stri
 
 // recEnqueuer records every EnqueueRun call and returns a canned response.
 type recEnqueuer struct {
-	mu     sync.Mutex
-	calls  []string
-	status string
-	err    error
+	mu      sync.Mutex
+	calls   []string
+	cancels []string
+	status  string
+	err     error
 }
 
-func (r *recEnqueuer) EnqueueRun(_ context.Context, target, playbook string) (string, error) {
+func (r *recEnqueuer) EnqueueRun(_ context.Context, target, playbook string, _ uint64) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, target+"/"+playbook)
 	return r.status, r.err
+}
+
+// CancelRun records cancellation requests for the cancel-route tests.
+func (r *recEnqueuer) CancelRun(_ context.Context, jobID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cancels = append(r.cancels, jobID)
+	return r.err
+}
+
+func (r *recEnqueuer) canceled() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.cancels...)
 }
 
 func (r *recEnqueuer) called() int {

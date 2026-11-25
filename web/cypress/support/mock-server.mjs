@@ -89,6 +89,7 @@ let runs = [
     exit_code: 0, success: true, hosts: 2, changed_hosts: 0, failed_hosts: 0,
   },
 ]
+const RUNS_FIXTURES = runs.map((r) => ({ ...r }))
 let nextRunID = 5
 
 // Full logs are only returned by the detail endpoint, just like the real API.
@@ -353,6 +354,18 @@ function handleApi(req, res, url) {
     hostkeys = HOSTKEY_FIXTURES.map((k) => ({ ...k }))
     return json(res, 200, { status: 'reset' })
   }
+  if (req.method === 'POST' && p === '/api/_mock/reset-runs') {
+    runs = RUNS_FIXTURES.map((r) => ({ ...r }))
+    runs = [{
+      id: 5, target: 'alpha', playbook: 'web',
+      started_at: iso(5_000), finished_at: '0001-01-01T00:00:00Z', duration_ms: 0,
+      exit_code: 0, success: false, hosts: 0, changed_hosts: 0, failed_hosts: 0,
+      state: 'running', canceled: false, job_id: '42',
+      output: 'PLAY [all] ***\nrunning\n',
+    }, ...runs]
+    nextRunID = 6
+    return json(res, 200, { status: 'reset' })
+  }
   if (req.method === 'POST' && p === '/api/login') {
     let body = ''
     req.on('data', (c) => (body += c))
@@ -405,7 +418,7 @@ function handleApi(req, res, url) {
   if (req.method === 'GET' && runDetail) {
     const run = runs.find((r) => String(r.id) === runDetail[1])
     if (!run) return json(res, 404, { error: `run ${runDetail[1]} not found` })
-    return json(res, 200, { ...run, output: OUTPUTS[run.id] || '' })
+    return json(res, 200, { ...run, output: OUTPUTS[run.id] ?? run.output ?? '' })
   }
   if (req.method === 'GET' && p === '/api/hosts') {
     return json(res, 200, HOSTS)
@@ -425,6 +438,22 @@ function handleApi(req, res, url) {
   }
   if (req.method === 'GET' && p === '/api/orgs') {
     return json(res, 200, ORGS)
+  }
+  const runCancel = p.match(/^\/api\/orgs\/([^/]+)\/collections\/([^/]+)\/runs\/(\d+)\/cancel$/)
+  if (req.method === 'POST' && runCancel) {
+    const org = decodeURIComponent(runCancel[1])
+    const coll = decodeURIComponent(runCancel[2])
+    if (!collectionExists(org, coll)) return json(res, 404, { error: `unknown collection ${org}/${coll}` })
+    const run = runs.find((r) => String(r.id) === runCancel[3])
+    if (!run || run.target !== coll) return json(res, 404, { error: `run ${runCancel[3]} not found` })
+    if (run.state !== 'queued' && run.state !== 'running') {
+      return json(res, 409, { error: 'run is not active' })
+    }
+    run.state = 'cancelled'
+    run.canceled = true
+    run.finished_at = new Date().toISOString()
+    run.output = `${run.output || ''}\n[strangle] run canceled`
+    return json(res, 200, { id: run.id, state: run.state })
   }
   const runTasks = p.match(/^\/api\/orgs\/([^/]+)\/collections\/([^/]+)\/runs\/(\d+)\/tasks$/)
   if (req.method === 'GET' && runTasks) {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/kakwa/strangle/internal/parser"
@@ -30,6 +31,9 @@ type Run struct {
 	ChangedHosts int
 	FailedHosts  int
 	Output       string `gorm:"type:text"`
+	State        string `gorm:"size:32;index"`
+	Canceled     bool
+	JobID        string `gorm:"size:64;index"`
 }
 
 // Host is the current state of a host within one target.
@@ -131,10 +135,88 @@ func Open(ctx context.Context, dsn string) (*DB, error) {
 	return &DB{db: gdb}, nil
 }
 
+// runIDCounter allocates run IDs before the database assigns them. Runs are
+// created before their queue job is inserted, so the ID must come from here.
+var runIDCounter atomic.Uint64
+
+func init() {
+	runIDCounter.Store(uint64(time.Now().UnixNano()))
+}
+
+func (d *DB) CreateRun(ctx context.Context, in *store.RunRecord) error {
+	run := toRunModel(*in)
+	if run.ID == 0 {
+		run.ID = runIDCounter.Add(1)
+		in.ID = run.ID
+	}
+	if run.StartedAt.IsZero() {
+		run.StartedAt = time.Now().UTC()
+		in.StartedAt = run.StartedAt
+	}
+	if run.State == "" {
+		run.State = store.RunStateQueued
+		in.State = run.State
+	}
+	if err := d.db.WithContext(ctx).Create(&run).Error; err != nil {
+		return fmt.Errorf("insert run: %w", err)
+	}
+	*in = fromRunModel(run)
+	return nil
+}
+
+func (d *DB) UpdateRun(ctx context.Context, in store.RunRecord) error {
+	run := toRunModel(in)
+	res := d.db.WithContext(ctx).Model(&Run{}).Where("id = ?", in.ID).Updates(map[string]any{
+		"target": run.Target, "playbook": run.Playbook, "started_at": run.StartedAt,
+		"finished_at": run.FinishedAt, "duration_ms": run.DurationMS, "exit_code": run.ExitCode,
+		"success": run.Success, "hosts": run.Hosts, "changed_hosts": run.ChangedHosts,
+		"failed_hosts": run.FailedHosts, "output": run.Output, "state": run.State,
+		"canceled": run.Canceled, "job_id": run.JobID,
+	})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
 func (d *DB) SaveRun(ctx context.Context, in store.RunInput) error {
 	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		run := toRunModel(in.Run)
-		if err := tx.Create(&run).Error; err != nil {
+		if in.Run.ID != 0 {
+			var existing Run
+			err := tx.Where("id = ?", in.Run.ID).First(&existing).Error
+			if err == nil {
+				run.ID = existing.ID
+				// The job ID is written by the enqueuer after the job is
+				// inserted and can race with a fast worker; never clear it
+				// when finalizing a run.
+				if run.JobID == "" {
+					run.JobID = existing.JobID
+				}
+				if existing.Canceled {
+					run.State = store.RunStateCancelled
+					run.Canceled = true
+				}
+				// Preserve the ID allocated at creation time; gorm's Create with
+				// an existing primary key would otherwise conflict.
+				if err := tx.Model(&Run{}).Where("id = ?", run.ID).Updates(map[string]any{
+					"target": run.Target, "playbook": run.Playbook, "started_at": run.StartedAt,
+					"finished_at": run.FinishedAt, "duration_ms": run.DurationMS, "exit_code": run.ExitCode,
+					"success": run.Success, "hosts": run.Hosts, "changed_hosts": run.ChangedHosts,
+					"failed_hosts": run.FailedHosts, "output": run.Output, "state": run.State,
+					"canceled": run.Canceled, "job_id": run.JobID,
+				}).Error; err != nil {
+					return fmt.Errorf("update run: %w", err)
+				}
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			} else if err := tx.Create(&run).Error; err != nil {
+				return fmt.Errorf("insert run: %w", err)
+			}
+		} else if err := tx.Create(&run).Error; err != nil {
 			return fmt.Errorf("insert run: %w", err)
 		}
 
@@ -588,6 +670,9 @@ func toRunModel(r store.RunRecord) Run {
 		ChangedHosts: r.ChangedHosts,
 		FailedHosts:  r.FailedHosts,
 		Output:       r.Output,
+		State:        r.State,
+		Canceled:     r.Canceled,
+		JobID:        r.JobID,
 	}
 }
 
@@ -605,6 +690,9 @@ func fromRunModel(r Run) store.RunRecord {
 		ChangedHosts: r.ChangedHosts,
 		FailedHosts:  r.FailedHosts,
 		Output:       r.Output,
+		State:        r.State,
+		Canceled:     r.Canceled,
+		JobID:        r.JobID,
 	}
 }
 

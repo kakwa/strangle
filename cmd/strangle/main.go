@@ -14,7 +14,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -557,14 +559,16 @@ func run(cmd *cobra.Command, args []string) error {
 	var enqueue server.RunEnqueuer
 	if cfg.Server.Database.DSN != "" {
 		var err error
-		queue, err = riverqueue.Open(ctx, cfg.Server.Database.DSN, cfg.Server.Workers, apr.Trigger, logger)
+		queue, err = riverqueue.Open(ctx, cfg.Server.Database.DSN, cfg.Server.Workers, func(ctx context.Context, target, playbook string, runID uint64) error {
+			return apr.Trigger(applier.WithRunID(ctx, runID), target, playbook)
+		}, logger)
 		if err != nil {
 			_ = mgr.Stop()
 			return fmt.Errorf("failed to initialize job queue: %w", err)
 		}
 		enqueue = queue
 	} else {
-		enqueue = directEnqueuer{apr: apr, logger: logger}
+		enqueue = &directEnqueuer{apr: apr, logger: logger, cancels: map[string]context.CancelFunc{}}
 	}
 
 	// Read the live target list on every reconcile: git-backed targets gain
@@ -583,8 +587,19 @@ func run(cmd *cobra.Command, args []string) error {
 		return jobs
 	}
 	runScheduled := func(ctx context.Context, target, playbook string) error {
-		_, err := enqueue.EnqueueRun(ctx, target, playbook)
-		return err
+		record := store.RunRecord{Target: target, Playbook: playbook, State: store.RunStateQueued}
+		if err := st.CreateRun(ctx, &record); err != nil {
+			return err
+		}
+		jobID, err := enqueue.EnqueueRun(ctx, target, playbook, record.ID)
+		if err != nil {
+			return err
+		}
+		record.JobID = jobID
+		if err := st.UpdateRun(ctx, record); err != nil {
+			logger.Warn("failed to store job ID for scheduled run", zap.Uint64("run", record.ID), zap.Error(err))
+		}
+		return nil
 	}
 	sched := scheduler.New(cfg.Server.Interval, jobProvider, runScheduled, logger)
 	var syncer server.Syncer
@@ -632,16 +647,31 @@ func run(cmd *cobra.Command, args []string) error {
 
 // directEnqueuer runs a playbook in a background goroutine. It is used when
 // no database is configured and there is no job queue to back manual runs.
+// It still supports cancellation by tracking each run's context.
 type directEnqueuer struct {
-	apr    *applier.Ansible
-	logger *zap.Logger
+	apr     *applier.Ansible
+	logger  *zap.Logger
+	mu      sync.Mutex
+	nextID  uint64
+	cancels map[string]context.CancelFunc
 }
 
-func (d directEnqueuer) EnqueueRun(_ context.Context, target, playbook string) (string, error) {
+func (d *directEnqueuer) EnqueueRun(_ context.Context, target, playbook string, runID uint64) (string, error) {
+	d.mu.Lock()
+	d.nextID++
+	id := strconv.FormatUint(d.nextID, 10)
+	ctx, cancel := context.WithTimeout(applier.WithRunID(context.Background(), runID), 30*time.Minute)
+	d.cancels[id] = cancel
+	d.mu.Unlock()
+
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-		if err := d.apr.Trigger(ctx, target, playbook); err != nil {
+		defer func() {
+			cancel()
+			d.mu.Lock()
+			delete(d.cancels, id)
+			d.mu.Unlock()
+		}()
+		if err := d.apr.Trigger(ctx, target, playbook); err != nil && !errors.Is(err, context.Canceled) {
 			d.logger.Error("run failed",
 				zap.String("target", target),
 				zap.String("playbook", playbook),
@@ -649,7 +679,19 @@ func (d directEnqueuer) EnqueueRun(_ context.Context, target, playbook string) (
 			)
 		}
 	}()
-	return "started", nil
+	return id, nil
+}
+
+// CancelRun cancels the context of a direct run.
+func (d *directEnqueuer) CancelRun(_ context.Context, jobID string) error {
+	d.mu.Lock()
+	cancel, ok := d.cancels[jobID]
+	d.mu.Unlock()
+	if !ok {
+		return errors.New("run is no longer active")
+	}
+	cancel()
+	return nil
 }
 
 func queueMode(queue *riverqueue.Client) string {

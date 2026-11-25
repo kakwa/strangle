@@ -27,10 +27,17 @@ import (
 
 // RunEnqueuer accepts a request to run one playbook now. In production this
 // enqueues a river job; without a database it runs the playbook directly.
-// It returns a short status word for the API response ("queued" for a
-// background job, "started" for a direct run).
+// runID is the store record created for this run; the returned string is the
+// queue job ID (used by the cancel endpoint).
 type RunEnqueuer interface {
-	EnqueueRun(ctx context.Context, target, playbook string) (string, error)
+	EnqueueRun(ctx context.Context, target, playbook string, runID uint64) (string, error)
+}
+
+// RunCanceler cancels a queued or running playbook job. It is a separate
+// interface so enqueuers that cannot cancel (e.g. the direct, no-database
+// path) can still serve runs.
+type RunCanceler interface {
+	CancelRun(ctx context.Context, jobID string) error
 }
 
 // WorkerReporter reports the state of the master's worker pool. It is nil
@@ -620,22 +627,97 @@ func (s *Server) Routes() http.Handler {
 			return
 		}
 		// req.Playbook is the job name from strangle.yml, not a file path.
-		// The run happens in the background (a river job, or a direct run
-		// without a database); the UI sees it appear in /api/runs when it
-		// finishes.
-		status, err := s.run.EnqueueRun(r.Context(), req.Target, req.Playbook)
+		// Reserve a run record now so the run has an ID before it finishes
+		// and can be canceled while in flight.
+		record := store.RunRecord{
+			Target:   req.Target,
+			Playbook: req.Playbook,
+			State:    store.RunStateQueued,
+		}
+		if s.store != nil {
+			if err := s.store.CreateRun(r.Context(), &record); err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+		}
+		jobID, err := s.run.EnqueueRun(r.Context(), req.Target, req.Playbook, record.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		writeJSON(w, http.StatusAccepted, map[string]string{
-			"status":   status,
+		record.JobID = jobID
+		if s.store != nil && record.ID != 0 {
+			if err := s.store.UpdateRun(r.Context(), record); err != nil {
+				s.logger.Warn("failed to store job ID for run", zap.Uint64("run", record.ID), zap.Error(err))
+			}
+		}
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"status":   "queued",
 			"target":   req.Target,
 			"playbook": req.Playbook,
+			"run_id":   record.ID,
 		})
 	}
 	apiHandler(mux, "POST", apiPrefix+"/run", handleRun)
 	mux.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/run", s.withCollectionAccess(handleRun))
+
+	// Cancel a queued or running playbook run. Only the versioned,
+	// collection-scoped route exists: a run belongs to one collection and
+	// cancelling it through a sibling collection would bypass the membership
+	// check.
+	handleCancelRun := s.withCollectionAccess(func(w http.ResponseWriter, r *http.Request) {
+		coll, ok := s.collectionScope(r)
+		if !ok {
+			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
+			return
+		}
+		id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
+		if err != nil || id == 0 {
+			writeError(w, http.StatusBadRequest, errors.New("invalid run ID"))
+			return
+		}
+		if s.store == nil {
+			writeError(w, http.StatusNotFound, errors.New("run store unavailable"))
+			return
+		}
+		record, err := s.store.Run(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				writeError(w, http.StatusNotFound, err)
+			} else {
+				writeError(w, http.StatusInternalServerError, err)
+			}
+			return
+		}
+		if record.Target != coll || !targetVisible(s.accessibleTargets(r.Context(), r), record.Target) {
+			writeError(w, http.StatusNotFound, store.ErrNotFound)
+			return
+		}
+		if record.State != store.RunStateQueued && record.State != store.RunStateRunning {
+			writeError(w, http.StatusConflict, errors.New("run is not active"))
+			return
+		}
+		canceler, ok := s.run.(RunCanceler)
+		if !ok {
+			writeError(w, http.StatusNotImplemented, errors.New("run cancellation is not available"))
+			return
+		}
+		if record.JobID == "" {
+			writeError(w, http.StatusConflict, errors.New("run has no queue job"))
+			return
+		}
+		if err := canceler.CancelRun(r.Context(), record.JobID); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		record.State = store.RunStateCancelled
+		record.Canceled = true
+		if err := s.store.UpdateRun(context.WithoutCancel(r.Context()), record); err != nil {
+			s.logger.Warn("failed to record run cancellation", zap.Uint64("run", id), zap.Error(err))
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"id": id, "state": store.RunStateCancelled})
+	})
+	mux.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/runs/{id}/cancel", handleCancelRun)
 
 	// /api/v1/sync is the webhook for git-backed collections: it moves the
 	// target's checkout to its tracked ref (or to the given branch, which
