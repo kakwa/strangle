@@ -124,6 +124,8 @@ shows a login screen; the header shows the signed-in user and a log-out
 button:
 
 - `/` — **Dashboard**: fleet stats and the most recent runs.
+- `/runs/{id}` — **Run detail**: metadata and the full captured output,
+  fetched only when the run is opened.
 - `/hosts` — **Hosts**: the host table with last status and disappearance state.
 - `/hosts/{host}` — **Host detail**: the last runs for that host, plus its task
   traces with expandable diffs and errors.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,7 @@ func seedTargetRun(t *testing.T, st store.Store, target string) {
 		Run: store.RunRecord{
 			Target: target, Playbook: "site", StartedAt: now, FinishedAt: now,
 			Success: true, Hosts: 1,
+			Output: "PLAY [all] ***\nfull output for " + target + "\n",
 		},
 		Hosts: []store.HostRunRecord{{Host: "web1", Status: "ok", Ok: 1}},
 	}); err != nil {
@@ -176,5 +178,65 @@ func TestCollectionScopedRunsAndRun(t *testing.T) {
 	rec = post("/api/v1/orgs/default/collections/edge/run", `{"playbook":"site"}`)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("POST run with wrong org: status = %d, want 404", rec.Code)
+	}
+}
+
+func TestRunDetailAndListingWithoutOutput(t *testing.T) {
+	st := store.NewMem()
+	seedTargetRun(t, st, "home")
+	enq := &recEnqueuer{status: "queued"}
+	s := newOrgTestServer(enq, st)
+
+	all, err := st.ListRuns(context.Background(), 10)
+	if err != nil || len(all) != 1 {
+		t.Fatalf("ListRuns() = %v, %v", all, err)
+	}
+	id := strconv.FormatUint(all[0].ID, 10)
+	wantOutput := "PLAY [all] ***\nfull output for home\n"
+
+	// The polling listing must not ship the full log 50 times over.
+	rec := doGet(t, s, "/api/runs")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET runs: status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var listed []store.RunRecord
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode runs: %v", err)
+	}
+	if len(listed) != 1 || listed[0].Output != "" {
+		t.Fatalf("listed runs = %+v, want one run without output", listed)
+	}
+
+	for _, path := range []string{
+		"/api/runs/" + id,
+		"/api/v1/runs/" + id,
+		"/api/v1/orgs/default/collections/home/runs/" + id,
+	} {
+		rec = doGet(t, s, path)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: status = %d, body %s", path, rec.Code, rec.Body.String())
+		}
+		var detail store.RunRecord
+		if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		if detail.Output != wantOutput {
+			t.Errorf("GET %s output = %q, want %q", path, detail.Output, wantOutput)
+		}
+	}
+
+	// A run from another collection is not reachable through this path, and
+	// bad or unknown IDs get their usual 400/404.
+	for _, tc := range []struct {
+		path string
+		code int
+	}{
+		{"/api/v1/orgs/lab/collections/edge/runs/" + id, http.StatusNotFound},
+		{"/api/runs/999999", http.StatusNotFound},
+		{"/api/runs/nope", http.StatusBadRequest},
+	} {
+		if rec = doGet(t, s, tc.path); rec.Code != tc.code {
+			t.Errorf("GET %s: status = %d, want %d (body %s)", tc.path, rec.Code, tc.code, rec.Body.String())
+		}
 	}
 }

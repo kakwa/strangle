@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 
@@ -147,6 +148,18 @@ func (s *Mem) ListRuns(_ context.Context, limit int) ([]RunRecord, error) {
 		out = append(out, s.runs[i])
 	}
 	return out, nil
+}
+
+func (s *Mem) Run(_ context.Context, id uint64) (RunRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for i := len(s.runs) - 1; i >= 0; i-- {
+		if s.runs[i].ID == id {
+			return s.runs[i], nil
+		}
+	}
+	return RunRecord{}, fmt.Errorf("run %d: %w", id, ErrNotFound)
 }
 
 func (s *Mem) ListHosts(_ context.Context) ([]HostRecord, error) {

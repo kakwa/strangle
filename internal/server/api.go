@@ -83,6 +83,14 @@ func (s *Server) collectionRuns(ctx context.Context, collection string, limit in
 	return out, nil
 }
 
+// runSummary is a run record without the full captured output. Listings poll
+// every few seconds; returning 50 playbook logs on each poll wastes bandwidth
+// and memory. The detail endpoint is the only place that returns output.
+func runSummary(run store.RunRecord) store.RunRecord {
+	run.Output = ""
+	return run
+}
+
 // collectionStats returns aggregate stats for one collection.
 func (s *Server) collectionStats(ctx context.Context, collection string) (*store.Stats, error) {
 	return s.statsForTargets(ctx, map[string]bool{collection: true})

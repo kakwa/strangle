@@ -339,13 +339,53 @@ func (s *Server) Routes() http.Handler {
 		visible := make([]store.RunRecord, 0, len(runs))
 		for _, run := range runs {
 			if targetVisible(allowed, run.Target) {
-				visible = append(visible, run)
+				visible = append(visible, runSummary(run))
 			}
 		}
 		writeJSON(w, http.StatusOK, visible)
 	}
 	apiHandler(mux, "GET", apiPrefix+"/runs", handleRuns)
 	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/runs", s.withCollectionAccess(handleRuns))
+
+	// Run detail: the only endpoint that includes the full captured output.
+	// On collection-scoped paths a run from a sibling collection is a 404, so
+	// even guessing another collection's run ID does not reveal its log.
+	handleRunDetail := func(w http.ResponseWriter, r *http.Request) {
+		coll, ok := s.collectionScope(r)
+		if !ok {
+			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
+			return
+		}
+		id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
+		if err != nil || id == 0 {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid run id %q", r.PathValue("id")))
+			return
+		}
+		run, err := s.store.Run(r.Context(), id)
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if coll != "" && run.Target != coll {
+			writeError(w, http.StatusNotFound, fmt.Errorf("run %d not found in collection %q", id, coll))
+			return
+		}
+		allowed := s.accessibleTargets(r.Context(), r)
+		if coll != "" {
+			allowed = map[string]bool{coll: true}
+		}
+		if !targetVisible(allowed, run.Target) {
+			writeError(w, http.StatusNotFound, errors.New("run not found"))
+			return
+		}
+		writeJSON(w, http.StatusOK, run)
+	}
+	apiHandler(mux, "GET", apiPrefix+"/runs/{id}", handleRunDetail)
+	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/runs/{id}", s.withCollectionAccess(handleRunDetail))
 
 	handleHosts := func(w http.ResponseWriter, r *http.Request) {
 		coll, ok := s.collectionScope(r)

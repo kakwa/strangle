@@ -70,6 +70,7 @@ func TestDBRoundTrip(t *testing.T) {
 			Target: "home", Playbook: "site.yml",
 			StartedAt: t1.Add(-30 * time.Second), FinishedAt: t1,
 			DurationMS: 30000, ExitCode: 0, Success: true, Hosts: 2, ChangedHosts: 1,
+			Output: "PLAY [all] ***\ndb output\n",
 		},
 		Hosts: []store.HostRunRecord{
 			{Target: "home", Host: "h1", Status: "changed", Ok: 10, Changed: 2},
@@ -92,6 +93,13 @@ func TestDBRoundTrip(t *testing.T) {
 	}
 	if runs[0].ID == 0 {
 		t.Fatal("run ID not assigned")
+	}
+	full, err := d.Run(ctx, runs[0].ID)
+	if err != nil || full.Output != "PLAY [all] ***\ndb output\n" {
+		t.Fatalf("Run() = %+v, %v; want the captured output", full, err)
+	}
+	if _, err := d.Run(ctx, 999999); err == nil {
+		t.Error("Run(unknown) error = nil, want an error")
 	}
 
 	hosts, err := d.ListHosts(ctx)

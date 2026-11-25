@@ -302,6 +302,17 @@ func (d *DB) ListRuns(ctx context.Context, limit int) ([]store.RunRecord, error)
 	return out, nil
 }
 
+func (d *DB) Run(ctx context.Context, id uint64) (store.RunRecord, error) {
+	var run Run
+	if err := d.db.WithContext(ctx).First(&run, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return store.RunRecord{}, fmt.Errorf("run %d: %w", id, store.ErrNotFound)
+		}
+		return store.RunRecord{}, err
+	}
+	return fromRunModel(run), nil
+}
+
 func (d *DB) ListHosts(ctx context.Context) ([]store.HostRecord, error) {
 	var hosts []Host
 	if err := d.db.WithContext(ctx).Order("target, name").Find(&hosts).Error; err != nil {

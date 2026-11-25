@@ -50,11 +50,12 @@ Org and collection resources exist only under the versioned prefix:
   its playbooks and links to its sub-resources.
 
 Collection-scoped aliases are available for the data endpoints:
-`runs`, `hosts`, `hosts/{host}/runs`, `hosts/{host}/changes`, `playbooks`,
-`stats`, and `POST run` / `POST sync`. For example:
+`runs`, `runs/{id}`, `hosts`, `hosts/{host}/runs`, `hosts/{host}/changes`,
+`playbooks`, `stats`, and `POST run` / `POST sync`. For example:
 
 ```
 GET  /api/v1/orgs/lab/collections/edge/runs
+GET  /api/v1/orgs/lab/collections/edge/runs/1234
 GET  /api/v1/orgs/lab/collections/edge/hosts
 POST /api/v1/orgs/lab/collections/edge/run
 ```
@@ -214,6 +215,32 @@ Fleet statistics, derived from the stored history.
 ## GET /api/runs
 
 Runs, newest first. `?limit=` defaults to 50. Each run:
+
+```json
+{
+  "id": 1234,
+  "target": "home",
+  "playbook": "hypervisors",
+  "started_at": "...",
+  "finished_at": "...",
+  "duration_ms": 68500,
+  "exit_code": 0,
+  "success": true,
+  "hosts": 8,
+  "changed_hosts": 2,
+  "failed_hosts": 0
+}
+```
+
+This is the listing the UI polls: it deliberately does **not** include the
+captured output. Use the detail endpoint below to read it.
+
+## GET /api/v1/orgs/{org}/collections/{collection}/runs/{id}
+
+One run, including its full `output`. Flat aliases: `GET /api/v1/runs/{id}`
+and `GET /api/runs/{id}`. On a collection-scoped path a run belonging to a
+different collection is answered with `404`, so guessing an ID does not leak
+another collection's log. Unknown IDs are `404`, malformed IDs are `400`.
 
 ```json
 {

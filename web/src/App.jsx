@@ -243,7 +243,7 @@ function DiffBlock({ diff, error }) {
   )
 }
 
-function Dashboard({ stats, runs, hosts, onHost }) {
+function Dashboard({ stats, runs, hosts, onHost, onRun }) {
   const disappeared = hosts.filter((h) => !h.active && h.in_inventory)
   return (
     <Stack gap="md">
@@ -290,7 +290,7 @@ function Dashboard({ stats, runs, hosts, onHost }) {
 
       <Card withBorder id="dash-runs">
         <Title order={4} mb="sm">Recent runs</Title>
-        <RunsTable runs={runs} onHost={onHost} />
+        <RunsTable runs={runs} onRun={onRun} />
       </Card>
 
       <Card withBorder id="dash-playbooks">
@@ -322,12 +322,12 @@ function Dashboard({ stats, runs, hosts, onHost }) {
   )
 }
 
-function RunsTable({ runs, onHost }) {
+function RunsTable({ runs, onRun }) {
   return (
     <Table>
       <Table.Thead>
         <Table.Tr>
-          <Table.Th>Playbook</Table.Th>
+          <Table.Th>Run</Table.Th>
           <Table.Th>Started</Table.Th>
           <Table.Th>Duration</Table.Th>
           <Table.Th>Result</Table.Th>
@@ -339,7 +339,18 @@ function RunsTable({ runs, onHost }) {
       <Table.Tbody>
         {runs.map((r) => (
           <Table.Tr key={r.id}>
-            <Table.Td>{r.playbook}</Table.Td>
+            <Table.Td>
+              <Group gap="xs" wrap="nowrap">
+                <Text size="xs" c="dimmed">#{r.id}</Text>
+                <UnstyledButton
+                  onClick={() => onRun(r.id)}
+                  title="View captured output"
+                  style={{ color: 'var(--mantine-color-blue-7)', textDecoration: 'underline' }}
+                >
+                  {r.playbook}
+                </UnstyledButton>
+              </Group>
+            </Table.Td>
             <Table.Td>{fmtTime(r.started_at)}</Table.Td>
             <Table.Td>{fmtDuration(r.duration_ms)}</Table.Td>
             <Table.Td>
@@ -642,6 +653,72 @@ function HostDetail({ host, onBack }) {
   )
 }
 
+// RunDetail shows one run's full captured output. The output is deliberately
+// not part of the polling list: it is fetched only when this view is opened.
+function RunDetail({ onBack }) {
+  const { id } = useParams()
+  const [run, setRun] = useState(null)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    let active = true
+    setRun(null)
+    setError(null)
+    fetch(`/api/runs/${encodeURIComponent(id)}`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return asObject(await res.json())
+      })
+      .then((data) => { if (active) setRun(data) })
+      .catch((err) => { if (active) setError(err.message) })
+    return () => { active = false }
+  }, [id])
+
+  return (
+    <Stack gap="md">
+      <Card withBorder>
+        <Group justify="space-between" wrap="nowrap">
+          <Group gap="sm" align="center">
+            <Text fw="bold">Run #{id}</Text>
+            {run && (
+              <Badge color={run.success ? 'green' : 'red'} variant="light">
+                {run.success ? 'ok' : `exit ${run.exit_code}`}
+              </Badge>
+            )}
+          </Group>
+          <Text size="sm" c="dimmed" onClick={onBack} style={{ cursor: 'pointer' }}>
+            ← back to dashboard
+          </Text>
+        </Group>
+        {run && (
+          <Group gap="lg" mt="md" wrap="wrap">
+            <Text size="sm"><Text component="span" c="dimmed">Collection:</Text> {run.target}</Text>
+            <Text size="sm"><Text component="span" c="dimmed">Playbook:</Text> {run.playbook}</Text>
+            <Text size="sm"><Text component="span" c="dimmed">Started:</Text> {fmtTime(run.started_at)}</Text>
+            <Text size="sm"><Text component="span" c="dimmed">Duration:</Text> {fmtDuration(run.duration_ms)}</Text>
+            <Text size="sm"><Text component="span" c="dimmed">Hosts:</Text> {run.hosts}</Text>
+            <Text size="sm"><Text component="span" c="dimmed">Changed:</Text> {run.changed_hosts}</Text>
+            <Text size="sm"><Text component="span" c="dimmed">Failed:</Text> {run.failed_hosts}</Text>
+          </Group>
+        )}
+      </Card>
+
+      {error && <Alert color="red" title="Could not load the run">{error}</Alert>}
+      {!error && !run && <Center py="xl"><Loader /></Center>}
+      {run && (
+        <Card withBorder>
+          <Title order={4} mb="sm">Captured output</Title>
+          <div style={{ ...CODE_BLOCK_STYLE, maxHeight: 600 }}>
+            <Text component="pre" size="xs" ff="monospace" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
+              {run.output || 'No output captured for this run.'}
+            </Text>
+          </div>
+        </Card>
+      )}
+    </Stack>
+  )
+}
+
 function ColorSchemeToggle() {
   const { colorScheme, toggleColorScheme } = useMantineColorScheme()
   return (
@@ -843,6 +920,8 @@ function sectionFromPath(pathname) {
   if (hostMatch) {
     return { section: 'Hosts', selectedHost: safeDecode(hostMatch[1]) }
   }
+  const runMatch = pathname.match(/^\/runs\/(\d+)$/)
+  if (runMatch) return { section: 'Dashboard', selectedRun: runMatch[1] }
   if (pathname === '/hosts') return { section: 'Hosts', selectedHost: null }
   if (pathname === '/playbooks') return { section: 'Playbooks', selectedHost: null }
   if (pathname === '/tokens') return { section: 'Tokens', selectedHost: null }
@@ -929,7 +1008,7 @@ function AppInner({ user, onLogout }) {
   // screen (dashboard, host list, a single host, playbooks) is bookmarkable.
   const location = useLocation()
   const navigate = useNavigate()
-  const { section, selectedHost } = sectionFromPath(location.pathname)
+  const { section, selectedHost, selectedRun } = sectionFromPath(location.pathname)
 
   const refresh = useCallback(async () => {
     try {
@@ -1002,6 +1081,11 @@ function AppInner({ user, onLogout }) {
     navigate(`/hosts/${encodeURIComponent(name)}`)
   }
 
+  const openRun = (id) => {
+    closeMobile()
+    navigate(`/runs/${encodeURIComponent(id)}`)
+  }
+
   const goSection = (label) => {
     closeMobile()
     if (label === 'Hosts') navigate('/hosts')
@@ -1010,8 +1094,11 @@ function AppInner({ user, onLogout }) {
     else navigate('/')
   }
 
-  const headerTitle =
-    section === 'Hosts' && selectedHost ? selectedHost : section
+  const headerTitle = selectedRun
+    ? `Run #${selectedRun}`
+    : section === 'Hosts' && selectedHost
+      ? selectedHost
+      : section
 
   return (
     <AppShell
@@ -1077,7 +1164,7 @@ function AppInner({ user, onLogout }) {
             <Routes>
               <Route
                 path="/"
-                element={<Dashboard stats={stats} runs={runs} hosts={hosts} onHost={openHost} />}
+                element={<Dashboard stats={stats} runs={runs} hosts={hosts} onHost={openHost} onRun={openRun} />}
               />
               <Route
                 path="/hosts"
@@ -1108,6 +1195,10 @@ function AppInner({ user, onLogout }) {
                 }
               />
               <Route path="/tokens" element={<TokensView />} />
+              <Route
+                path="/runs/:id"
+                element={<RunDetail onBack={() => navigate('/')} />}
+              />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           )}

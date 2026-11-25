@@ -83,6 +83,14 @@ let runs = [
 ]
 let nextRunID = 5
 
+// Full logs are only returned by the detail endpoint, just like the real API.
+const OUTPUTS = {
+  4: 'PLAY [databases] ***\nTASK [Restore backup] ***\nfatal: connection refused\n',
+  3: 'PLAY [web] ***\nTASK [Update Nginx config] ***\nchanged: [web-01]\n',
+  2: 'PLAY [bootstrap] ***\nTASK [Install packages] ***\nok: [db-01]\n',
+  1: 'PLAY [common] ***\nTASK [Set timezone] ***\nok: [web-01]\n',
+}
+
 const STATS = {
   hosts: { total: 5, in_inventory: 4, active: 4, disappeared: 1 },
   runs: { total: 4, succeeded: 3, failed: 1, avg_duration_ms: 4975, last_run_at: iso(10 * MIN) },
@@ -293,6 +301,12 @@ function handleApi(req, res, url) {
   if (req.method === 'GET' && p === '/api/runs') {
     const limit = Number(url.searchParams.get('limit') || 50)
     return json(res, 200, runs.slice(0, limit))
+  }
+  const runDetail = p.match(/^\/api\/runs\/(\d+)$/)
+  if (req.method === 'GET' && runDetail) {
+    const run = runs.find((r) => String(r.id) === runDetail[1])
+    if (!run) return json(res, 404, { error: `run ${runDetail[1]} not found` })
+    return json(res, 200, { ...run, output: OUTPUTS[run.id] || '' })
   }
   if (req.method === 'GET' && p === '/api/hosts') {
     return json(res, 200, HOSTS)

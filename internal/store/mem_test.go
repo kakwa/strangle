@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -31,7 +32,11 @@ func TestMemSaveRunAndQueries(t *testing.T) {
 	t2 := t1.Add(time.Hour)
 
 	in := RunInput{
-		Run: testRun("home", "site.yml", t1),
+		Run: func() RunRecord {
+			r := testRun("home", "site.yml", t1)
+			r.Output = "PLAY [all] ***\nfull output\n"
+			return r
+		}(),
 		Hosts: []HostRunRecord{
 			{Target: "home", Host: "h1", Status: "changed", Ok: 10, Changed: 2},
 			{Target: "home", Host: "h2", Status: "ok", Ok: 10},
@@ -53,6 +58,13 @@ func TestMemSaveRunAndQueries(t *testing.T) {
 	}
 	if runs[0].ID == 0 {
 		t.Error("run ID not assigned")
+	}
+	full, err := s.Run(ctx, runs[0].ID)
+	if err != nil || full.Output != "PLAY [all] ***\nfull output\n" {
+		t.Errorf("Run() = %+v, %v; want the captured output", full, err)
+	}
+	if _, err := s.Run(ctx, 999); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Run(unknown) error = %v, want ErrNotFound", err)
 	}
 
 	hosts, err := s.ListHosts(ctx)

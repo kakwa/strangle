@@ -5,14 +5,18 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
+// ErrNotFound is returned by Store lookups when no record has that ID.
+var ErrNotFound = errors.New("record not found")
+
 // RunRecord is one playbook execution.
 type RunRecord struct {
-	ID       uint64    `json:"id"`
-	Target   string    `json:"target"`
-	Playbook string    `json:"playbook"`
+	ID           uint64    `json:"id"`
+	Target       string    `json:"target"`
+	Playbook     string    `json:"playbook"`
 	StartedAt    time.Time `json:"started_at"`
 	FinishedAt   time.Time `json:"finished_at"`
 	DurationMS   int64     `json:"duration_ms"`
@@ -43,35 +47,35 @@ type HostRecord struct {
 
 // HostRunRecord is a host's recap line for one run, joined with the run.
 type HostRunRecord struct {
-	RunID        uint64    `json:"run_id"`
-	Target       string    `json:"target"`
-	Host         string    `json:"host"`
-	Playbook     string    `json:"playbook"`
-	StartedAt    time.Time `json:"started_at"`
-	DurationMS   int64     `json:"duration_ms"`
-	ExitCode     int       `json:"exit_code"`
-	Success      bool      `json:"success"`
-	Status       string    `json:"status"`
-	Ok           int       `json:"ok"`
-	Changed      int       `json:"changed"`
-	Failed       int       `json:"failed"`
-	Unreachable  int       `json:"unreachable"`
-	Skipped      int       `json:"skipped"`
-	Rescued      int       `json:"rescued"`
-	Ignored      int       `json:"ignored"`
+	RunID       uint64    `json:"run_id"`
+	Target      string    `json:"target"`
+	Host        string    `json:"host"`
+	Playbook    string    `json:"playbook"`
+	StartedAt   time.Time `json:"started_at"`
+	DurationMS  int64     `json:"duration_ms"`
+	ExitCode    int       `json:"exit_code"`
+	Success     bool      `json:"success"`
+	Status      string    `json:"status"`
+	Ok          int       `json:"ok"`
+	Changed     int       `json:"changed"`
+	Failed      int       `json:"failed"`
+	Unreachable int       `json:"unreachable"`
+	Skipped     int       `json:"skipped"`
+	Rescued     int       `json:"rescued"`
+	Ignored     int       `json:"ignored"`
 }
 
 // TaskStateRecord is the latest known state of one task on one host.
 type TaskStateRecord struct {
 	Target        string     `json:"target"`
 	Host          string     `json:"host"`
-	Task          string      `json:"task"`
-	Status        string      `json:"status"`
-	LastRunID     uint64      `json:"last_run_id"`
-	LastRunAt     time.Time   `json:"last_run_at"`
-	LastChangedAt *time.Time  `json:"last_changed_at,omitempty"`
-	LastDiff      string      `json:"last_diff,omitempty"`
-	LastError     string      `json:"last_error,omitempty"`
+	Task          string     `json:"task"`
+	Status        string     `json:"status"`
+	LastRunID     uint64     `json:"last_run_id"`
+	LastRunAt     time.Time  `json:"last_run_at"`
+	LastChangedAt *time.Time `json:"last_changed_at,omitempty"`
+	LastDiff      string     `json:"last_diff,omitempty"`
+	LastError     string     `json:"last_error,omitempty"`
 }
 
 // PlaybookStats is the per-(target, playbook) run breakdown in Stats.
@@ -135,8 +139,11 @@ type InventoryHost struct {
 type Store interface {
 	// SaveRun atomically persists one playbook run and updates host state.
 	SaveRun(ctx context.Context, in RunInput) error
-	// ListRuns returns up to limit runs, newest first.
+	// ListRuns returns up to limit runs, newest first. Run summaries need not
+	// carry the full captured output.
 	ListRuns(ctx context.Context, limit int) ([]RunRecord, error)
+	// Run returns one run by ID, including its full captured output.
+	Run(ctx context.Context, id uint64) (RunRecord, error)
 	// ListHosts returns all known hosts.
 	ListHosts(ctx context.Context) ([]HostRecord, error)
 	// HostRuns returns up to limit of the host's runs (across all targets),

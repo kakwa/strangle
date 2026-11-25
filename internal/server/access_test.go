@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -76,6 +77,26 @@ func TestCollectionRestrictions(t *testing.T) {
 	}
 	if rec = getAuthWith(t, s, "/api/v1/orgs/lab/collections/edge/runs", headers); rec.Code != http.StatusOK {
 		t.Errorf("GET edge runs: status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	// Run details carry full output, so they must respect the same membership
+	// rules as the listing.
+	runs, err := st.ListRuns(context.Background(), 10)
+	if err != nil || len(runs) != 2 {
+		t.Fatalf("ListRuns() = %v, %v", runs, err)
+	}
+	ids := map[string]string{}
+	for _, run := range runs {
+		ids[run.Target] = strconv.FormatUint(run.ID, 10)
+	}
+	if rec = getAuthWith(t, s, "/api/runs/"+ids["home"], headers); rec.Code != http.StatusNotFound {
+		t.Errorf("GET home run detail: status = %d, want 404", rec.Code)
+	}
+	if rec = getAuthWith(t, s, "/api/v1/orgs/default/collections/home/runs/"+ids["home"], headers); rec.Code != http.StatusForbidden {
+		t.Errorf("GET home collection run detail: status = %d, want 403", rec.Code)
+	}
+	if rec = getAuthWith(t, s, "/api/v1/orgs/lab/collections/edge/runs/"+ids["edge"], headers); rec.Code != http.StatusOK {
+		t.Errorf("GET edge run detail: status = %d, want 200", rec.Code)
 	}
 
 	// POST /run is checked using the target in the body on flat routes.
