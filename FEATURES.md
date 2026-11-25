@@ -45,7 +45,7 @@ command line · **[SCHED]** scheduling · **[GIT]** git-backed collections ·
 - [x] 30. [DB] [SCHED] Host auto clean-up (remove hosts not seen and not targeted after a configurable delay)
 - [x] 31. [INFRA] TLS support for the HTTP server (cert/key in server.yml)
 - [x] 32. [INFRA] `/metrics` endpoint (prometheus)
-- [ ] 33. [TESTS] Go tests for the server (API over httptest), applier and scheduler packages
+- [x] 33. [TESTS] Go tests for the server (API over httptest), applier and scheduler packages
 - [ ] 34. [UI] Host search box in the hosts view (name filter)
 - [ ] 35. [SSH] [AUTH] Ephemeral SSH certificates (short-lived, internal CA or a vault PKI / approle integration, pluggable in the ssh options)
 - [ ] 36. [API] [DOCS] Swagger / OpenAPI documentation of the API, generated against the versioned routes and served from the server (e.g. `/api/docs`)
