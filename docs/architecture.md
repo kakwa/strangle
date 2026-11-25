@@ -40,8 +40,8 @@ package):
 `scope` is the SSH scope key `<target>/<playbook name>` whose manager should
 serve the Go-managed SSH transport for this run (empty when the playbook
 does not use the transport). `args` is the full `ansible-playbook` argument
-list built by the applier (`--diff`, `-i <inventory>`, the become flags, the
-playbook path).
+list built by the applier (`--diff`, optionally `--check` for a dry run,
+`-i <inventory>`, the become flags, the playbook path).
 
 ## Worker supervision
 

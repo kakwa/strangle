@@ -354,6 +354,11 @@ function handleApi(req, res, url) {
     hostkeys = HOSTKEY_FIXTURES.map((k) => ({ ...k }))
     return json(res, 200, { status: 'reset' })
   }
+  if (req.method === 'POST' && p === '/api/_mock/reset-runs-base') {
+    runs = RUNS_FIXTURES.map((r) => ({ ...r }))
+    nextRunID = 5
+    return json(res, 200, { status: 'reset' })
+  }
   if (req.method === 'POST' && p === '/api/_mock/reset-runs') {
     runs = RUNS_FIXTURES.map((r) => ({ ...r }))
     runs = [{
@@ -531,7 +536,16 @@ function handleApi(req, res, url) {
     }
     return json(res, 404, { error: `token "${name}" not found` })
   }
-  if (req.method === 'POST' && p === '/api/run') {
+  const scopedRun = p.match(/^\/api\/orgs\/([^/]+)\/collections\/([^/]+)\/run$/)
+  if (req.method === 'POST' && (p === '/api/run' || scopedRun)) {
+    if (scopedRun) {
+      const orgName = decodeURIComponent(scopedRun[1])
+      const collection = decodeURIComponent(scopedRun[2])
+      const org = ORGS.find((o) => o.name === orgName)
+      if (!org || !org.collections.some((c) => c.name === collection)) {
+        return json(res, 404, { error: `unknown collection ${collection} in org ${orgName}` })
+      }
+    }
     let body = ''
     req.on('data', (c) => (body += c))
     req.on('end', () => {
@@ -541,7 +555,8 @@ function handleApi(req, res, url) {
       } catch {
         return json(res, 400, { error: 'invalid JSON' })
       }
-      const { target, playbook } = req2
+      const { playbook, check } = req2
+      const target = scopedRun ? decodeURIComponent(scopedRun[2]) : req2.target
       if (!target || !playbook) {
         return json(res, 400, { error: 'target and playbook are required' })
       }
@@ -554,14 +569,14 @@ function handleApi(req, res, url) {
       const startedAt = new Date()
       runs = [
         {
-          id: nextRunID++, target, playbook,
+          id: nextRunID++, target, playbook, check: Boolean(check),
           started_at: startedAt.toISOString(), finished_at: startedAt.toISOString(),
           duration_ms: 100, exit_code: 0, success: true,
           hosts: 1, changed_hosts: 0, failed_hosts: 0,
         },
         ...runs,
       ]
-      return json(res, 202, { status: 'started', target, playbook })
+      return json(res, 202, { status: 'started', target, playbook, check: Boolean(check) })
     })
     return
   }

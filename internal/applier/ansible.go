@@ -41,6 +41,19 @@ func runIDFrom(ctx context.Context) uint64 {
 	return id
 }
 
+type checkKey struct{}
+
+// WithCheck marks one run as a check (dry) run. Scheduled runs never set it;
+// API/UI callers can request it per run.
+func WithCheck(ctx context.Context, check bool) context.Context {
+	return context.WithValue(ctx, checkKey{}, check)
+}
+
+func checkFrom(ctx context.Context) bool {
+	check, _ := ctx.Value(checkKey{}).(bool)
+	return check
+}
+
 // Ansible applies playbooks for every configured target by dispatching each
 // run to a worker process and records the results in a store.
 type Ansible struct {
@@ -250,7 +263,8 @@ func (a *Ansible) runPlaybook(ctx context.Context, target config.TargetConfig, p
 			a.logger.Warn("run record not found for in-flight run", zap.Uint64("run", id), zap.Error(err))
 		}
 	}
-	exitCode, output, facts, runErr := a.exec.RunPlaybook(ctx, target.Name, sshScope, pb.WorkingDir, pb.Args()...)
+	check := checkFrom(ctx)
+	exitCode, output, facts, runErr := a.exec.RunPlaybook(ctx, target.Name, sshScope, pb.WorkingDir, pb.Args(check)...)
 	finished := time.Now().UTC()
 
 	if runErr != nil {
@@ -284,6 +298,7 @@ func (a *Ansible) runPlaybook(ctx context.Context, target config.TargetConfig, p
 		Output:       output,
 		State:        state,
 		Canceled:     canceled,
+		Check:        check,
 	}
 
 	hostRuns := make([]store.HostRunRecord, 0, len(summaries))

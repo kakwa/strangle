@@ -292,9 +292,11 @@ scalars distinguish "unset" from false/0, so for example
 | `ssh` | Go-managed SSH transport (below); replaces/merges the top-level `ssh` block |
 
 Password files are used instead of interactive prompts, which an embedded
-interpreter cannot answer. `--diff` is always added by the applier.
-`working_dir` is chdir'd into for the duration of each run, so `ansible.cfg`,
-relative paths and roles resolve relative to the project.
+interpreter cannot answer. `--diff` is always added by the applier. A
+collection-scoped run request may set `"check": true` to add `--check` for
+that single run; this is not a configuration option and scheduled runs never
+use it. `working_dir` is chdir'd into for the duration of each run, so
+`ansible.cfg`, relative paths and roles resolve relative to the project.
 
 ### The Go-managed SSH transport
 

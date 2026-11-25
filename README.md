@@ -110,8 +110,10 @@ docs/                documentation: architecture, configuration, API, git collec
 - `GET /api/hosts/{host}/changes` — the host's task traces, newest first (default 200)
 - `GET /api/playbooks`   — playbook job names, keyed by target name, with last outcome
 - `GET /api/workers`     — the worker pool: pid, socket, liveness, jobs, restarts
-- `POST /api/run`        — body `{"target": "demo", "playbook": "demo"}`; starts the
-  run in the background and returns `202`
+- `POST /api/v1/orgs/{org}/collections/{collection}/run` — body
+  `{"target": "demo", "playbook": "demo", "check": false}`; starts the run in
+  the background and returns `202`. `"check": true` is a dry run (`--check`).
+  The flat `POST /api/run` remains as a legacy alias
 - `POST /api/sync`       — body `{"target": "...", "branch": "..."}`; re-syncs a
   git-backed target, optionally switching the tracked branch. Accepts a UI
   session, a user token, or the configured token when `auth.token` is set

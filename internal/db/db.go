@@ -33,6 +33,7 @@ type Run struct {
 	Output       string `gorm:"type:text"`
 	State        string `gorm:"size:32;index"`
 	Canceled     bool
+	Check        bool
 	JobID        string `gorm:"size:64;index"`
 }
 
@@ -171,7 +172,7 @@ func (d *DB) UpdateRun(ctx context.Context, in store.RunRecord) error {
 		"finished_at": run.FinishedAt, "duration_ms": run.DurationMS, "exit_code": run.ExitCode,
 		"success": run.Success, "hosts": run.Hosts, "changed_hosts": run.ChangedHosts,
 		"failed_hosts": run.FailedHosts, "output": run.Output, "state": run.State,
-		"canceled": run.Canceled, "job_id": run.JobID,
+		"canceled": run.Canceled, "check": run.Check, "job_id": run.JobID,
 	})
 	if res.Error != nil {
 		return res.Error
@@ -672,6 +673,7 @@ func toRunModel(r store.RunRecord) Run {
 		Output:       r.Output,
 		State:        r.State,
 		Canceled:     r.Canceled,
+		Check:        r.Check,
 		JobID:        r.JobID,
 	}
 }
@@ -692,6 +694,7 @@ func fromRunModel(r Run) store.RunRecord {
 		Output:       r.Output,
 		State:        r.State,
 		Canceled:     r.Canceled,
+		Check:        r.Check,
 		JobID:        r.JobID,
 	}
 }

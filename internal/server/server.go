@@ -30,7 +30,7 @@ import (
 // runID is the store record created for this run; the returned string is the
 // queue job ID (used by the cancel endpoint).
 type RunEnqueuer interface {
-	EnqueueRun(ctx context.Context, target, playbook string, runID uint64) (string, error)
+	EnqueueRun(ctx context.Context, target, playbook string, runID uint64, check bool) (string, error)
 }
 
 // RunCanceler cancels a queued or running playbook job. It is a separate
@@ -594,6 +594,7 @@ func (s *Server) Routes() http.Handler {
 		var req struct {
 			Target   string `json:"target"`
 			Playbook string `json:"playbook"`
+			Check    bool   `json:"check"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -633,6 +634,7 @@ func (s *Server) Routes() http.Handler {
 			Target:   req.Target,
 			Playbook: req.Playbook,
 			State:    store.RunStateQueued,
+			Check:    req.Check,
 		}
 		if s.store != nil {
 			if err := s.store.CreateRun(r.Context(), &record); err != nil {
@@ -640,7 +642,7 @@ func (s *Server) Routes() http.Handler {
 				return
 			}
 		}
-		jobID, err := s.run.EnqueueRun(r.Context(), req.Target, req.Playbook, record.ID)
+		jobID, err := s.run.EnqueueRun(r.Context(), req.Target, req.Playbook, record.ID, req.Check)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -656,6 +658,7 @@ func (s *Server) Routes() http.Handler {
 			"target":   req.Target,
 			"playbook": req.Playbook,
 			"run_id":   record.ID,
+			"check":    req.Check,
 		})
 	}
 	apiHandler(mux, "POST", apiPrefix+"/run", handleRun)

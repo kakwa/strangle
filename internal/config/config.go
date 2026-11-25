@@ -364,8 +364,13 @@ func (p PlaybookConfig) InventoryPath() string {
 
 // Args builds the ansible-playbook argument list for this job. --diff is
 // always included; the become flags are only passed when become is enabled.
-func (p PlaybookConfig) Args() []string {
+// An optional first argument enables Ansible's check (dry-run) mode for one
+// run without changing the collection configuration.
+func (p PlaybookConfig) Args(check ...bool) []string {
 	args := []string{"--diff", "-i", p.Inventory}
+	if len(check) > 0 && check[0] {
+		args = append(args, "--check")
+	}
 
 	if p.Options.User != "" {
 		args = append(args, "-u", p.Options.User)

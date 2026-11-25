@@ -3,6 +3,7 @@ package applier
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +47,32 @@ func testTarget(dir string) config.TargetConfig {
 			Inventory:  "inventory",
 			WorkingDir: dir,
 		}},
+	}
+}
+
+func TestCheckModeRun(t *testing.T) {
+	st := store.NewMem()
+	var gotArgs []string
+	apr := NewAnsible(
+		[]config.TargetConfig{testTarget(t.TempDir())},
+		executorFunc(func(_ context.Context, _, _, _ string, args ...string) (int, string, map[string]json.RawMessage, error) {
+			gotArgs = args
+			return 0, "PLAY [all] ***\n", nil, nil
+		}),
+		st, zap.NewNop(),
+	)
+	if err := apr.Trigger(WithCheck(context.Background(), true), "prod", "site"); err != nil {
+		t.Fatalf("Trigger() error: %v", err)
+	}
+	if !slices.Contains(gotArgs, "--check") {
+		t.Fatalf("executor args = %v, want --check", gotArgs)
+	}
+	runs, err := st.ListRuns(context.Background(), 10)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("ListRuns() = %v, %v", runs, err)
+	}
+	if !runs[0].Check {
+		t.Fatal("recorded run is not marked as a check run")
 	}
 }
 

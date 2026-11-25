@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   IconBook,
+  IconCheck,
   IconClock,
   IconFingerprint,
   IconKey,
@@ -493,13 +494,14 @@ function PlaybooksView({ playbooks, onRun, pendingRuns, runError }) {
                 <Table.Th>Playbook</Table.Th>
                 <Table.Th>Inventory</Table.Th>
                 <Table.Th>Status</Table.Th>
-                <Table.Th w={110}>Action</Table.Th>
+                <Table.Th w={220}>Action</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
               {pbs.map((pb) => {
                 const key = `${target}:${pb.name}`
                 const pending = pendingRuns[key] !== undefined
+                const checkPending = pendingRuns[`${key}:check`] !== undefined
                 return (
                   <Table.Tr key={key}>
                     <Table.Td>
@@ -524,15 +526,27 @@ function PlaybooksView({ playbooks, onRun, pendingRuns, runError }) {
                       )}
                     </Table.Td>
                     <Table.Td>
-                      <Button
-                        size="xs"
-                        variant="light"
-                        leftSection={pending ? <Loader size={12} /> : <IconPlayerPlay size={14} />}
-                        onClick={() => onRun(target, pb.name)}
-                        disabled={pending}
-                      >
-                        {pending ? 'Running…' : 'Run'}
-                      </Button>
+                      <Group gap="xs" wrap="nowrap">
+                        <Button
+                          size="xs"
+                          variant="light"
+                          leftSection={pending ? <Loader size={12} /> : <IconPlayerPlay size={14} />}
+                          onClick={() => onRun(target, pb.name, false)}
+                          disabled={pending}
+                        >
+                          {pending ? 'Running…' : 'Run'}
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="subtle"
+                          color="gray"
+                          leftSection={checkPending ? <Loader size={12} /> : <IconCheck size={14} />}
+                          onClick={() => onRun(target, pb.name, true)}
+                          disabled={checkPending}
+                        >
+                          {checkPending ? 'Checking…' : 'Check'}
+                        </Button>
+                      </Group>
                     </Table.Td>
                   </Table.Tr>
                 )
@@ -788,6 +802,7 @@ function RunDetail({ onBack }) {
                   : run.success ? 'ok' : `exit ${run.exit_code}`}
               </Badge>
             )}
+            {run?.check && <Badge color="blue" variant="light">check</Badge>}
           </Group>
           <Group gap="sm">
             {activeRun && org && (
@@ -1345,6 +1360,7 @@ function AppInner({ user, onLogout }) {
   const [runs, setRuns] = useState([])
   const [hosts, setHosts] = useState([])
   const [playbooks, setPlaybooks] = useState({})
+  const [orgs, setOrgs] = useState([])
   const [error, setError] = useState(null)
   const [hostFilter, setHostFilter] = useState('all')
   // Manual runs in flight, keyed by "<target>:<playbook>" with the trigger
@@ -1363,17 +1379,19 @@ function AppInner({ user, onLogout }) {
 
   const refresh = useCallback(async () => {
     try {
-      const [statsRes, runsRes, hostsRes, playbooksRes] = await Promise.all([
+      const [statsRes, runsRes, hostsRes, playbooksRes, orgsRes] = await Promise.all([
         fetch('/api/stats'),
         fetch('/api/runs?limit=50'),
         fetch('/api/hosts'),
         fetch('/api/playbooks'),
+        fetch(ORGS_PATH),
       ])
-      if (!statsRes.ok || !runsRes.ok || !hostsRes.ok || !playbooksRes.ok) {
-        throw new Error(`HTTP ${statsRes.status}/${runsRes.status}/${hostsRes.status}/${playbooksRes.status}`)
+      if (!statsRes.ok || !runsRes.ok || !hostsRes.ok || !playbooksRes.ok || !orgsRes.ok) {
+        throw new Error(`HTTP ${statsRes.status}/${runsRes.status}/${hostsRes.status}/${playbooksRes.status}/${orgsRes.status}`)
       }
       const newRuns = asArray(await runsRes.json())
       setStats(normalizeStats(await statsRes.json()))
+      setOrgs(asArray(await orgsRes.json()))
       setRuns(newRuns)
       setHosts(normalizeHosts(await hostsRes.json()))
       setPlaybooks(normalizePlaybooks(await playbooksRes.json()))
@@ -1383,10 +1401,12 @@ function AppInner({ user, onLogout }) {
         let changed = false
         const next = { ...prev }
         for (const [key, triggeredAt] of Object.entries(prev)) {
-          const [target, playbook] = key.split(':')
+          const [target, playbook, mode] = key.split(':')
+          const check = mode === 'check'
           if (newRuns.some((r) =>
             r.target === target &&
             r.playbook === playbook &&
+            Boolean(r.check) === check &&
             new Date(r.started_at).getTime() >= triggeredAt - 5000
           )) {
             delete next[key]
@@ -1401,16 +1421,22 @@ function AppInner({ user, onLogout }) {
     }
   }, [])
 
-  const triggerRun = useCallback(async (target, playbook) => {
+  const triggerRun = useCallback(async (target, playbook, check = false) => {
     setRunError(null)
+    const org = orgs.find((o) =>
+      asArray(o?.collections).some((c) => c?.name === target))?.name
+    if (!org) {
+      setRunError(`collection "${target}" not found in any organization`)
+      return
+    }
     try {
-      const res = await fetch('/api/run', {
+      const res = await fetch(collectionAPI(org, target, 'run'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target, playbook }),
+        body: JSON.stringify({ target, playbook, check }),
       })
       if (res.status === 202) {
-        const key = `${target}:${playbook}`
+        const key = `${target}:${playbook}${check ? ':check' : ''}`
         setPendingRuns((p) => ({ ...p, [key]: Date.now() }))
       } else {
         const body = await res.json().catch(() => ({}))
@@ -1419,7 +1445,7 @@ function AppInner({ user, onLogout }) {
     } catch (err) {
       setRunError(err.message)
     }
-  }, [])
+  }, [orgs])
 
   useEffect(() => {
     refresh()

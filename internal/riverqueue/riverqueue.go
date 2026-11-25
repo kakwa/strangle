@@ -46,6 +46,8 @@ type PlaybookRunArgs struct {
 	Playbook string `json:"playbook"`
 	// RunID is the store run this job executes. Empty for legacy callers.
 	RunID uint64 `json:"run_id,omitempty"`
+	// Check requests Ansible's --check (dry-run) mode for this job.
+	Check bool `json:"check,omitempty"`
 }
 
 // Kind implements river.JobArgs.
@@ -57,15 +59,16 @@ type PlaybookWorker struct {
 	// Run executes the named playbook of the named target and records its
 	// result. In production it is the applier's Trigger.
 	Run func(ctx context.Context, target, playbook string) error
-	// RunWithID is the production variant: it receives the store run ID in
-	// the context so the applier updates the record created at enqueue time.
-	RunWithID func(ctx context.Context, target, playbook string, runID uint64) error
+	// RunWithID is the production variant: it receives the store run ID and
+	// the check-mode flag so the applier updates the record created at
+	// enqueue time and builds the right ansible-playbook arguments.
+	RunWithID func(ctx context.Context, target, playbook string, runID uint64, check bool) error
 }
 
 // Work implements river.Worker.
 func (w *PlaybookWorker) Work(ctx context.Context, job *river.Job[PlaybookRunArgs]) error {
 	if w.RunWithID != nil {
-		return w.RunWithID(ctx, job.Args.Target, job.Args.Playbook, job.Args.RunID)
+		return w.RunWithID(ctx, job.Args.Target, job.Args.Playbook, job.Args.RunID, job.Args.Check)
 	}
 	if w.Run == nil {
 		return fmt.Errorf("riverqueue: worker has no run function")
@@ -82,7 +85,7 @@ type Client struct {
 // Open connects to the Postgres database at dsn, applies River's migrations
 // and builds a client that works the playbook queue with at most workers
 // concurrent runs. run executes one job when the queue hands it out.
-func Open(ctx context.Context, dsn string, workers int, run func(ctx context.Context, target, playbook string, runID uint64) error, logger *zap.Logger) (*Client, error) {
+func Open(ctx context.Context, dsn string, workers int, run func(ctx context.Context, target, playbook string, runID uint64, check bool) error, logger *zap.Logger) (*Client, error) {
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("riverqueue: connect: %w", err)
@@ -102,8 +105,9 @@ func Open(ctx context.Context, dsn string, workers int, run func(ctx context.Con
 	}
 
 	riverWorkers := river.NewWorkers()
-	river.AddWorker(riverWorkers, &PlaybookWorker{RunWithID: func(ctx context.Context, target, playbook string, runID uint64) error {
-		return run(applier.WithRunID(ctx, runID), target, playbook, runID)
+	river.AddWorker(riverWorkers, &PlaybookWorker{RunWithID: func(ctx context.Context, target, playbook string, runID uint64, check bool) error {
+		ctx = applier.WithCheck(applier.WithRunID(ctx, runID), check)
+		return run(ctx, target, playbook, runID, check)
 	}})
 
 	client, err := river.NewClient(driver, &river.Config{
@@ -126,9 +130,9 @@ func Open(ctx context.Context, dsn string, workers int, run func(ctx context.Con
 // returns the River job ID as a string (needed by the cancel API). When runID
 // is nonzero it is carried in the job payload so the worker can mark that run
 // record as running.
-func (c *Client) EnqueueRun(ctx context.Context, target, playbook string, runID uint64) (string, error) {
+func (c *Client) EnqueueRun(ctx context.Context, target, playbook string, runID uint64, check bool) (string, error) {
 	res, err := c.client.Insert(ctx, PlaybookRunArgs{
-		Target: target, Playbook: playbook, RunID: runID,
+		Target: target, Playbook: playbook, RunID: runID, Check: check,
 	}, &river.InsertOpts{Queue: QueueName})
 	if err != nil {
 		return "", err

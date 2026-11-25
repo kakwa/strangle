@@ -559,8 +559,8 @@ func run(cmd *cobra.Command, args []string) error {
 	var enqueue server.RunEnqueuer
 	if cfg.Server.Database.DSN != "" {
 		var err error
-		queue, err = riverqueue.Open(ctx, cfg.Server.Database.DSN, cfg.Server.Workers, func(ctx context.Context, target, playbook string, runID uint64) error {
-			return apr.Trigger(applier.WithRunID(ctx, runID), target, playbook)
+		queue, err = riverqueue.Open(ctx, cfg.Server.Database.DSN, cfg.Server.Workers, func(ctx context.Context, target, playbook string, runID uint64, check bool) error {
+			return apr.Trigger(applier.WithCheck(applier.WithRunID(ctx, runID), check), target, playbook)
 		}, logger)
 		if err != nil {
 			_ = mgr.Stop()
@@ -591,7 +591,7 @@ func run(cmd *cobra.Command, args []string) error {
 		if err := st.CreateRun(ctx, &record); err != nil {
 			return err
 		}
-		jobID, err := enqueue.EnqueueRun(ctx, target, playbook, record.ID)
+		jobID, err := enqueue.EnqueueRun(ctx, target, playbook, record.ID, false)
 		if err != nil {
 			return err
 		}
@@ -656,11 +656,11 @@ type directEnqueuer struct {
 	cancels map[string]context.CancelFunc
 }
 
-func (d *directEnqueuer) EnqueueRun(_ context.Context, target, playbook string, runID uint64) (string, error) {
+func (d *directEnqueuer) EnqueueRun(_ context.Context, target, playbook string, runID uint64, check bool) (string, error) {
 	d.mu.Lock()
 	d.nextID++
 	id := strconv.FormatUint(d.nextID, 10)
-	ctx, cancel := context.WithTimeout(applier.WithRunID(context.Background(), runID), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(applier.WithCheck(applier.WithRunID(context.Background(), runID), check), 30*time.Minute)
 	d.cancels[id] = cancel
 	d.mu.Unlock()
 

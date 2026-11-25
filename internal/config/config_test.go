@@ -200,6 +200,11 @@ auth:
 	if got := dns.Args(); !slices.Equal(got, []string{"--diff", "-i", "/abs/inventory", "-u", "admin", "dns.yml"}) {
 		t.Errorf("dns.Args() = %v", got)
 	}
+
+	wantCheck := append([]string{"--diff", "-i", "inventory", "--check"}, wantArgs[3:]...)
+	if got := site.Args(true); !reflect.DeepEqual(got, wantCheck) {
+		t.Errorf("Args(true) = %v, want %v", got, wantCheck)
+	}
 }
 
 func TestLoadDefaults(t *testing.T) {

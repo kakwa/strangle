@@ -39,6 +39,8 @@ type RunRecord struct {
 	State        string    `json:"state,omitempty"`
 	// Canceled records when cancellation was requested for the run.
 	Canceled bool `json:"canceled,omitempty"`
+	// Check records a dry run triggered with --check.
+	Check bool `json:"check,omitempty"`
 	// JobID is the queue job that executes this run, when available.
 	JobID string `json:"job_id,omitempty"`
 }

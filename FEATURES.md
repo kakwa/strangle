@@ -40,7 +40,7 @@ command line · **[SCHED]** scheduling · **[GIT]** git-backed collections ·
 - [x] 25. [DB] Task history: keep the per-task results of every run
 - [x] 26. [DB] [UI] ansible_facts: collect, save and display them — a jsonb blob per host, refreshed by runs
 - [x] 27. [API] [UI] Cancel a running run (`POST /api/v1/orgs/{org}/collections/{collection}/runs/{id}/cancel` + UI button)
-- [ ] 28. [API] [UI] Check mode: run a playbook with `--check` (dry run) from the UI or API
+- [x] 28. [API] [UI] Check mode: run a playbook with `--check` (dry run) from the UI or API
 - [ ] 29. [DB] Retention: a policy to purge old runs (max age and/or max count)
 - [ ] 30. [DB] [SCHED] Host auto clean-up (remove hosts not seen and not targeted after a configurable delay)
 - [ ] 31. [INFRA] TLS support for the HTTP server (cert/key in server.yml)

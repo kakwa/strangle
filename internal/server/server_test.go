@@ -29,14 +29,16 @@ type recEnqueuer struct {
 	mu      sync.Mutex
 	calls   []string
 	cancels []string
+	checks  []bool
 	status  string
 	err     error
 }
 
-func (r *recEnqueuer) EnqueueRun(_ context.Context, target, playbook string, _ uint64) (string, error) {
+func (r *recEnqueuer) EnqueueRun(_ context.Context, target, playbook string, _ uint64, check bool) (string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, target+"/"+playbook)
+	r.checks = append(r.checks, check)
 	return r.status, r.err
 }
 
@@ -112,6 +114,28 @@ func TestPostRunEnqueues(t *testing.T) {
 	}
 	if out.Status != "queued" || out.Target != "home" || out.Playbook != "site" {
 		t.Errorf("response = %+v, want queued home/site", out)
+	}
+}
+
+func TestPostRunCheckMode(t *testing.T) {
+	enq := &recEnqueuer{status: "queued"}
+	s := newTestServer(enq)
+
+	rec := postRun(t, s, `{"target":"home","playbook":"site","check":true}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	if len(enq.checks) != 1 || !enq.checks[0] {
+		t.Fatalf("enqueuer checks = %v, want [true]", enq.checks)
+	}
+	var out struct {
+		Check bool `json:"check"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !out.Check {
+		t.Error("response check = false, want true")
 	}
 }
 

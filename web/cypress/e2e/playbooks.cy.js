@@ -9,6 +9,12 @@ describe('Playbooks', () => {
     cy.contains('h4', 'beta').should('be.visible')
   })
 
+  // Manual runs mutate the shared mock; restore the plain fixtures so later
+  // specs see the original run IDs and ordering.
+  afterEach(() => {
+    cy.request('POST', '/api/_mock/reset-runs-base')
+  })
+
   it('lists playbooks with path, inventory and status', () => {
     // web: name, monospace path, inventory.
     cy.contains('td', 'web')
@@ -49,5 +55,16 @@ describe('Playbooks', () => {
     // The new run shows up in the dashboard recent-runs table (4 → 5 rows).
     cy.visit('/')
     cy.get('table').first().find('tbody tr').should('have.length', 5)
+  })
+
+  it('starts a check-mode run from the playbooks view', () => {
+    const row = () => cy.contains('td', 'bootstrap').closest('tr')
+    row().contains('button', 'Check').click()
+    row().should('contain.text', 'Checking…')
+
+    // The mock echoes the check flag on the created run.
+    cy.visit('/runs/5')
+    cy.contains('Run #5').should('be.visible')
+    cy.contains('check').should('be.visible')
   })
 })

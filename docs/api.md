@@ -440,23 +440,29 @@ pool; its process (and PID) may be replaced by a restart.
 `jobs` is the number of in-flight runs; `alive` is the result of the last
 health probe.
 
-## POST /api/run
+## POST /api/v1/orgs/{org}/collections/{collection}/run
 
 Start a playbook run in the background. `playbook` is the **job name** from
 `strangle.yml`, not a file path. Unknown targets or job names are rejected
-with `404`.
+with `404`. The legacy flat alias is `POST /api/run`; both accept the same
+body, but the collection-scoped URL is canonical and is what the UI uses.
+
+Set `"check": true` to run Ansible with `--check` (dry run). The flag is
+recorded on the run and shown in the run detail view. Scheduled runs never
+set it.
 
 ```sh
-curl -X POST localhost:8080/api/run \
-  -d '{"target": "home", "playbook": "hypervisors"}'
+curl -X POST localhost:8080/api/v1/orgs/default/collections/home/run \
+  -d '{"target": "home", "playbook": "hypervisors", "check": true}'
 ```
 
 ```json
-{"status": "queued", "target": "home", "playbook": "hypervisors"}
+{"status": "queued", "target": "home", "playbook": "hypervisors", "run_id": 1234, "check": true}
 ```
 
 `status` is `queued` with a database configured (a River job) or `started`
-without (a direct run). The run appears in `/api/runs` when it finishes.
+without (a direct run). Runs are now visible immediately in `/api/runs` with
+`state` `queued`, `running`, `completed` or `cancelled`.
 
 ## POST /api/sync
 
