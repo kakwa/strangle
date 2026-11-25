@@ -33,7 +33,7 @@ command line · **[SCHED]** scheduling · **[GIT]** git-backed collections ·
 - [x] 18. [AUTH] [API] Per-collection access restrictions (user-to-collection membership on the org/collection model, so the groups and ownership model from TODO2 can be layered on later)
 - [x] 19. [SANDBOXING] Sandboxing: file-system isolation between collections (Landlock via go-landlock; deny ansible FS writes; keep one collection's credentials away from the others) + a validating playbook collection
 - [x] 20. [API] [UI] Run detail: `GET /api/v1/orgs/{org}/collections/{collection}/runs/{id}` and a run view with the full captured output; stop inlining the full output of the last 50 runs into the collection's runs listing on every poll
-- [ ] 21. [API] Filter a collection's runs (`/api/v1/orgs/{org}/collections/{collection}/runs`) by playbook, host and time range (+ pagination)
+- [x] 21. [API] Filter a collection's runs (`/api/v1/orgs/{org}/collections/{collection}/runs`) by playbook, host and time range (+ pagination)
 - [ ] 22. [UI] [SSH] UI for pending SSH host keys (approve/reject) and SSH pool stats — master-level endpoints, versioned under the new layout
 - [ ] 23. [SCHED] Per-target or per-playbook interval instead of the single global interval (ideally cron-like)
 - [ ] 24. [NOTIFY] Notify on run failure (webhook, email, slack or similar), configured per collection

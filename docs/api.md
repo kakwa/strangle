@@ -235,6 +235,30 @@ Runs, newest first. `?limit=` defaults to 50. Each run:
 This is the listing the UI polls: it deliberately does **not** include the
 captured output. Use the detail endpoint below to read it.
 
+### Filtering and pagination
+
+The run listing accepts these query parameters (on the flat and the
+collection-scoped routes alike):
+
+| Parameter | Meaning |
+|-----------|---------|
+| `playbook` | Only runs of this playbook name. |
+| `host` | Only runs that included this host name. |
+| `from` | RFC3339 timestamp; only runs started at or after it. |
+| `to` | RFC3339 timestamp; only runs started before it (exclusive). |
+| `limit` | Page size, default 50. |
+| `offset` | Number of matching runs to skip, default 0. |
+
+The total number of matching, visible runs is returned in the
+`X-Total-Count` response header (before `offset`/`limit` are applied). An
+invalid timestamp or a `to` not after `from` is answered with `400`.
+
+```
+GET /api/v1/orgs/lab/collections/edge/runs?playbook=site&host=web1
+GET /api/v1/orgs/lab/collections/edge/runs?from=2026-11-24T10:00:00Z&to=2026-11-25T00:00:00Z
+GET /api/v1/orgs/lab/collections/edge/runs?limit=25&offset=50
+```
+
 ## GET /api/v1/orgs/{org}/collections/{collection}/runs/{id}
 
 One run, including its full `output`. Flat aliases: `GET /api/v1/runs/{id}`

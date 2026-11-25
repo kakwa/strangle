@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -36,6 +37,19 @@ func newOrgTestServer(enq RunEnqueuer, st store.Store) *Server {
 	}
 	apr := applier.NewAnsible(targets, stubExecutor{}, st, zap.NewNop())
 	return New("test", apr, st, nil, enq, nil, nil, nil, nil, "", zap.NewNop())
+}
+
+func seedRunAt(t *testing.T, st store.Store, target, playbook, host string, started time.Time) {
+	t.Helper()
+	if err := st.SaveRun(context.Background(), store.RunInput{
+		Run: store.RunRecord{
+			Target: target, Playbook: playbook, StartedAt: started, FinishedAt: started.Add(time.Second),
+			Success: true, Hosts: 1,
+		},
+		Hosts: []store.HostRunRecord{{Host: host, Status: "ok", Ok: 1}},
+	}); err != nil {
+		t.Fatalf("SaveRun() error: %v", err)
+	}
 }
 
 func seedTargetRun(t *testing.T, st store.Store, target string) {
@@ -237,6 +251,77 @@ func TestRunDetailAndListingWithoutOutput(t *testing.T) {
 	} {
 		if rec = doGet(t, s, tc.path); rec.Code != tc.code {
 			t.Errorf("GET %s: status = %d, want %d (body %s)", tc.path, rec.Code, tc.code, rec.Body.String())
+		}
+	}
+}
+
+func TestCollectionRunFiltersAndPagination(t *testing.T) {
+	st := store.NewMem()
+	base := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	seedRunAt(t, st, "edge", "site", "web1", base)
+	seedRunAt(t, st, "edge", "site", "db1", base.Add(time.Hour))
+	seedRunAt(t, st, "edge", "deploy", "web1", base.Add(2*time.Hour))
+	seedRunAt(t, st, "home", "site", "web1", base.Add(3*time.Hour))
+	s := newOrgTestServer(&recEnqueuer{status: "queued"}, st)
+	collectionPath := "/api/v1/orgs/lab/collections/edge/runs"
+
+	ids := func(query string) ([]uint64, int) {
+		t.Helper()
+		rec := doGet(t, s, collectionPath+query)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s%s: status = %d, body %s", collectionPath, query, rec.Code, rec.Body.String())
+		}
+		var runs []store.RunRecord
+		if err := json.Unmarshal(rec.Body.Bytes(), &runs); err != nil {
+			t.Fatalf("decode runs: %v", err)
+		}
+		total, err := strconv.Atoi(rec.Header().Get("X-Total-Count"))
+		if err != nil {
+			t.Fatalf("X-Total-Count = %q: %v", rec.Header().Get("X-Total-Count"), err)
+		}
+		out := make([]uint64, 0, len(runs))
+		for _, run := range runs {
+			if run.Target != "edge" {
+				t.Errorf("run %+v leaked from another collection", run)
+			}
+			out = append(out, run.ID)
+		}
+		return out, total
+	}
+
+	if got, total := ids(""); len(got) != 3 || total != 3 {
+		t.Errorf("unfiltered = %v (total %d), want 3 edge runs", got, total)
+	}
+	if got, total := ids("?playbook=site"); len(got) != 2 || total != 2 {
+		t.Errorf("playbook=site = %v (total %d), want 2 runs", got, total)
+	}
+	if got, total := ids("?host=web1"); len(got) != 2 || total != 2 {
+		t.Errorf("host=web1 = %v (total %d), want 2 runs", got, total)
+	}
+	if got, total := ids("?playbook=site&host=web1"); len(got) != 1 || total != 1 {
+		t.Errorf("site/web1 = %v (total %d), want 1 run", got, total)
+	}
+
+	from := url.QueryEscape(base.Add(time.Hour).Format(time.RFC3339))
+	to := url.QueryEscape(base.Add(2 * time.Hour).Format(time.RFC3339))
+	if got, total := ids("?from=" + from + "&to=" + to); len(got) != 1 || total != 1 {
+		t.Errorf("time window = %v (total %d), want the 11:00 run only", got, total)
+	}
+
+	if got, total := ids("?limit=1&offset=1"); len(got) != 1 || total != 3 {
+		t.Errorf("limit/offset = %v (total %d), want one run out of 3", got, total)
+	}
+	if got, _ := ids("?offset=99"); len(got) != 0 {
+		t.Errorf("offset past the end = %v, want no runs", got)
+	}
+
+	for _, query := range []string{
+		"?from=not-a-time",
+		"?to=not-a-time",
+		"?from=2026-11-24T12:00:00Z&to=2026-11-24T11:00:00Z",
+	} {
+		if rec := doGet(t, s, collectionPath+query); rec.Code != http.StatusBadRequest {
+			t.Errorf("GET %s%s: status = %d, want 400", collectionPath, query, rec.Code)
 		}
 	}
 }

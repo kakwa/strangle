@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/kakwa/strangle/internal/config"
 	"github.com/kakwa/strangle/internal/store"
@@ -20,9 +21,9 @@ const apiVersion = "v1"
 // apiPrefix is the versioned prefix of every API route.
 const apiPrefix = "/api/" + apiVersion
 
-// allRuns is the upper bound used when a scoped endpoint needs to look at
-// the whole run history before filtering it (store.ListRuns has no filters
-// yet).
+// allRuns is the upper bound used when an endpoint needs to look at the whole
+// run history before applying its own filters (store.ListRuns has no filter
+// arguments yet).
 const allRuns = 1_000_000
 
 // orgInfo is the representation of an organization in the API.
@@ -59,26 +60,97 @@ func orgOf(t config.TargetConfig) string {
 	return t.Org
 }
 
-// collectionRuns lists runs, restricted to one collection when the request
-// used a collection-scoped path. The filtering is done here until the run
-// listing gains its own query parameters (FEATURES 21).
-func (s *Server) collectionRuns(ctx context.Context, collection string, limit int) ([]store.RunRecord, error) {
-	if collection == "" {
-		return s.store.ListRuns(ctx, limit)
+// runFilter is the set of query parameters supported by the run listing.
+// Zero-valued times mean "no bound"; Limit and Offset are applied after the
+// caller has removed records the requester may not see.
+type runFilter struct {
+	Collection string
+	Playbook   string
+	Host       string
+	From       time.Time
+	To         time.Time
+	Limit      int
+	Offset     int
+}
+
+// parseRunFilter reads the run-listing query string. Times are RFC3339
+// timestamps (e.g. 2026-11-24T12:00:00Z); From is inclusive and To exclusive
+// so consecutive pages and time windows do not overlap at the boundary.
+func parseRunFilter(r *http.Request, collection string) (runFilter, error) {
+	f := runFilter{
+		Collection: collection,
+		Playbook:   r.URL.Query().Get("playbook"),
+		Host:       r.URL.Query().Get("host"),
+		Limit:      intQuery(r, "limit", 50),
+		Offset:     intQuery(r, "offset", 0),
 	}
+	if f.Limit <= 0 {
+		f.Limit = 50
+	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
+	if value := r.URL.Query().Get("from"); value != "" {
+		t, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			return f, fmt.Errorf("invalid from timestamp %q: %w", value, err)
+		}
+		f.From = t
+	}
+	if value := r.URL.Query().Get("to"); value != "" {
+		t, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			return f, fmt.Errorf("invalid to timestamp %q: %w", value, err)
+		}
+		f.To = t
+	}
+	if !f.From.IsZero() && !f.To.IsZero() && !f.To.After(f.From) {
+		return f, errors.New("to must be after from")
+	}
+	return f, nil
+}
+
+// filteredRuns applies every run-listing filter except access control and
+// pagination: those are applied by the handler so the total count reflects
+// only records the requester may see.
+func (s *Server) filteredRuns(ctx context.Context, f runFilter) ([]store.RunRecord, error) {
 	all, err := s.store.ListRuns(ctx, allRuns)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]store.RunRecord, 0, limit)
+
+	var hostRuns map[uint64]bool
+	if f.Host != "" {
+		hostLines, err := s.store.HostRuns(ctx, f.Host, allRuns)
+		if err != nil {
+			return nil, err
+		}
+		hostRuns = make(map[uint64]bool, len(hostLines))
+		for _, line := range hostLines {
+			if f.Collection == "" || line.Target == f.Collection {
+				hostRuns[line.RunID] = true
+			}
+		}
+	}
+
+	out := make([]store.RunRecord, 0, len(all))
 	for _, run := range all {
-		if run.Target != collection {
+		if f.Collection != "" && run.Target != f.Collection {
+			continue
+		}
+		if f.Playbook != "" && run.Playbook != f.Playbook {
+			continue
+		}
+		if hostRuns != nil && !hostRuns[run.ID] {
+			continue
+		}
+		if !f.From.IsZero() && run.StartedAt.Before(f.From) {
+			continue
+		}
+		if !f.To.IsZero() && !run.StartedAt.Before(f.To) {
 			continue
 		}
 		out = append(out, run)
-		if limit > 0 && len(out) >= limit {
-			break
-		}
 	}
 	return out, nil
 }

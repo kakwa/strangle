@@ -326,8 +326,12 @@ func (s *Server) Routes() http.Handler {
 			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
 			return
 		}
-		limit := intQuery(r, "limit", 50)
-		runs, err := s.collectionRuns(r.Context(), coll, limit)
+		filter, err := parseRunFilter(r, coll)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		runs, err := s.filteredRuns(r.Context(), filter)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -342,7 +346,11 @@ func (s *Server) Routes() http.Handler {
 				visible = append(visible, runSummary(run))
 			}
 		}
-		writeJSON(w, http.StatusOK, visible)
+		total := len(visible)
+		start := min(filter.Offset, total)
+		end := min(start+filter.Limit, total)
+		w.Header().Set("X-Total-Count", strconv.Itoa(total))
+		writeJSON(w, http.StatusOK, visible[start:end])
 	}
 	apiHandler(mux, "GET", apiPrefix+"/runs", handleRuns)
 	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/runs", s.withCollectionAccess(handleRuns))
