@@ -30,7 +30,8 @@ workers: 2
 # at least one local account exists. Accounts live in the database above:
 #   strangle user add <name> --password-stdin
 # auth:
-#   token: change-me
+#   token: change-me       # webhook token, only accepted by POST /api/sync
+#   cli_token: st_...      # user API token used by the CLI subcommands
 
 # Landlock sandboxing between collections. When enabled, each collection gets
 # its own workers: its checkout is read-only and Ansible writes go to a

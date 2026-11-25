@@ -75,8 +75,8 @@ type ServerConfig struct {
 	// execute playbook jobs. Each worker owns one embedded Ansible
 	// interpreter, so more workers allow more concurrent runs. Defaults to 1.
 	Workers int `yaml:"workers,omitempty"`
-	// Auth configures API authentication. Placeholder: parsed and validated
-	// but not enforced yet.
+	// Auth configures API authentication. Token is the static sync token;
+	// CLIToken is a user bearer token used by the CLI subcommands.
 	Auth AuthConfig `yaml:"auth,omitempty"`
 	// Sandbox configures Landlock isolation of playbook runs. Disabled by
 	// default: enabling it pins each worker to one collection and denies
@@ -140,13 +140,14 @@ type SandboxConfig struct {
 	Writable []string `yaml:"writable,omitempty"`
 }
 
-// AuthConfig is a placeholder for future API authentication. It is parsed so
-// that server.yml can carry the section from the start, but no enforcement
-// happens yet.
+// AuthConfig holds the two independent credentials read from server.yml.
 type AuthConfig struct {
-	// Token, if set, will have to be presented as a Bearer token on API
-	// calls. Not enforced yet.
+	// Token is the static sync token. It is accepted only by POST /api/sync
+	// and is never treated as a user identity.
 	Token string `yaml:"token,omitempty"`
+	// CLIToken is a user API token (st_...) used by the CLI subcommands.
+	// The server ignores it: it is a client-side setting only.
+	CLIToken string `yaml:"cli_token,omitempty"`
 }
 
 // DatabaseConfig configures the PostgreSQL database that stores run history.
@@ -699,6 +700,41 @@ func LoadServer(serverPath string) (ServerConfig, error) {
 		return ServerConfig{}, err
 	}
 	return cfg, nil
+}
+
+// LoadCollection reads only collection.yml and applies the org defaults. It
+// is used by client-side commands that need the target -> org mapping but do
+// not want to resolve every target's strangle.yml.
+func LoadCollection(collectionPath string) ([]TargetSpec, error) {
+	data, err := os.ReadFile(collectionPath)
+	if err != nil {
+		return nil, fmt.Errorf("read collection %q: %w", collectionPath, err)
+	}
+	var coll CollectionConfig
+	if err := yaml.Unmarshal(data, &coll); err != nil {
+		return nil, fmt.Errorf("parse collection %q: %w", collectionPath, err)
+	}
+	if len(coll.Targets) == 0 {
+		return nil, fmt.Errorf("collection %q: targets is required (non-empty list)", collectionPath)
+	}
+	seen := map[string]struct{}{}
+	for i := range coll.Targets {
+		spec := &coll.Targets[i]
+		if spec.Name == "" {
+			return nil, errors.New("collection: every target needs a name")
+		}
+		if _, dup := seen[spec.Name]; dup {
+			return nil, fmt.Errorf("collection: duplicate target name %q", spec.Name)
+		}
+		seen[spec.Name] = struct{}{}
+		if spec.Org == "" {
+			spec.Org = DefaultOrg
+		}
+		if !validOrgName(spec.Org) {
+			return nil, fmt.Errorf("collection: target %q: invalid org name %q", spec.Name, spec.Org)
+		}
+	}
+	return coll.Targets, nil
 }
 
 // loadTarget reads and validates the strangle.yml in the target directory.

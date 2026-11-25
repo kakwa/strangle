@@ -180,6 +180,7 @@ strangle serve [-s config/server.yml] [-c config/collection.yml]
 | `workers`       | `1`             | Worker child processes (one embedded interpreter each) |
 | `database.dsn`  | —               | PostgreSQL DSN; without a DSN an in-memory store is used |
 | `auth.token`    | —               | Bearer token for `POST /api/sync` (webhook), independent of UI authentication |
+| `auth.cli_token` | —               | User API token (`st_…`) used by the CLI subcommands; override with `--token` |
 | `sandbox.enabled` | `false`       | Landlock isolation: one worker set per collection, read-only checkouts, private write scratch |
 | `retention.max_age` / `retention.max_count` | — | Purge finished runs older than the duration and/or beyond the newest N per collection; `retention.interval` defaults to `1h` |
 | `host_cleanup.delay` | — | Remove hosts absent from a collection's inventory and unseen for this duration; `host_cleanup.interval` defaults to `1h` |
@@ -222,6 +223,29 @@ Only the SHA-256 digest of a token is stored; the raw value is shown exactly
 once, at creation. A token is sent as `Authorization: Bearer st_…` or
 `X-Strangle-Token: st_…`. The static `auth.token` above is a separate
 mechanism: it only opens `POST /api/sync` and is not a user account.
+
+#### CLI client
+
+The API-backed subcommands use the canonical collection-scoped routes under
+`/api/v1/orgs/{org}/collections/{collection}`. The org comes from
+collection.yml (default `default`), or from `--org`:
+
+```sh
+strangle run <target> <playbook> [--check]
+strangle runs <target> [--playbook NAME] [--host NAME] [--from RFC3339] [--to RFC3339] [--limit N] [--offset N]
+strangle hosts <target>
+strangle host <name> <target> [--limit N]
+strangle hostkeys list <target>
+strangle hostkeys accept <target/playbook> <host> <fingerprint>
+strangle hostkeys reject <target/playbook> <host>
+```
+
+All of them accept `-s/--server-config`, `-c/--collection-config`, `--url`,
+`--token` and `--json`. Without `--url`, the API address is derived from
+`listen_addr` (and switches to HTTPS when `tls` is configured); without
+`--token`, the user token comes from `auth.cli_token` in server.yml. Output is
+tab-separated by default and JSON with `--json`. On an open server no token is
+needed.
 
 #### Per-collection access
 

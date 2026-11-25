@@ -862,6 +862,39 @@ func TestConfigTarget(t *testing.T) {
 	}
 }
 
+func TestLoadServerCLIToken(t *testing.T) {
+	serverPath, _ := writeTree(t,
+		"auth:\n  token: sync-secret\n  cli_token: st_cli\n", "targets:\n  - name: one\n    path: __TARGET__\n", strangleMinimal)
+	cfg, err := LoadServer(serverPath)
+	if err != nil {
+		t.Fatalf("LoadServer() error: %v", err)
+	}
+	if cfg.Auth.Token != "sync-secret" || cfg.Auth.CLIToken != "st_cli" {
+		t.Errorf("auth = %+v, want both tokens", cfg.Auth)
+	}
+}
+
+func TestLoadCollectionAppliesOrgDefault(t *testing.T) {
+	_, collectionPath := writeTree(t, "listen_addr: \":9000\"\n", `
+targets:
+  - name: one
+    path: __TARGET__
+  - name: two
+    org: lab
+    path: __TARGET__
+`, strangleMinimal)
+	specs, err := LoadCollection(collectionPath)
+	if err != nil {
+		t.Fatalf("LoadCollection() error: %v", err)
+	}
+	if len(specs) != 2 {
+		t.Fatalf("targets = %d, want 2", len(specs))
+	}
+	if specs[0].Org != DefaultOrg || specs[1].Org != "lab" {
+		t.Errorf("orgs = %q, %q, want %q, lab", specs[0].Org, specs[1].Org, DefaultOrg)
+	}
+}
+
 func TestHostKeyPolicyValid(t *testing.T) {
 	valid := []HostKeyPolicy{PolicyKnownHosts, PolicyAPI, PolicyCA, PolicyAuto, PolicyInsecure}
 	for _, p := range valid {

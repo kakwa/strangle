@@ -71,6 +71,7 @@ func main() {
 	root.AddCommand(userCmd())
 	root.AddCommand(tokenCmd())
 	root.AddCommand(collectionCmd())
+	root.AddCommand(apiCommands()...)
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

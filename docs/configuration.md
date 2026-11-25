@@ -28,6 +28,7 @@ Process-level settings for the master process.
 | `workers` | `1` | Worker child processes. Each owns one embedded Ansible interpreter, so this is the maximum number of concurrent playbook runs. |
 | `database.dsn` | — | PostgreSQL DSN. Without a DSN an in-memory store is used (history is lost on restart) and runs execute directly instead of through the job queue. |
 | `auth.token` | — | When set, `POST /api/sync` (without a UI session) requires the token, either as `Authorization: Bearer <token>` or as the webhook-friendly `X-Strangle-Token: <token>` header. Independent of the UI authentication below. |
+| `auth.cli_token` | — | User API token (`st_…`) sent by the CLI subcommands on every versioned API call; a client-side setting the server ignores. Can be overridden with `--token`. |
 | `sandbox.enabled` | `false` | Enables Landlock isolation: each collection gets dedicated workers, its checkout is read-only and Ansible writes go to a private scratch directory. |
 | `sandbox.read_only` | — | Extra absolute paths made readable to every sandboxed worker. |
 | `sandbox.writable` | — | Extra absolute paths a sandboxed worker may write to. Collection directories stay read-only. |
@@ -132,9 +133,13 @@ server.yml) must point at a config with `database.dsn` set.
   `/api/*` endpoint, and it also opens `POST /api/sync` without a session.
 - The static `auth.token` (see the table above) is a separate mechanism:
   it only opens `POST /api/sync` and is not a user account.
+- Put a generated token in `auth.cli_token` in server.yml to use the CLI
+  commands (`strangle run`, `runs`, `hosts`, `host`, `hostkeys`) against an
+  authenticated server. `--token` overrides it.
 
 See [the API reference](api.md#api-tokens-self-service) for the
-self-service endpoints.
+self-service endpoints and [the CLI section](../README.md#cli-client) for
+the commands.
 
 ## collection.yml
 

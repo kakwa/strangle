@@ -78,6 +78,13 @@ Both are public, even when UI authentication is on: they describe the API but
 expose no run, host or collection data themselves. Operation schemas are
 derived from the request/response Go types.
 
+The bundled CLI client (`strangle run|runs|hosts|host|hostkeys`) is generated
+against the same versioned routes: it resolves a target's org from
+collection.yml and only then calls a
+`/api/v1/orgs/{org}/collections/{collection}/...` path. It sends a user bearer
+token from `auth.cli_token` or `--token`; the static sync token is not used
+outside `POST /api/sync`.
+
 ## Authentication
 
 There are two independent mechanisms:
