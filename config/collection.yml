@@ -16,8 +16,11 @@
 # inventory per branch.
 
 targets:
-  # The home.tf Ansible project.
+  # The home.tf Ansible project. The optional `org` field groups collections
+  # in the versioned API (/api/v1/orgs/{org}/collections/{name}); it defaults
+  # to "default".
   - name: homelab
+    # org: default
     path: /home/kakwa/Geek/GitHub/home.tf/ansible
     # Git upstream. When set, strangle clones the repository into `path` and
     # keeps it pinned to the tracked ref.

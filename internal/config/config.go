@@ -36,6 +36,11 @@ type Config struct {
 	Targets []TargetConfig
 }
 
+// DefaultOrg is the organization used when a collection.yml target does not
+// name one. It keeps single-organization installations simple: all their
+// collections live under /api/v1/orgs/default/collections/....
+const DefaultOrg = "default"
+
 // Target returns the target with the given name.
 func (c Config) Target(name string) (TargetConfig, bool) {
 	for _, t := range c.Targets {
@@ -94,8 +99,12 @@ type CollectionConfig struct {
 // TargetSpec is one collection.yml entry. It points at the directory of an
 // Ansible project, which must contain a strangle.yml with named playbooks.
 type TargetSpec struct {
-	// Name is the target's identifier within the collection.
+	// Name is the target's identifier within the collection. It is exposed
+	// as the collection name in the versioned API.
 	Name string `yaml:"name"`
+	// Org is the organization the collection belongs to. It defaults to
+	// "default" when omitted, so existing collection.yml files keep working.
+	Org string `yaml:"org,omitempty"`
 	// Path is the directory of the Ansible project (the directory that
 	// contains strangle.yml).
 	Path string `yaml:"path"`
@@ -133,8 +142,12 @@ func (g GitConfig) EffectiveRef() string {
 // TargetConfig is one Ansible project: the collection.yml entry merged with
 // the named playbooks of its directory's strangle.yml.
 type TargetConfig struct {
-	// Name is the target's identifier from the collection.
+	// Name is the target's identifier from the collection. It is exposed
+	// as the collection name in the versioned API.
 	Name string
+	// Org is the organization grouping this collection with others. Empty
+	// means the default organization ("default").
+	Org string
 	// Path is the resolved directory of the Ansible project.
 	Path string
 	// Git is the upstream repository placeholder from the collection.
@@ -366,7 +379,7 @@ func Load(serverPath, collectionPath string) (Config, error) {
 	// Validate every spec first so collection-level problems surface before
 	// any target file is read.
 	seen := map[string]struct{}{}
-	for _, spec := range coll.Targets {
+	for i, spec := range coll.Targets {
 		if spec.Name == "" {
 			return Config{}, errors.New("collection: every target needs a name")
 		}
@@ -377,6 +390,13 @@ func Load(serverPath, collectionPath string) (Config, error) {
 		if spec.Path == "" {
 			return Config{}, fmt.Errorf("collection: target %q needs a path", spec.Name)
 		}
+		if spec.Org == "" {
+			spec.Org = DefaultOrg
+		}
+		if !validOrgName(spec.Org) {
+			return Config{}, fmt.Errorf("collection: target %q: invalid org name %q", spec.Name, spec.Org)
+		}
+		coll.Targets[i].Org = spec.Org
 	}
 
 	// Relative target paths resolve against the collection file's directory
@@ -472,8 +492,13 @@ func LoadTarget(spec TargetSpec, path string, vars map[string]string) (TargetCon
 		file.WorkingDir = wd
 	}
 
+	org := spec.Org
+	if org == "" {
+		org = DefaultOrg
+	}
 	t := TargetConfig{
 		Name: spec.Name,
+		Org:  org,
 		Path: path,
 		Git:  spec.Git,
 	}
@@ -549,6 +574,12 @@ func (d templateData) render(s string) (string, error) {
 		return "", err
 	}
 	return buf.String(), nil
+}
+
+// validOrgName rejects path separators and other characters that would make
+// an org name unsafe as a URL path segment.
+func validOrgName(name string) bool {
+	return validPlaybookName(name)
 }
 
 // validPlaybookName rejects path separators and other characters that would

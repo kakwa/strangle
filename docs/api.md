@@ -4,6 +4,48 @@ All endpoints are served by the master process, next to the web UI, on the
 address from `server.yml` (`listen_addr`, default `:8080`). Responses are
 JSON; errors are `{"error": "<message>"}` with the corresponding status code.
 
+## Versioned layout and aliases
+
+The canonical API is versioned under `/api/v1`. Every old flat `/api/*` route
+is still registered as an alias, so clients do not have to migrate at once:
+`GET /api/runs` and `GET /api/v1/runs` are the same handler. Authentication,
+tokens and webhook rules apply identically to both prefixes.
+
+Collections (the targets from `collection.yml`) are first-class resources
+grouped into organizations. An org comes from the optional `org` field of a
+collection entry and defaults to `default`:
+
+```yaml
+targets:
+  - name: homelab                # /api/v1/orgs/default/collections/homelab
+    path: ./ansible
+  - name: edge
+    org: lab                     # /api/v1/orgs/lab/collections/edge
+    path: ./edge-ansible
+```
+
+Org and collection resources exist only under the versioned prefix:
+
+- `GET /api/v1/orgs` — all orgs, each with its collections and their playbooks.
+- `GET /api/v1/orgs/{org}` — one org.
+- `GET /api/v1/orgs/{org}/collections` — the collections of one org.
+- `GET /api/v1/orgs/{org}/collections/{collection}` — one collection, with
+  its playbooks and links to its sub-resources.
+
+Collection-scoped aliases are available for the data endpoints:
+`runs`, `hosts`, `hosts/{host}/runs`, `hosts/{host}/changes`, `playbooks`,
+`stats`, and `POST run` / `POST sync`. For example:
+
+```
+GET  /api/v1/orgs/lab/collections/edge/runs
+GET  /api/v1/orgs/lab/collections/edge/hosts
+POST /api/v1/orgs/lab/collections/edge/run
+```
+
+On collection-scoped `run` and `sync` routes the collection in the URL selects
+the target; a conflicting `target` field in the JSON body is rejected with
+`400`. An unknown org/collection pair returns `404`.
+
 ## Authentication
 
 There are two independent mechanisms:

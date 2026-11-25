@@ -73,6 +73,16 @@ func (a *Ansible) TargetNames() []string {
 	return names
 }
 
+// Target returns the resolved configuration of one target, including its
+// organization. The API uses it to expose collections as first-class
+// entities under /api/v1/orgs/{org}/collections/{collection}.
+func (a *Ansible) Target(name string) (config.TargetConfig, bool) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	t, ok := a.targets[name]
+	return t, ok
+}
+
 // Playbooks returns the names of the configured jobs of one target.
 func (a *Ansible) Playbooks(target string) []string {
 	a.mu.RLock()

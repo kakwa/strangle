@@ -1,0 +1,326 @@
+package server
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"sort"
+	"strings"
+
+	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/store"
+)
+
+// apiVersion is the current version of the HTTP API. All endpoints are
+// served under /api/v1; the original flat /api/* routes remain registered as
+// aliases so existing clients keep working.
+const apiVersion = "v1"
+
+// apiPrefix is the versioned prefix of every API route.
+const apiPrefix = "/api/" + apiVersion
+
+// allRuns is the upper bound used when a scoped endpoint needs to look at
+// the whole run history before filtering it (store.ListRuns has no filters
+// yet).
+const allRuns = 1_000_000
+
+// orgInfo is the representation of an organization in the API.
+type orgInfo struct {
+	Name        string           `json:"name"`
+	Collections []collectionInfo `json:"collections"`
+}
+
+// collectionInfo is the representation of a collection (a configured target)
+// in the API.
+type collectionInfo struct {
+	Name      string         `json:"name"`
+	Org       string         `json:"org"`
+	Playbooks []playbookInfo `json:"playbooks,omitempty"`
+}
+
+// apiHandler registers h both under a versioned path and under the legacy
+// flat alias (e.g. GET /api/v1/runs and GET /api/runs). Patterns registered
+// only under the versioned tree, such as the org/collection resources, use
+// mux.HandleFunc directly instead.
+func apiHandler(mux *http.ServeMux, method, path string, h http.HandlerFunc) {
+	mux.HandleFunc(method+" "+path, h)
+	if strings.HasPrefix(path, apiPrefix) {
+		alias := "/api" + strings.TrimPrefix(path, apiPrefix)
+		mux.HandleFunc(method+" "+alias, h)
+	}
+}
+
+// orgOf returns the organization a configured collection belongs to.
+func orgOf(t config.TargetConfig) string {
+	if t.Org == "" {
+		return config.DefaultOrg
+	}
+	return t.Org
+}
+
+// collectionRuns lists runs, restricted to one collection when the request
+// used a collection-scoped path. The filtering is done here until the run
+// listing gains its own query parameters (FEATURES 21).
+func (s *Server) collectionRuns(ctx context.Context, collection string, limit int) ([]store.RunRecord, error) {
+	if collection == "" {
+		return s.store.ListRuns(ctx, limit)
+	}
+	all, err := s.store.ListRuns(ctx, allRuns)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]store.RunRecord, 0, limit)
+	for _, run := range all {
+		if run.Target != collection {
+			continue
+		}
+		out = append(out, run)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+// collectionStats returns aggregate stats, restricted to one collection on
+// a collection-scoped route.
+func (s *Server) collectionStats(ctx context.Context, collection string) (*store.Stats, error) {
+	if collection == "" {
+		return s.store.Stats(ctx)
+	}
+	runs, err := s.store.ListRuns(ctx, allRuns)
+	if err != nil {
+		return nil, err
+	}
+	hosts, err := s.store.ListHosts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	st := &store.Stats{PerPlaybook: []store.PlaybookStats{}}
+	var totalDuration int64
+	for _, run := range runs {
+		if run.Target != collection {
+			continue
+		}
+		st.Runs.Total++
+		if run.Success {
+			st.Runs.Succeeded++
+		} else {
+			st.Runs.Failed++
+		}
+		totalDuration += run.DurationMS
+		if run.FinishedAt.After(st.Runs.LastRunAt) {
+			st.Runs.LastRunAt = run.FinishedAt
+		}
+	}
+	if st.Runs.Total > 0 {
+		st.Runs.AvgDurationMS = totalDuration / int64(st.Runs.Total)
+	}
+	for _, h := range hosts {
+		if h.Target != collection {
+			continue
+		}
+		st.Hosts.Total++
+		if h.InInventory {
+			st.Hosts.InInventory++
+		}
+		if h.Active {
+			st.Hosts.Active++
+		}
+		if h.InInventory && !h.Active {
+			st.Hosts.Disappeared++
+		}
+	}
+	type key struct{ target, playbook string }
+	byBook := map[key]*store.PlaybookStats{}
+	for _, run := range runs {
+		if run.Target != collection {
+			continue
+		}
+		k := key{run.Target, run.Playbook}
+		pb, ok := byBook[k]
+		if !ok {
+			pb = &store.PlaybookStats{Target: run.Target, Playbook: run.Playbook}
+			byBook[k] = pb
+		}
+		pb.Total++
+		if !run.Success {
+			pb.Failed++
+		}
+		if run.FinishedAt.After(pb.LastRunAt) {
+			pb.LastRunAt = run.FinishedAt
+		}
+	}
+	for _, pb := range byBook {
+		st.PerPlaybook = append(st.PerPlaybook, *pb)
+	}
+	sort.Slice(st.PerPlaybook, func(i, j int) bool {
+		if st.PerPlaybook[i].Target == st.PerPlaybook[j].Target {
+			return st.PerPlaybook[i].Playbook < st.PerPlaybook[j].Playbook
+		}
+		return st.PerPlaybook[i].Target < st.PerPlaybook[j].Target
+	})
+	return st, nil
+}
+
+// organizations returns all organizations in name order, each with its
+// collections. It is derived from the live configuration, so a git sync that
+// changes the target list is reflected immediately.
+func (s *Server) organizations() []orgInfo {
+	byOrg := map[string][]collectionInfo{}
+	if s.applier != nil {
+		for _, name := range s.applier.TargetNames() {
+			t, ok := s.applier.Target(name)
+			if !ok {
+				continue
+			}
+			org := orgOf(t)
+			pbs := make([]playbookInfo, 0, len(t.Playbooks))
+			for _, pb := range t.Playbooks {
+				pbs = append(pbs, playbookInfo{
+					Name:      pb.Name,
+					Playbook:  strings.TrimPrefix(pb.Playbook, "./"),
+					Inventory: strings.TrimPrefix(pb.Inventory, "./"),
+				})
+			}
+			byOrg[org] = append(byOrg[org], collectionInfo{
+				Name:      name,
+				Org:       org,
+				Playbooks: pbs,
+			})
+		}
+	}
+	names := make([]string, 0, len(byOrg))
+	for name := range byOrg {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]orgInfo, 0, len(names))
+	for _, name := range names {
+		colls := byOrg[name]
+		sort.Slice(colls, func(i, j int) bool { return colls[i].Name < colls[j].Name })
+		out = append(out, orgInfo{Name: name, Collections: colls})
+	}
+	return out
+}
+
+// collectionIn resolves a collection by org and name. Collections are
+// configured targets; an org is the group named in collection.yml (or
+// "default" when omitted).
+func (s *Server) collectionIn(org, name string) (config.TargetConfig, bool) {
+	if s.applier == nil {
+		return config.TargetConfig{}, false
+	}
+	t, ok := s.applier.Target(name)
+	if !ok || orgOf(t) != org {
+		return config.TargetConfig{}, false
+	}
+	return t, true
+}
+
+// collectionScope applies the org/collection path parameters of a
+// collection-level route. It returns the collection name to filter on, or
+// ok=false when the org/collection pair does not exist. On flat routes it
+// returns an empty name and ok=true (no scoping).
+func (s *Server) collectionScope(r *http.Request) (string, bool) {
+	name := r.PathValue("collection")
+	if name == "" {
+		return "", true
+	}
+	if _, ok := s.collectionIn(r.PathValue("org"), name); !ok {
+		return "", false
+	}
+	return name, true
+}
+
+// requireCollection resolves the org/collection of a route that must have
+// both path parameters, answering 404 when either is unknown.
+func (s *Server) requireCollection(w http.ResponseWriter, r *http.Request) (config.TargetConfig, bool) {
+	t, ok := s.collectionIn(r.PathValue("org"), r.PathValue("collection"))
+	if !ok {
+		writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
+	}
+	return t, ok
+}
+
+// registerOrgRoutes adds the first-class org and collection resources. These
+// exist only in the versioned API: there is no flat alias for an org.
+func (s *Server) registerOrgRoutes(mux *http.ServeMux) {
+	// GET /api/v1/orgs lists every organization and its collections.
+	mux.HandleFunc("GET "+apiPrefix+"/orgs", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, s.organizations())
+	})
+
+	// GET /api/v1/orgs/{org} returns one organization.
+	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}", func(w http.ResponseWriter, r *http.Request) {
+		org := r.PathValue("org")
+		for _, o := range s.organizations() {
+			if o.Name == org {
+				writeJSON(w, http.StatusOK, o)
+				return
+			}
+		}
+		writeError(w, http.StatusNotFound, fmt.Errorf("unknown org %q", org))
+	})
+
+	// GET /api/v1/orgs/{org}/collections lists the collections of an org.
+	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections", func(w http.ResponseWriter, r *http.Request) {
+		org := r.PathValue("org")
+		for _, o := range s.organizations() {
+			if o.Name == org {
+				writeJSON(w, http.StatusOK, o.Collections)
+				return
+			}
+		}
+		writeError(w, http.StatusNotFound, fmt.Errorf("unknown org %q", org))
+	})
+
+	// GET /api/v1/orgs/{org}/collections/{collection} describes one
+	// collection: its playbooks and the sub-resource paths available for it.
+	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}", func(w http.ResponseWriter, r *http.Request) {
+		t, ok := s.requireCollection(w, r)
+		if !ok {
+			return
+		}
+		pbs := make([]playbookInfo, 0, len(t.Playbooks))
+		for _, pb := range t.Playbooks {
+			pbs = append(pbs, playbookInfo{
+				Name:      pb.Name,
+				Playbook:  strings.TrimPrefix(pb.Playbook, "./"),
+				Inventory: strings.TrimPrefix(pb.Inventory, "./"),
+			})
+		}
+		base := apiPrefix + "/orgs/" + t.Org + "/collections/" + t.Name
+		if t.Org == "" {
+			base = apiPrefix + "/orgs/" + config.DefaultOrg + "/collections/" + t.Name
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"name":      t.Name,
+			"org":       orgOf(t),
+			"playbooks": pbs,
+			"links": map[string]string{
+				"runs":      base + "/runs",
+				"hosts":     base + "/hosts",
+				"stats":     base + "/stats",
+				"playbooks": base + "/playbooks",
+				"run":       base + "/run",
+				"sync":      base + "/sync",
+			},
+		})
+	})
+}
+
+// apiAliasPath maps a versioned request path to its legacy flat alias. It is
+// used by auth to apply the same rules (login endpoints, sync token, ...)
+// whatever prefix a client used.
+func apiAliasPath(path string) string {
+	if !strings.HasPrefix(path, apiPrefix) {
+		return path
+	}
+	return "/api" + strings.TrimPrefix(path, apiPrefix)
+}
+
+// unknownCollection is the error for an invalid org/collection pair.
+func unknownCollection(org, collection string) error {
+	return fmt.Errorf("unknown collection %q in org %q", collection, org)
+}

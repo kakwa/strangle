@@ -128,14 +128,15 @@ func (s *Server) Routes() http.Handler {
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) {
+	apiHandler(mux, "GET", apiPrefix+"/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+	s.registerOrgRoutes(mux)
 
 	// --- UI authentication -------------------------------------------------
 
 	// POST /api/login authenticates a local user and starts a session.
-	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
+	apiHandler(mux, "POST", apiPrefix+"/login", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Username string `json:"username"`
 			Password string `json:"password"`
@@ -170,7 +171,7 @@ func (s *Server) Routes() http.Handler {
 	})
 
 	// POST /api/logout ends the session carried by the request cookie.
-	mux.HandleFunc("POST /api/logout", func(w http.ResponseWriter, r *http.Request) {
+	apiHandler(mux, "POST", apiPrefix+"/logout", func(w http.ResponseWriter, r *http.Request) {
 		if c, err := r.Cookie(SessionCookie); err == nil && s.sessions != nil {
 			s.sessions.Destroy(c.Value)
 		}
@@ -188,7 +189,7 @@ func (s *Server) Routes() http.Handler {
 	//   200 {authenticated: false}          auth off (open server)
 	//   200 {authenticated: true, username} valid session
 	//   401                                 auth on, no valid session
-	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
+	apiHandler(mux, "GET", apiPrefix+"/me", func(w http.ResponseWriter, r *http.Request) {
 		if !s.authOn {
 			writeJSON(w, http.StatusOK, meResponse{})
 			return
@@ -209,7 +210,7 @@ func (s *Server) Routes() http.Handler {
 
 	// GET /api/tokens lists the caller's tokens. Raw values are never
 	// returned; only a display prefix.
-	mux.HandleFunc("GET /api/tokens", func(w http.ResponseWriter, r *http.Request) {
+	apiHandler(mux, "GET", apiPrefix+"/tokens", func(w http.ResponseWriter, r *http.Request) {
 		if s.tokens == nil {
 			writeError(w, http.StatusServiceUnavailable, errors.New("token storage is not configured (no database)"))
 			return
@@ -230,7 +231,7 @@ func (s *Server) Routes() http.Handler {
 	// POST /api/tokens creates one. Body: {"name": "...", "ttl_hours": N}
 	// where ttl_hours is optional (absent or 0: no expiry). The raw value is
 	// returned exactly once, in the 201 response.
-	mux.HandleFunc("POST /api/tokens", func(w http.ResponseWriter, r *http.Request) {
+	apiHandler(mux, "POST", apiPrefix+"/tokens", func(w http.ResponseWriter, r *http.Request) {
 		if s.tokens == nil {
 			writeError(w, http.StatusServiceUnavailable, errors.New("token storage is not configured (no database)"))
 			return
@@ -262,7 +263,7 @@ func (s *Server) Routes() http.Handler {
 	})
 
 	// DELETE /api/tokens/{name} revokes one.
-	mux.HandleFunc("DELETE /api/tokens/{name}", func(w http.ResponseWriter, r *http.Request) {
+	apiHandler(mux, "DELETE", apiPrefix+"/tokens/{name}", func(w http.ResponseWriter, r *http.Request) {
 		if s.tokens == nil {
 			writeError(w, http.StatusServiceUnavailable, errors.New("token storage is not configured (no database)"))
 			return
@@ -285,8 +286,13 @@ func (s *Server) Routes() http.Handler {
 
 	// --- data endpoints ----------------------------------------------------
 
-	mux.HandleFunc("GET /api/stats", func(w http.ResponseWriter, r *http.Request) {
-		stats, err := s.store.Stats(r.Context())
+	apiHandler(mux, "GET", apiPrefix+"/stats", func(w http.ResponseWriter, r *http.Request) {
+		coll, ok := s.collectionScope(r)
+		if !ok {
+			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
+			return
+		}
+		stats, err := s.collectionStats(r.Context(), coll)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -294,48 +300,115 @@ func (s *Server) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, stats)
 	})
 
-	mux.HandleFunc("GET /api/runs", func(w http.ResponseWriter, r *http.Request) {
+	handleRuns := func(w http.ResponseWriter, r *http.Request) {
+		coll, ok := s.collectionScope(r)
+		if !ok {
+			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
+			return
+		}
 		limit := intQuery(r, "limit", 50)
-		runs, err := s.store.ListRuns(r.Context(), limit)
+		runs, err := s.collectionRuns(r.Context(), coll, limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, runs)
-	})
+	}
+	apiHandler(mux, "GET", apiPrefix+"/runs", handleRuns)
+	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/runs", handleRuns)
 
-	mux.HandleFunc("GET /api/hosts", func(w http.ResponseWriter, r *http.Request) {
+	handleHosts := func(w http.ResponseWriter, r *http.Request) {
+		coll, ok := s.collectionScope(r)
+		if !ok {
+			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
+			return
+		}
 		hosts, err := s.store.ListHosts(r.Context())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		if coll != "" {
+			filtered := make([]store.HostRecord, 0, len(hosts))
+			for _, h := range hosts {
+				if h.Target == coll {
+					filtered = append(filtered, h)
+				}
+			}
+			hosts = filtered
+		}
 		writeJSON(w, http.StatusOK, hosts)
+	}
+	apiHandler(mux, "GET", apiPrefix+"/hosts", handleHosts)
+	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hosts", handleHosts)
+
+	// Collection-level stats: the same handler as the master-level one, but
+	// with the org/collection path parameters present.
+	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/stats", func(w http.ResponseWriter, r *http.Request) {
+		coll, ok := s.collectionScope(r)
+		if !ok {
+			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
+			return
+		}
+		stats, err := s.collectionStats(r.Context(), coll)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, stats)
 	})
 
-	mux.HandleFunc("GET /api/hosts/{host}/runs", func(w http.ResponseWriter, r *http.Request) {
+	handleHostRuns := func(w http.ResponseWriter, r *http.Request) {
 		limit := intQuery(r, "limit", 10)
 		runs, err := s.store.HostRuns(r.Context(), r.PathValue("host"), limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		if coll := r.PathValue("collection"); coll != "" {
+			filtered := make([]store.HostRunRecord, 0, len(runs))
+			for _, run := range runs {
+				if run.Target == coll {
+					filtered = append(filtered, run)
+				}
+			}
+			runs = filtered
+		}
 		writeJSON(w, http.StatusOK, runs)
-	})
+	}
+	apiHandler(mux, "GET", apiPrefix+"/hosts/{host}/runs", handleHostRuns)
+	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hosts/{host}/runs", handleHostRuns)
 
-	mux.HandleFunc("GET /api/hosts/{host}/changes", func(w http.ResponseWriter, r *http.Request) {
+	handleHostChanges := func(w http.ResponseWriter, r *http.Request) {
 		limit := intQuery(r, "limit", 200)
 		changes, err := s.store.HostChanges(r.Context(), r.PathValue("host"), limit)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		if coll := r.PathValue("collection"); coll != "" {
+			filtered := make([]store.TaskStateRecord, 0, len(changes))
+			for _, c := range changes {
+				if c.Target == coll {
+					filtered = append(filtered, c)
+				}
+			}
+			changes = filtered
+		}
 		writeJSON(w, http.StatusOK, changes)
-	})
+	}
+	apiHandler(mux, "GET", apiPrefix+"/hosts/{host}/changes", handleHostChanges)
+	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hosts/{host}/changes", handleHostChanges)
 
-	// /api/playbooks maps each target to its configured jobs, with the
-	// latest run outcome of each job.
-	mux.HandleFunc("GET /api/playbooks", func(w http.ResponseWriter, r *http.Request) {
+	// /api/v1/playbooks maps each collection (target) to its configured
+	// jobs, with the latest run outcome of each job. The collection-level
+	// variant returns only the requested collection.
+	handlePlaybooks := func(w http.ResponseWriter, r *http.Request) {
+		coll, ok := s.collectionScope(r)
+		if !ok {
+			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
+			return
+		}
 		runs, err := s.store.ListRuns(r.Context(), 1000)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
@@ -343,6 +416,9 @@ func (s *Server) Routes() http.Handler {
 		}
 		latest := map[string]store.RunRecord{}
 		for _, run := range runs {
+			if coll != "" && run.Target != coll {
+				continue
+			}
 			key := run.Target + "\x00" + run.Playbook
 			if cur, ok := latest[key]; !ok || run.FinishedAt.After(cur.FinishedAt) {
 				latest[key] = run
@@ -350,7 +426,11 @@ func (s *Server) Routes() http.Handler {
 		}
 
 		out := map[string][]playbookInfo{}
-		for _, target := range s.applier.TargetNames() {
+		targets := s.applier.TargetNames()
+		if coll != "" {
+			targets = []string{coll}
+		}
+		for _, target := range targets {
 			configs := s.applier.PlaybookConfigs(target)
 			pbs := make([]playbookInfo, 0, len(configs))
 			for _, pb := range configs {
@@ -369,11 +449,13 @@ func (s *Server) Routes() http.Handler {
 			out[target] = pbs
 		}
 		writeJSON(w, http.StatusOK, out)
-	})
+	}
+	apiHandler(mux, "GET", apiPrefix+"/playbooks", handlePlaybooks)
+	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/playbooks", handlePlaybooks)
 
-	// /api/workers reports the master's worker pool: one entry per worker
+	// /api/v1/workers reports the master's worker pool: one entry per worker
 	// process, with liveness probed over gRPC.
-	mux.HandleFunc("GET /api/workers", func(w http.ResponseWriter, r *http.Request) {
+	apiHandler(mux, "GET", apiPrefix+"/workers", func(w http.ResponseWriter, r *http.Request) {
 		if s.workers == nil {
 			writeJSON(w, http.StatusOK, []worker.WorkerStatus{})
 			return
@@ -381,7 +463,12 @@ func (s *Server) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, s.workers.WorkerStatuses(r.Context()))
 	})
 
-	mux.HandleFunc("POST /api/run", func(w http.ResponseWriter, r *http.Request) {
+	handleRun := func(w http.ResponseWriter, r *http.Request) {
+		coll, ok := s.collectionScope(r)
+		if !ok {
+			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
+			return
+		}
 		var req struct {
 			Target   string `json:"target"`
 			Playbook string `json:"playbook"`
@@ -389,6 +476,15 @@ func (s *Server) Routes() http.Handler {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
+		}
+		if coll != "" {
+			// On a collection-scoped route the URL wins; a body target is
+			// only accepted when it agrees with the URL.
+			if req.Target != "" && req.Target != coll {
+				writeError(w, http.StatusBadRequest, errors.New("target does not match the collection in the URL"))
+				return
+			}
+			req.Target = coll
 		}
 		if req.Target == "" {
 			writeError(w, http.StatusBadRequest, errors.New("target is required"))
@@ -416,20 +512,27 @@ func (s *Server) Routes() http.Handler {
 			"target":   req.Target,
 			"playbook": req.Playbook,
 		})
-	})
+	}
+	apiHandler(mux, "POST", apiPrefix+"/run", handleRun)
+	mux.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/run", handleRun)
 
-	// /api/sync is the webhook for git-backed collections: it moves the
+	// /api/v1/sync is the webhook for git-backed collections: it moves the
 	// target's checkout to its tracked ref (or to the given branch, which
 	// becomes the new tracked ref) and reloads its strangle.yml. A valid UI
 	// session is always accepted; when auth.token is set in server.yml, a
 	// matching bearer token is also accepted (machine-to-machine webhooks).
-	mux.HandleFunc("POST /api/sync", func(w http.ResponseWriter, r *http.Request) {
+	handleSync := func(w http.ResponseWriter, r *http.Request) {
 		if s.syncer == nil {
 			writeError(w, http.StatusNotFound, errors.New("no git-backed collection is configured"))
 			return
 		}
 		if !s.syncAllowed(r) {
 			writeError(w, http.StatusUnauthorized, errors.New("missing or invalid session or bearer token"))
+			return
+		}
+		coll, ok := s.collectionScope(r)
+		if !ok {
+			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
 			return
 		}
 		var req struct {
@@ -439,6 +542,13 @@ func (s *Server) Routes() http.Handler {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
+		}
+		if coll != "" {
+			if req.Target != "" && req.Target != coll {
+				writeError(w, http.StatusBadRequest, errors.New("target does not match the collection in the URL"))
+				return
+			}
+			req.Target = coll
 		}
 		if req.Target == "" {
 			writeError(w, http.StatusBadRequest, errors.New("target is required"))
@@ -465,11 +575,13 @@ func (s *Server) Routes() http.Handler {
 			"rev":     rev,
 			"changed": changed,
 		})
-	})
+	}
+	apiHandler(mux, "POST", apiPrefix+"/sync", handleSync)
+	mux.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/sync", handleSync)
 
 	// Host-key endpoints identify an SSH scope as "<target>/<playbook name>"
 	// in their `target` field (or the JSON response's `target` key).
-	mux.HandleFunc("GET /api/hostkeys", func(w http.ResponseWriter, _ *http.Request) {
+	apiHandler(mux, "GET", apiPrefix+"/hostkeys", func(w http.ResponseWriter, _ *http.Request) {
 		keys := []sshpool.HostKey{}
 		if s.ssh != nil {
 			keys = s.ssh.PendingHostKeys()
@@ -477,7 +589,7 @@ func (s *Server) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, keys)
 	})
 
-	mux.HandleFunc("GET /api/ssh/stats", func(w http.ResponseWriter, _ *http.Request) {
+	apiHandler(mux, "GET", apiPrefix+"/ssh/stats", func(w http.ResponseWriter, _ *http.Request) {
 		stats := map[string]sshpool.Stats{}
 		if s.ssh != nil {
 			stats = s.ssh.Stats()
@@ -485,7 +597,7 @@ func (s *Server) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, stats)
 	})
 
-	mux.HandleFunc("POST /api/hostkeys/accept", func(w http.ResponseWriter, r *http.Request) {
+	apiHandler(mux, "POST", apiPrefix+"/hostkeys/accept", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Target      string `json:"target"`
 			Host        string `json:"host"`
@@ -506,7 +618,7 @@ func (s *Server) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "accepted", "host": req.Host})
 	})
 
-	mux.HandleFunc("POST /api/hostkeys/reject", func(w http.ResponseWriter, r *http.Request) {
+	apiHandler(mux, "POST", apiPrefix+"/hostkeys/reject", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Target string `json:"target"`
 			Host   string `json:"host"`
@@ -581,19 +693,23 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 // syncOK reports whether r may use POST /api/sync: any valid identity works,
 // and when auth is off the endpoint is open.
 func (s *Server) syncOK(r *http.Request) bool {
-	return r.URL.Path == "/api/sync" && r.Method == http.MethodPost && s.syncAllowed(r)
+	path := apiAliasPath(r.URL.Path)
+	return (path == "/api/sync" || strings.HasSuffix(path, "/sync")) &&
+		r.Method == http.MethodPost && s.syncAllowed(r)
 }
 
-// authOpen lists the /api endpoints reachable without a session.
+// authOpen lists the API endpoints reachable without a session, under both
+// the versioned prefix and their flat aliases.
 func (s *Server) authOpen(r *http.Request) bool {
+	path := apiAliasPath(r.URL.Path)
 	switch {
-	case r.URL.Path == "/api/health" && r.Method == http.MethodGet:
+	case path == "/api/health" && r.Method == http.MethodGet:
 		return true
-	case r.URL.Path == "/api/login" && r.Method == http.MethodPost:
+	case path == "/api/login" && r.Method == http.MethodPost:
 		return true
-	case r.URL.Path == "/api/logout" && r.Method == http.MethodPost:
+	case path == "/api/logout" && r.Method == http.MethodPost:
 		return true
-	case r.URL.Path == "/api/me" && r.Method == http.MethodGet:
+	case path == "/api/me" && r.Method == http.MethodGet:
 		return true
 	}
 	return false
