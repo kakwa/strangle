@@ -10,11 +10,12 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/kakwa/strangle/internal/schedule"
+	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
 )
 
@@ -132,7 +133,7 @@ func (s *Scheduler) reconcile(ctx context.Context) {
 				zap.Error(err))
 			continue
 		}
-		if sch.IsZero() {
+		if sch == nil {
 			continue // no schedule and no fallback: manual runs only
 		}
 		jobCtx, cancel := context.WithCancel(ctx)
@@ -141,19 +142,26 @@ func (s *Scheduler) reconcile(ctx context.Context) {
 	}
 }
 
-// resolve turns a job's schedule string into a Schedule. An empty job schedule
-// uses the server fallback; if that is empty too the job is manual-only.
-func (s *Scheduler) resolve(spec string) (schedule.Schedule, error) {
+// resolve turns a job's schedule string into a cron schedule. An empty job
+// schedule uses the server fallback; if that is empty too the job is manual-only.
+func (s *Scheduler) resolve(spec string) (cron.Schedule, error) {
 	if strings.TrimSpace(spec) == "" {
 		spec = s.fallback
 	}
 	if strings.TrimSpace(spec) == "" {
-		return schedule.Schedule{}, nil
+		return nil, nil
 	}
-	return schedule.Parse(spec)
+	parsed, err := cron.ParseStandard(spec)
+	if err != nil {
+		return nil, fmt.Errorf("invalid schedule %q: %w", spec, err)
+	}
+	if parsed.Next(time.Now()).IsZero() {
+		return nil, fmt.Errorf("schedule %q has no upcoming occurrence", spec)
+	}
+	return parsed, nil
 }
 
-func (s *Scheduler) runJob(ctx context.Context, job Job, sch schedule.Schedule) {
+func (s *Scheduler) runJob(ctx context.Context, job Job, sch cron.Schedule) {
 	next := sch.Next(time.Now())
 	if next.IsZero() {
 		return

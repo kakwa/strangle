@@ -25,7 +25,7 @@ import (
 	"text/template"
 	"time"
 
-	sched "github.com/kakwa/strangle/internal/schedule"
+	"github.com/robfig/cron/v3"
 	"gopkg.in/yaml.v3"
 )
 
@@ -153,10 +153,31 @@ type DatabaseConfig struct {
 }
 
 // CollectionConfig is the content of collection.yml: the inventory of
-// Ansible projects (targets) that strangle applies.
+// Ansible projects (collections) that strangle applies.
 type CollectionConfig struct {
-	// Targets is the ordered list of projects to apply.
-	Targets []TargetSpec `yaml:"targets"`
+	// Collections is the ordered list of projects to apply.
+	Collections []TargetSpec `yaml:"collections"`
+}
+
+// UnmarshalYAML accepts the current `collections:` list and the legacy
+// `targets:` list used by older collection.yml files. The two are mutually
+// exclusive; specifying both is a configuration error.
+func (c *CollectionConfig) UnmarshalYAML(node *yaml.Node) error {
+	var raw struct {
+		Collections []TargetSpec `yaml:"collections"`
+		Targets     []TargetSpec `yaml:"targets"`
+	}
+	if err := node.Decode(&raw); err != nil {
+		return err
+	}
+	if len(raw.Collections) > 0 && len(raw.Targets) > 0 {
+		return errors.New("collection: use either collections or targets, not both")
+	}
+	c.Collections = raw.Collections
+	if len(c.Collections) == 0 {
+		c.Collections = raw.Targets
+	}
+	return nil
 }
 
 // TargetSpec is one collection.yml entry. It points at the directory of an
@@ -544,8 +565,8 @@ func readCollection(path string) (CollectionConfig, error) {
 	if err := yaml.Unmarshal(data, &coll); err != nil {
 		return CollectionConfig{}, fmt.Errorf("parse collection %q: %w", path, err)
 	}
-	if len(coll.Targets) == 0 {
-		return CollectionConfig{}, fmt.Errorf("collection %q: targets is required (non-empty list)", path)
+	if len(coll.Collections) == 0 {
+		return CollectionConfig{}, fmt.Errorf("collection %q: collections is required (non-empty list)", path)
 	}
 	return coll, nil
 }
@@ -830,8 +851,12 @@ func resolveSchedule(scheduleSpec string, td templateData, where string) (string
 	if raw == "" {
 		return "", nil
 	}
-	if _, err := sched.Parse(raw); err != nil {
-		return "", fmt.Errorf("%s: %w", where, err)
+	parsed, err := cron.ParseStandard(raw)
+	if err != nil {
+		return "", fmt.Errorf("%s: invalid schedule %q: %w", where, raw, err)
+	}
+	if parsed.Next(time.Now()).IsZero() {
+		return "", fmt.Errorf("%s: schedule %q has no upcoming occurrence", where, raw)
 	}
 	return raw, nil
 }
@@ -1178,8 +1203,12 @@ func (s *ServerConfig) validate() error {
 	if strings.TrimSpace(s.Schedule) == "" {
 		s.Schedule = "@every 15m"
 	}
-	if _, err := sched.Parse(s.Schedule); err != nil {
-		return fmt.Errorf("server: schedule: %w", err)
+	parsed, err := cron.ParseStandard(s.Schedule)
+	if err != nil {
+		return fmt.Errorf("server: schedule: invalid schedule %q: %w", s.Schedule, err)
+	}
+	if parsed.Next(time.Now()).IsZero() {
+		return fmt.Errorf("server: schedule %q has no upcoming occurrence", s.Schedule)
 	}
 	if strings.TrimSpace(s.Database.DSN) == "" {
 		return errors.New("server: database.dsn is required")
