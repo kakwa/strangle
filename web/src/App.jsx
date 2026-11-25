@@ -856,7 +856,7 @@ export default function App() {
                 }
               />
               <Route
-                path="/hosts/:host(.*)"
+                path="/hosts/:host"
                 element={
                   <HostDetailRoute hosts={hosts} onBack={() => navigate('/hosts')} />
                 }
