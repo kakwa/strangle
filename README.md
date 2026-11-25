@@ -215,3 +215,11 @@ Playbook scheduling, worker supervision, PostgreSQL-backed history, the
 postgres-backed job queue, git-backed collections, per-task change traces and
 the web UI are implemented and exercised by the test suite (PostgreSQL tests
 run when `STRANGLE_TEST_DSN` is set).
+
+## License
+
+Strangle is free software, licensed under the GNU General Public License,
+version 3 or (at your option) any later version. See [LICENSE](LICENSE) for
+the full text.
+
+Copyright (c) 2026 Carpentier Pierre-Francois.

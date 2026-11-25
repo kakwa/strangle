@@ -4,7 +4,22 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Strangle</title>
-    <script type="module" crossorigin src="/assets/index-CFKXGZT3.js"></script>
+    <script>
+      // Applies the persisted (or system) color scheme before React mounts so
+      // the app does not flash the wrong theme on load. Mirrors the logic of
+      // Mantine's ColorSchemeScript (v7), which is a component and therefore
+      // cannot run before the bundle mounts.
+      (function () {
+        var key = "mantine-color-scheme-value"
+        try {
+          var stored = window.localStorage.getItem(key)
+          var colorScheme = stored === "light" || stored === "dark" || stored === "auto" ? stored : "auto"
+          var computed = colorScheme !== "auto" ? colorScheme : window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+          document.documentElement.setAttribute("data-mantine-color-scheme", computed)
+        } catch (e) {}
+      })()
+    </script>
+    <script type="module" crossorigin src="/assets/index-DJci4hnz.js"></script>
     <link rel="stylesheet" crossorigin href="/assets/index-BKGOnoSt.css">
   </head>
   <body>
