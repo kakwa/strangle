@@ -1,8 +1,6 @@
-// Package workeripc implements the JSON-RPC protocol the master uses to talk
-// to its worker processes over unix sockets. It uses only the standard
-// library (net/rpc with the net/rpc/jsonrpc codec): there is no schema and no
-// generated code to keep in sync.
-package workeripc
+// Master/worker JSON-RPC protocol. It uses only the standard library
+// (net/rpc with the net/rpc/jsonrpc codec): no schema or generated code.
+package worker
 
 import "encoding/json"
 

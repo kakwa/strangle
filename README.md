@@ -20,7 +20,7 @@ The server binary (`strangle-server serve`) owns the configuration, the HTTP API
 and the schedule. It spawns a pool of worker child processes
 (`strangle-server worker`), each owning one embedded Ansible interpreter, and
 dispatches playbook runs to them over unix sockets using a small JSON-RPC
-protocol (`internal/workeripc`, no code generation).
+protocol in `internal/worker` (no code generation).
 A master supervises the workers: health pings, automatic restarts with
 backoff, and `GET /api/workers` for observability.
 
@@ -54,18 +54,17 @@ internal/
   applier/           dispatches each run to a worker, parses output, records results
   collection/        git-backed targets: clone, pin to tracked ref, sync, reload
   git/               in-process git operations (go-git), no system git binary
-  inventory/         parses YAML inventory files into host groups and members
   notify/            failure notifications (webhook, Slack, email)
   parser/            parses ansible-playbook output (recap, task results, diffs)
   schedule/          parses durations, cron expressions and aliases
   scheduler/         runs each job on its own schedule (live job list)
   riverqueue/        postgres-backed River job queue for playbook runs
-  server/            HTTP API + serves the built web UI
+  server/            HTTP API, /metrics and the built web UI
   sshpool/           Go-managed persistent SSH connections with host-key policies
   store/             run records and the Store interface (in-memory + PostgreSQL)
   db/                GORM/PostgreSQL implementation of the Store
-  worker/            worker pool: spawning, dispatch, supervision and restarts
-  workeripc/         JSON-RPC protocol and transport between master and workers
+  maintenance/       periodic run retention and stale-host cleanup
+  worker/            worker pool, JSON-RPC transport and the worker service
 web/                 React (Vite) web UI, styled with Mantine; built assets are
                      embedded into the binary (go:embed)
 config/              base configuration, loaded by default

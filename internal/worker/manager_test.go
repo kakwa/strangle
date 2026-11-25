@@ -13,7 +13,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/kakwa/strangle/internal/sandbox"
-	"github.com/kakwa/strangle/internal/workeripc"
 )
 
 // TestMain lets the test binary double as the fake worker process: the
@@ -44,7 +43,7 @@ func runFakeWorker(args []string) int {
 
 	srv := rpc.NewServer()
 	if os.Getenv("FAKE_WORKER_HUNG") == "" {
-		srv = workeripc.NewRPCServer(fakeHandler{})
+		srv = NewRPCServer(fakeHandler{})
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -68,7 +67,7 @@ func runFakeWorker(args []string) int {
 		close(done)
 	}()
 
-	if err := workeripc.Serve(ctx, socket, srv, zap.NewNop(), 0); err != nil {
+	if err := Serve(ctx, socket, srv, zap.NewNop(), 0); err != nil {
 		os.Stderr.WriteString(err.Error() + "\n")
 		return 1
 	}
@@ -79,8 +78,8 @@ func runFakeWorker(args []string) int {
 // fakeHandler answers Worker.RunPlaybook with a canned result.
 type fakeHandler struct{}
 
-func (fakeHandler) RunPlaybook(workeripc.RunArgs) workeripc.RunReply {
-	return workeripc.RunReply{Output: "fake output"}
+func (fakeHandler) RunPlaybook(RunArgs) RunReply {
+	return RunReply{Output: "fake output"}
 }
 
 // newFakeManager starts a manager whose workers are fake (this test binary).

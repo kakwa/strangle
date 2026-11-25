@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"time"
 )
 
@@ -144,6 +145,67 @@ type Stats struct {
 	Hosts       HostsStats      `json:"hosts"`
 	Runs        RunsStats       `json:"runs"`
 	PerPlaybook []PlaybookStats `json:"per_playbook"`
+}
+
+// AggregateStats computes Stats from a set of runs and hosts. Both store
+// implementations and callers that need a collection-scoped view use it so
+// counts, averages and per-playbook ordering stay identical everywhere.
+func AggregateStats(runs []RunRecord, hosts []HostRecord) *Stats {
+	st := &Stats{PerPlaybook: []PlaybookStats{}}
+
+	for _, h := range hosts {
+		st.Hosts.Total++
+		if h.InInventory {
+			st.Hosts.InInventory++
+		}
+		if h.Active {
+			st.Hosts.Active++
+		} else if h.InInventory {
+			st.Hosts.Disappeared++
+		}
+	}
+
+	var totalDur int64
+	perPB := map[string]*PlaybookStats{}
+	for _, r := range runs {
+		st.Runs.Total++
+		if r.Success {
+			st.Runs.Succeeded++
+		} else {
+			st.Runs.Failed++
+		}
+		totalDur += r.DurationMS
+		if r.FinishedAt.After(st.Runs.LastRunAt) {
+			st.Runs.LastRunAt = r.FinishedAt
+		}
+		key := r.Target + "\x00" + r.Playbook
+		pb := perPB[key]
+		if pb == nil {
+			pb = &PlaybookStats{Target: r.Target, Playbook: r.Playbook}
+			perPB[key] = pb
+		}
+		pb.Total++
+		if !r.Success {
+			pb.Failed++
+		}
+		if r.FinishedAt.After(pb.LastRunAt) {
+			pb.LastRunAt = r.FinishedAt
+		}
+	}
+	if st.Runs.Total > 0 {
+		st.Runs.AvgDurationMS = totalDur / int64(st.Runs.Total)
+	}
+	for _, pb := range perPB {
+		st.PerPlaybook = append(st.PerPlaybook, *pb)
+	}
+	sort.Slice(st.PerPlaybook, func(i, j int) bool {
+		if st.PerPlaybook[i].Target != st.PerPlaybook[j].Target {
+			return st.PerPlaybook[i].Target < st.PerPlaybook[j].Target
+		}
+		return st.PerPlaybook[i].Playbook < st.PerPlaybook[j].Playbook
+	})
+
+	return st
 }
 
 // RunInput is everything a Store needs to persist one playbook run.

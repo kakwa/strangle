@@ -200,71 +200,19 @@ func (s *Server) statsForTargets(ctx context.Context, allowed map[string]bool) (
 	if err != nil {
 		return nil, err
 	}
-	st := &store.Stats{PerPlaybook: []store.PlaybookStats{}}
-	var totalDuration int64
+	var scopedRuns []store.RunRecord
 	for _, run := range runs {
-		if !allowed[run.Target] {
-			continue
-		}
-		st.Runs.Total++
-		if run.Success {
-			st.Runs.Succeeded++
-		} else {
-			st.Runs.Failed++
-		}
-		totalDuration += run.DurationMS
-		if run.FinishedAt.After(st.Runs.LastRunAt) {
-			st.Runs.LastRunAt = run.FinishedAt
+		if allowed[run.Target] {
+			scopedRuns = append(scopedRuns, run)
 		}
 	}
-	if st.Runs.Total > 0 {
-		st.Runs.AvgDurationMS = totalDuration / int64(st.Runs.Total)
-	}
+	var scopedHosts []store.HostRecord
 	for _, h := range hosts {
-		if !allowed[h.Target] {
-			continue
-		}
-		st.Hosts.Total++
-		if h.InInventory {
-			st.Hosts.InInventory++
-		}
-		if h.Active {
-			st.Hosts.Active++
-		}
-		if h.InInventory && !h.Active {
-			st.Hosts.Disappeared++
+		if allowed[h.Target] {
+			scopedHosts = append(scopedHosts, h)
 		}
 	}
-	type key struct{ target, playbook string }
-	byBook := map[key]*store.PlaybookStats{}
-	for _, run := range runs {
-		if !allowed[run.Target] {
-			continue
-		}
-		k := key{run.Target, run.Playbook}
-		pb, ok := byBook[k]
-		if !ok {
-			pb = &store.PlaybookStats{Target: run.Target, Playbook: run.Playbook}
-			byBook[k] = pb
-		}
-		pb.Total++
-		if !run.Success {
-			pb.Failed++
-		}
-		if run.FinishedAt.After(pb.LastRunAt) {
-			pb.LastRunAt = run.FinishedAt
-		}
-	}
-	for _, pb := range byBook {
-		st.PerPlaybook = append(st.PerPlaybook, *pb)
-	}
-	sort.Slice(st.PerPlaybook, func(i, j int) bool {
-		if st.PerPlaybook[i].Target == st.PerPlaybook[j].Target {
-			return st.PerPlaybook[i].Playbook < st.PerPlaybook[j].Playbook
-		}
-		return st.PerPlaybook[i].Target < st.PerPlaybook[j].Target
-	})
-	return st, nil
+	return store.AggregateStats(scopedRuns, scopedHosts), nil
 }
 
 // organizations returns all organizations in name order, each with its

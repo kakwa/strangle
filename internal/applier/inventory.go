@@ -1,6 +1,6 @@
-// Package inventory parses Ansible YAML inventory directories (one file per
-// pool, merged by Ansible) into a flat host list with group membership.
-package inventory
+// Ansible YAML inventory directories (one file per pool, merged by Ansible)
+// parsed into a flat host list with group membership.
+package applier
 
 import (
 	"fmt"

@@ -1,9 +1,7 @@
-// Package metrics renders a Prometheus-compatible scrape endpoint from the
-// current in-process state of the master. It deliberately has no dependency
-// on a metrics library: the exposition format is small and stable, and all
-// values are gauges/counters computed on demand from the store and the worker
-// manager.
-package metrics
+// Prometheus-compatible scrape endpoint from the current in-process state of
+// the master. No metrics library is needed: the exposition format is small and
+// stable, and values are computed on demand from the store and worker manager.
+package server
 
 import (
 	"context"
@@ -26,16 +24,10 @@ const contentType = "text/plain; version=0.0.4; charset=utf-8"
 
 var processStart = time.Now().UTC()
 
-// WorkerReporter is the subset of the worker manager needed by the scrape
-// endpoint. It is nil when no workers are managed (direct-run mode).
-type WorkerReporter interface {
-	WorkerStatuses(ctx context.Context) []worker.WorkerStatus
-}
-
-// Handler returns an HTTP handler that renders one scrape of the current
-// process state. The endpoint is unauthenticated: it exposes aggregate counts
-// only, never host names or playbook output.
-func Handler(st store.Store, workers WorkerReporter, logger *zap.Logger) http.Handler {
+// metricsHandler renders one scrape of the current process state. The endpoint
+// is unauthenticated: it exposes aggregate counts only, never host names or
+// playbook output.
+func metricsHandler(st store.Store, workers WorkerReporter, logger *zap.Logger) http.Handler {
 	if logger == nil {
 		logger = zap.NewNop()
 	}

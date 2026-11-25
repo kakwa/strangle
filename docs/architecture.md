@@ -30,8 +30,8 @@ named `worker-<id>.sock`. The directory and stale sockets are removed on stop.
 
 ## The worker protocol
 
-`internal/workeripc` defines a two-method JSON-RPC service on the worker's
-unix socket. It uses only the standard library (`net/rpc` with the
+`internal/worker` defines a two-method JSON-RPC service on the worker's unix
+socket (`rpc_*.go`). It uses only the standard library (`net/rpc` with the
 `net/rpc/jsonrpc` codec): there is no schema and no generated code.
 
 - `Worker.Ping` — liveness probe.
@@ -69,7 +69,7 @@ Dispatch is round-robin over the live slots (dead or respawning slots are
 skipped). A dispatch to a busy slot is fine: runs on one worker are
 serialized inside that worker, so extra jobs queue behind the in-flight one.
 
-`GET /metrics` is rendered on demand by `internal/metrics` from the same store
+`GET /metrics` is rendered on demand by the HTTP server from the same store
 and worker status used by the API, plus a few Go runtime gauges. It needs no
 configuration and is intentionally open like `/api/health`; see the
 [API reference](api.md#get-metrics) for the exported series.
@@ -108,7 +108,7 @@ directly: the scheduler starts a background goroutine per due job, and
 `internal/applier` receives the run (from a River worker or directly),
 dispatches it to the worker pool through the `Executor` interface, parses the
 captured output with `internal/parser` (recap, per-task status, diffs,
-errors), parses the target's inventory with `internal/inventory`, and records
+errors), parses the target's inventory in `inventory.go`, and records
 everything through the `store.Store` interface.
 
 After a git sync, the master calls `UpdateTargets` with the reloaded targets,
@@ -138,15 +138,15 @@ Hosts are keyed by `target + name`, so the same host name in two targets is
 two distinct hosts. The web UI merges same-named hosts across targets when
 rendering a single host table.
 
-`internal/retention` runs in the master as a second ticker-driven maintenance
-task. It calls `PruneRuns` once at startup and then on the configured interval,
+`internal/maintenance` runs retention in the master as a ticker-driven task.
+It calls `PruneRuns` once at startup and then on the configured interval,
 using the server policy or a per-collection override. Only finished runs are
 eligible; queued and running runs stay so a job cannot recreate a purged
 record. Per-host recap and per-task history rows are deleted in the same
 transaction (or under the in-memory store's lock) as their run.
 
-`internal/hostcleanup` is a second maintenance loop with the same cadence
-pattern. A host becomes eligible once its collection's inventory snapshot no
+Host cleanup is the second maintenance task, with the same cadence pattern.
+A host becomes eligible once its collection's inventory snapshot no
 longer contains it and its last sight is older than the configured delay; its
 per-host recap, latest task state and history rows are deleted with it. Host
 identity includes the target, so same-named hosts in other collections are

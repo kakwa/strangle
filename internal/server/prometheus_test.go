@@ -1,4 +1,4 @@
-package metrics
+package server
 
 import (
 	"context"
@@ -53,7 +53,7 @@ func TestHandlerRendersStoreAndWorkerMetrics(t *testing.T) {
 		{ID: 1, Alive: true, Jobs: 3},
 	}}
 	rec := httptest.NewRecorder()
-	Handler(st, workers, zap.NewNop()).ServeHTTP(rec,
+	metricsHandler(st, workers, zap.NewNop()).ServeHTTP(rec,
 		httptest.NewRequest(http.MethodGet, "/metrics", nil))
 
 	if rec.Code != http.StatusOK {
@@ -85,7 +85,7 @@ func TestHandlerRendersStoreAndWorkerMetrics(t *testing.T) {
 
 func TestHandlerStoreFailureStillServesRuntimeMetrics(t *testing.T) {
 	rec := httptest.NewRecorder()
-	Handler(failingStore{}, nil, zap.NewNop()).ServeHTTP(rec,
+	metricsHandler(failingStore{}, nil, zap.NewNop()).ServeHTTP(rec,
 		httptest.NewRequest(http.MethodGet, "/metrics", nil))
 
 	if rec.Code != http.StatusOK {

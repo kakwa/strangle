@@ -24,9 +24,8 @@ import (
 	"github.com/kakwa/strangle/internal/collection"
 	"github.com/kakwa/strangle/internal/config"
 	"github.com/kakwa/strangle/internal/db"
-	"github.com/kakwa/strangle/internal/hostcleanup"
+	"github.com/kakwa/strangle/internal/maintenance"
 	"github.com/kakwa/strangle/internal/notify"
-	"github.com/kakwa/strangle/internal/retention"
 	"github.com/kakwa/strangle/internal/riverqueue"
 	"github.com/kakwa/strangle/internal/sandbox"
 	"github.com/kakwa/strangle/internal/scheduler"
@@ -34,7 +33,6 @@ import (
 	"github.com/kakwa/strangle/internal/sshpool"
 	"github.com/kakwa/strangle/internal/store"
 	"github.com/kakwa/strangle/internal/worker"
-	"github.com/kakwa/strangle/internal/workeripc"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -251,25 +249,10 @@ func run(cmd *cobra.Command, args []string) error {
 		close(done)
 	}()
 
-	retentionDone := make(chan struct{})
-	if retentionMgr := retention.New(st, cfg.Server.Retention, collMgr.Targets, logger); retentionMgr != nil {
-		go func() {
-			retentionMgr.Run(ctx)
-			close(retentionDone)
-		}()
-	} else {
-		close(retentionDone)
-	}
-
-	cleanupDone := make(chan struct{})
-	if cleanupMgr := hostcleanup.New(st, cfg.Server.HostCleanup, collMgr.Targets, logger); cleanupMgr != nil {
-		go func() {
-			cleanupMgr.Run(ctx)
-			close(cleanupDone)
-		}()
-	} else {
-		close(cleanupDone)
-	}
+	retentionDone := maintenance.Start(ctx,
+		maintenance.NewRetention(st, cfg.Server.Retention, collMgr.Targets, logger))
+	cleanupDone := maintenance.Start(ctx,
+		maintenance.NewHostCleanup(st, cfg.Server.HostCleanup, collMgr.Targets, logger))
 
 	if queue != nil {
 		// The queue runs on its own context, not the signal context: a
@@ -428,13 +411,13 @@ func runWorker(cmd *cobra.Command, args []string) error {
 	}
 	defer runner.Close()
 
-	srv := workeripc.NewRPCServer(worker.NewServer(runner, multi))
+	srv := worker.NewRPCServer(worker.NewServer(runner, multi))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	logger.Info("starting worker", zap.Int("pid", os.Getpid()), zap.String("socket", socketPath))
-	return workeripc.Serve(ctx, socketPath, srv, logger, 10*time.Second)
+	return worker.Serve(ctx, socketPath, srv, logger, 10*time.Second)
 }
 
 // newLogger builds a JSON logger on stderr at the given level.

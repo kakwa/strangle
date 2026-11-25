@@ -1,7 +1,7 @@
 // Package worker runs strangle playbook jobs: the worker process executes
 // playbooks in its embedded interpreter (worker.go), while the master side
 // spawns, supervises and dispatches to worker child processes (manager.go).
-// Master/worker communication lives in internal/workeripc.
+// The two halves talk over the JSON-RPC service in rpc_*.go.
 package worker
 
 import (
@@ -9,22 +9,16 @@ import (
 
 	"github.com/kakwa/strangle/internal/ansible"
 	"github.com/kakwa/strangle/internal/sshpool"
-	"github.com/kakwa/strangle/internal/workeripc"
 )
 
-// playbookRunner is the part of ansible.Runner used by the worker service.
-type playbookRunner interface {
-	RunDir(dir string, args ...string) (ansible.Result, error)
-}
-
-// Server implements the worker side of the workeripc protocol. It owns the
+// Server implements the worker side of the JSON-RPC protocol. It owns the
 // embedded Ansible interpreter and the SSH managers.
 type Server struct {
 	// mu serializes runs: each worker owns exactly one embedded
 	// interpreter, and the SSH scope (SetActive) must stay fixed for the
 	// whole run, so scope selection and execution are one critical section.
 	mu     sync.Mutex
-	runner playbookRunner
+	runner *ansible.Runner
 	multi  *sshpool.Multi
 }
 
@@ -37,7 +31,7 @@ func NewServer(runner *ansible.Runner, multi *sshpool.Multi) *Server {
 // RunPlaybook executes one playbook and returns its exit code, captured
 // output and per-host facts. net/rpc runs each call in its own goroutine;
 // the mutex keeps runs on this worker from overlapping.
-func (s *Server) RunPlaybook(req workeripc.RunArgs) workeripc.RunReply {
+func (s *Server) RunPlaybook(req RunArgs) RunReply {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -46,7 +40,7 @@ func (s *Server) RunPlaybook(req workeripc.RunArgs) workeripc.RunReply {
 	if s.multi != nil {
 		if req.Scope != "" {
 			if err := s.multi.SetActive(req.Scope); err != nil {
-				return workeripc.RunReply{Error: err.Error()}
+				return RunReply{Error: err.Error()}
 			}
 		} else {
 			s.multi.ClearActive()
@@ -54,7 +48,7 @@ func (s *Server) RunPlaybook(req workeripc.RunArgs) workeripc.RunReply {
 	}
 
 	result, err := s.runner.RunDir(req.WorkingDir, req.Args...)
-	return workeripc.RunReply{
+	return RunReply{
 		ExitCode: result.ExitCode,
 		Output:   result.Output,
 		Error:    errorString(err),

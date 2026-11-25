@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/internal/config"
-	"github.com/kakwa/strangle/internal/inventory"
 	"github.com/kakwa/strangle/internal/notify"
 	"github.com/kakwa/strangle/internal/parser"
 	"github.com/kakwa/strangle/internal/store"
@@ -376,13 +375,13 @@ func (a *Ansible) runPlaybook(ctx context.Context, target config.TargetConfig, p
 // loadInventory parses one playbook's inventory directory. It returns nil for
 // anything it cannot parse (e.g. an INI file), in which case host membership
 // is not tracked for that cycle.
-func (a *Ansible) loadInventory(pb config.PlaybookConfig) (*inventory.Inventory, []store.InventoryHost) {
+func (a *Ansible) loadInventory(pb config.PlaybookConfig) (*Inventory, []store.InventoryHost) {
 	dir := pb.InventoryPath()
 	st, err := os.Stat(dir)
 	if err != nil || !st.IsDir() {
 		return nil, nil
 	}
-	inv, err := inventory.Load(dir)
+	inv, err := Load(dir)
 	if err != nil {
 		a.logger.Warn("inventory load failed",
 			zap.String("target", pb.TargetName),
@@ -407,8 +406,8 @@ func (a *Ansible) loadInventory(pb config.PlaybookConfig) (*inventory.Inventory,
 }
 
 // scopeNames resolves the hosts a playbook is expected to reach by parsing
-// the play targets and matching them against the inventory.
-func scopeNames(inv *inventory.Inventory, playbookPath string) []string {
+// the play targets and matching them against the
+func scopeNames(inv *Inventory, playbookPath string) []string {
 	if inv == nil {
 		return nil
 	}

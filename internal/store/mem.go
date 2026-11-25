@@ -480,69 +480,11 @@ func (s *Mem) Stats(_ context.Context) (*Stats, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	st := &Stats{PerPlaybook: []PlaybookStats{}}
-
+	hosts := make([]HostRecord, 0, len(s.hosts))
 	for _, h := range s.hosts {
-		st.Hosts.Total++
-		if h.InInventory {
-			st.Hosts.InInventory++
-		}
-		if h.Active {
-			st.Hosts.Active++
-		} else if h.InInventory {
-			st.Hosts.Disappeared++
-		}
+		hosts = append(hosts, *h)
 	}
-
-	var totalDur int64
-	perPB := map[string]*PlaybookStats{}
-	for i := range s.runs {
-		r := &s.runs[i]
-		st.Runs.Total++
-		if r.Success {
-			st.Runs.Succeeded++
-		} else {
-			st.Runs.Failed++
-		}
-		totalDur += r.DurationMS
-		if r.FinishedAt.After(st.Runs.LastRunAt) {
-			st.Runs.LastRunAt = r.FinishedAt
-		}
-		key := r.Target + "\x00" + r.Playbook
-		pb := perPB[key]
-		if pb == nil {
-			pb = &PlaybookStats{Target: r.Target, Playbook: r.Playbook}
-			perPB[key] = pb
-		}
-		pb.Total++
-		if !r.Success {
-			pb.Failed++
-		}
-		if r.FinishedAt.After(pb.LastRunAt) {
-			pb.LastRunAt = r.FinishedAt
-		}
-	}
-	if st.Runs.Total > 0 {
-		st.Runs.AvgDurationMS = totalDur / int64(st.Runs.Total)
-	}
-	for _, pb := range perPB {
-		st.PerPlaybook = append(st.PerPlaybook, *pb)
-	}
-	sort.Slice(st.PerPlaybook, func(i, j int) bool {
-		if st.PerPlaybook[i].Target != st.PerPlaybook[j].Target {
-			return st.PerPlaybook[i].Target < st.PerPlaybook[j].Target
-		}
-		return st.PerPlaybook[i].Playbook < st.PerPlaybook[j].Playbook
-	})
-
-	return st, nil
+	return AggregateStats(s.runs, hosts), nil
 }
 
 func (s *Mem) Close() error { return nil }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

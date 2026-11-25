@@ -1,7 +1,7 @@
 // Package worker runs strangle playbook jobs: the worker process executes
 // playbooks in its embedded interpreter (worker.go), while the master side
 // spawns, supervises and dispatches to worker child processes (manager.go).
-// Master/worker communication lives in internal/workeripc (JSON-RPC).
+// Master/worker communication lives in the JSON-RPC service in rpc_*.go.
 package worker
 
 import (
@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/internal/sandbox"
-	"github.com/kakwa/strangle/internal/workeripc"
 	"go.uber.org/zap"
 )
 
@@ -70,7 +69,7 @@ type slot struct {
 	collection string    // non-empty for sandboxed workers pinned to a collection
 	manifest   string    // sandbox manifest path, empty when sandboxing is off
 	cmd        *exec.Cmd // current process, nil while (re)spawning or dead
-	cli        *workeripc.Client
+	cli        *Client
 	fails      int // consecutive failures since the last clean run
 	restarts   int
 	lastStart  time.Time // when the current process came up
@@ -261,7 +260,7 @@ func (m *Manager) start(s *slot) error {
 		return fmt.Errorf("start process: %w", err)
 	}
 
-	cli, err := workeripc.Dial(m.ctx, s.socket)
+	cli, err := Dial(m.ctx, s.socket)
 	if err != nil {
 		// Kill the whole group: the process is ours (Setpgid) and may
 		// have started children of its own.
@@ -498,7 +497,7 @@ func (m *Manager) RunPlaybook(ctx context.Context, collection, scope, workingDir
 	}
 	n := len(m.slots)
 	var s *slot
-	var cli *workeripc.Client
+	var cli *Client
 	for i := 0; i < n; i++ {
 		c := m.slots[(m.rr+i)%n]
 		if c.dead || c.cli == nil {
@@ -589,7 +588,7 @@ func (m *Manager) Stop() error {
 	close(m.stopCh)
 
 	m.mu.Lock()
-	var clients []*workeripc.Client
+	var clients []*Client
 	var procs []*exec.Cmd
 	for _, s := range m.slots {
 		if s.cli != nil {

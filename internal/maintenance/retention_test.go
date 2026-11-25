@@ -1,4 +1,4 @@
-package retention
+package maintenance
 
 import (
 	"context"
@@ -22,7 +22,7 @@ func seedRun(t *testing.T, st *store.Mem, id uint64, target string, finished tim
 	}
 }
 
-func TestManagerPrunePolicies(t *testing.T) {
+func TestRetentionPrunePolicies(t *testing.T) {
 	st := store.NewMem()
 	defer st.Close()
 	now := time.Now().UTC()
@@ -36,12 +36,12 @@ func TestManagerPrunePolicies(t *testing.T) {
 		{Name: "home"},
 		{Name: "edge", Retention: config.RetentionConfig{MaxCount: 1}},
 	}
-	m := New(st, config.RetentionConfig{MaxAge: 24 * time.Hour, Interval: time.Minute},
+	m := NewRetention(st, config.RetentionConfig{MaxAge: 24 * time.Hour, Interval: time.Minute},
 		func() []config.TargetConfig { return targets }, zap.NewNop())
 	if m == nil {
-		t.Fatal("New() = nil, want an enabled manager")
+		t.Fatal("NewRetention() = nil, want an enabled task")
 	}
-	m.Prune(context.Background())
+	m.Once(context.Background())
 
 	runs, err := st.ListRuns(context.Background(), 10)
 	if err != nil {
@@ -57,16 +57,15 @@ func TestManagerPrunePolicies(t *testing.T) {
 	}
 }
 
-func TestManagerDisabled(t *testing.T) {
+func TestRetentionDisabled(t *testing.T) {
 	st := store.NewMem()
 	defer st.Close()
 	targets := []config.TargetConfig{{Name: "home"}}
-	if m := New(st, config.RetentionConfig{}, func() []config.TargetConfig { return targets }, zap.NewNop()); m != nil {
-		t.Fatal("New() enabled retention with no policy")
+	if m := NewRetention(st, config.RetentionConfig{}, func() []config.TargetConfig { return targets }, zap.NewNop()); m != nil {
+		t.Fatal("NewRetention() enabled retention with no policy")
 	}
-	// Prune on a nil manager is safe for callers that do not check New's
-	// result before starting a goroutine.
-	var m *Manager
-	m.Prune(context.Background())
+	// A nil task is safe for callers that do not check the constructor result.
+	var m *Task
+	m.Once(context.Background())
 	m.Run(context.Background())
 }

@@ -1,4 +1,4 @@
-package workeripc
+package worker
 
 import (
 	"context"
@@ -16,7 +16,6 @@ import (
 // socket. rpc.Client supports concurrent calls and serializes their writes.
 type Client struct {
 	client *rpc.Client
-	path   string
 }
 
 // Dial connects to the worker listening on the unix socket at path, waiting
@@ -37,7 +36,6 @@ func Dial(ctx context.Context, path string) (*Client, error) {
 
 	return &Client{
 		client: rpc.NewClientWithCodec(jsonrpc.NewClientCodec(conn)),
-		path:   path,
 	}, nil
 }
 
@@ -126,14 +124,4 @@ func (c *Client) RunPlaybook(ctx context.Context, collection, scope, workingDir 
 // Close closes the connection to the worker.
 func (c *Client) Close() error {
 	return c.client.Close()
-}
-
-// Ready reports whether the worker's socket currently accepts connections.
-func (c *Client) Ready() bool {
-	conn, err := net.DialTimeout("unix", c.path, time.Second)
-	if err != nil {
-		return false
-	}
-	_ = conn.Close()
-	return true
 }

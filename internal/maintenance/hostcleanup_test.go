@@ -1,4 +1,4 @@
-package hostcleanup
+package maintenance
 
 import (
 	"context"
@@ -25,18 +25,18 @@ func (s *stubStore) PruneHosts(_ context.Context, target string, delay time.Dura
 	return 1, nil
 }
 
-func TestManagerCleanPolicies(t *testing.T) {
+func TestHostCleanupPolicies(t *testing.T) {
 	st := &stubStore{}
 	targets := []config.TargetConfig{
 		{Name: "home"},
 		{Name: "edge", HostCleanup: config.HostCleanupConfig{Delay: 6 * time.Hour}},
 	}
-	m := New(st, config.HostCleanupConfig{Delay: 24 * time.Hour, Interval: time.Minute},
+	m := NewHostCleanup(st, config.HostCleanupConfig{Delay: 24 * time.Hour, Interval: time.Minute},
 		func() []config.TargetConfig { return targets }, zap.NewNop())
 	if m == nil {
-		t.Fatal("New() = nil, want an enabled manager")
+		t.Fatal("NewHostCleanup() = nil, want an enabled task")
 	}
-	m.Clean(context.Background())
+	m.Once(context.Background())
 
 	if len(st.calls) != 2 {
 		t.Fatalf("PruneHosts calls = %v, want two", st.calls)
@@ -49,16 +49,16 @@ func TestManagerCleanPolicies(t *testing.T) {
 	}
 }
 
-func TestManagerDisabled(t *testing.T) {
+func TestHostCleanupDisabled(t *testing.T) {
 	st := &stubStore{}
 	targets := []config.TargetConfig{{Name: "home"}}
-	if m := New(st, config.HostCleanupConfig{}, func() []config.TargetConfig { return targets }, zap.NewNop()); m != nil {
-		t.Fatal("New() enabled cleanup with no delay")
+	if m := NewHostCleanup(st, config.HostCleanupConfig{}, func() []config.TargetConfig { return targets }, zap.NewNop()); m != nil {
+		t.Fatal("NewHostCleanup() enabled cleanup with no delay")
 	}
-	var m *Manager
-	m.Clean(context.Background())
+	var m *Task
+	m.Once(context.Background())
 	m.Run(context.Background())
 	if len(st.calls) != 0 {
-		t.Errorf("disabled manager called PruneHosts: %v", st.calls)
+		t.Errorf("disabled task called PruneHosts: %v", st.calls)
 	}
 }

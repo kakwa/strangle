@@ -573,64 +573,103 @@ type SSHConfig struct {
 	Certificate          *CertificateConfig `yaml:"certificate,omitempty"`
 }
 
-// Load reads the server.yml and collection.yml files and resolves each
-// target's strangle.yml, applying defaults.
-func Load(serverPath, collectionPath string) (Config, error) {
-	var cfg Config
-
-	data, err := os.ReadFile(serverPath)
+// readServer and readCollection are the shared read/parse steps of the three
+// public loaders. They do not validate: LoadServer validates server settings
+// and LoadCollection only needs the target/org mapping.
+func readServer(path string) (ServerConfig, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return Config{}, fmt.Errorf("read server config %q: %w", serverPath, err)
+		return ServerConfig{}, fmt.Errorf("read server config %q: %w", path, err)
 	}
-	if err := yaml.Unmarshal(data, &cfg.Server); err != nil {
-		return Config{}, fmt.Errorf("parse server config %q: %w", serverPath, err)
+	var cfg ServerConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return ServerConfig{}, fmt.Errorf("parse server config %q: %w", path, err)
 	}
+	return cfg, nil
+}
 
-	data, err = os.ReadFile(collectionPath)
+func readCollection(path string) (CollectionConfig, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return Config{}, fmt.Errorf("read collection %q: %w", collectionPath, err)
+		return CollectionConfig{}, fmt.Errorf("read collection %q: %w", path, err)
 	}
 	var coll CollectionConfig
 	if err := yaml.Unmarshal(data, &coll); err != nil {
-		return Config{}, fmt.Errorf("parse collection %q: %w", collectionPath, err)
+		return CollectionConfig{}, fmt.Errorf("parse collection %q: %w", path, err)
 	}
 	if len(coll.Targets) == 0 {
-		return Config{}, fmt.Errorf("collection %q: targets is required (non-empty list)", collectionPath)
+		return CollectionConfig{}, fmt.Errorf("collection %q: targets is required (non-empty list)", path)
+	}
+	return coll, nil
+}
+
+// normalizeTargetSpecs checks the fields every loader needs and fills in the
+// default org. Path and policy validation are done only by Load.
+func normalizeTargetSpecs(coll *CollectionConfig) error {
+	seen := map[string]struct{}{}
+	for i := range coll.Targets {
+		spec := &coll.Targets[i]
+		if spec.Name == "" {
+			return errors.New("collection: every target needs a name")
+		}
+		if _, dup := seen[spec.Name]; dup {
+			return fmt.Errorf("collection: duplicate target name %q", spec.Name)
+		}
+		seen[spec.Name] = struct{}{}
+		if spec.Org == "" {
+			spec.Org = DefaultOrg
+		}
+		if !validOrgName(spec.Org) {
+			return fmt.Errorf("collection: target %q: invalid org name %q", spec.Name, spec.Org)
+		}
+	}
+	return nil
+}
+
+// positiveDuration parses a config duration that must be strictly positive.
+// display is the original (possibly untemplated) value shown in errors.
+func positiveDuration(raw, label, display string) (time.Duration, error) {
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("%s %q must be a positive duration", label, display)
+	}
+	return d, nil
+}
+
+// Load reads the server.yml and collection.yml files and resolves each
+// target's strangle.yml, applying defaults.
+func Load(serverPath, collectionPath string) (Config, error) {
+	cfg := Config{}
+	var err error
+	if cfg.Server, err = readServer(serverPath); err != nil {
+		return Config{}, err
+	}
+	coll, err := readCollection(collectionPath)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := normalizeTargetSpecs(&coll); err != nil {
+		return Config{}, err
 	}
 
 	// Validate every spec first so collection-level problems surface before
 	// any target file is read. Relative notifier paths resolve against the
 	// collection file, just like relative target paths.
 	collDir := filepath.Dir(collectionPath)
-	seen := map[string]struct{}{}
 	for i, spec := range coll.Targets {
-		if spec.Name == "" {
-			return Config{}, errors.New("collection: every target needs a name")
-		}
-		if _, dup := seen[spec.Name]; dup {
-			return Config{}, fmt.Errorf("collection: duplicate target name %q", spec.Name)
-		}
-		seen[spec.Name] = struct{}{}
+		label := fmt.Sprintf("collection: target %q", spec.Name)
 		if spec.Path == "" {
-			return Config{}, fmt.Errorf("collection: target %q needs a path", spec.Name)
+			return Config{}, fmt.Errorf("%s needs a path", label)
 		}
-		if spec.Org == "" {
-			spec.Org = DefaultOrg
-		}
-		if !validOrgName(spec.Org) {
-			return Config{}, fmt.Errorf("collection: target %q: invalid org name %q", spec.Name, spec.Org)
-		}
-		coll.Targets[i].Org = spec.Org
-		if err := validateRetention(fmt.Sprintf("collection: target %q", spec.Name), &spec.Retention); err != nil {
+		if err := validateRetention(label, &spec.Retention); err != nil {
 			return Config{}, err
 		}
 		coll.Targets[i].Retention = spec.Retention
-		if err := validateHostCleanup(fmt.Sprintf("collection: target %q", spec.Name), &spec.HostCleanup); err != nil {
+		if err := validateHostCleanup(label, &spec.HostCleanup); err != nil {
 			return Config{}, err
 		}
 		coll.Targets[i].HostCleanup = spec.HostCleanup
-		if _, err := resolveNotifications(spec.Notifications,
-			fmt.Sprintf("collection: target %q", spec.Name), collDir); err != nil {
+		if _, err := resolveNotifications(spec.Notifications, label, collDir); err != nil {
 			return Config{}, err
 		}
 	}
@@ -688,13 +727,9 @@ func Load(serverPath, collectionPath string) (Config, error) {
 // used by commands that need server-level settings (like the DSN) without
 // resolving the full target inventory.
 func LoadServer(serverPath string) (ServerConfig, error) {
-	var cfg ServerConfig
-	data, err := os.ReadFile(serverPath)
+	cfg, err := readServer(serverPath)
 	if err != nil {
-		return ServerConfig{}, fmt.Errorf("read server config %q: %w", serverPath, err)
-	}
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return ServerConfig{}, fmt.Errorf("parse server config %q: %w", serverPath, err)
+		return ServerConfig{}, err
 	}
 	if err := cfg.validate(); err != nil {
 		return ServerConfig{}, err
@@ -706,33 +741,12 @@ func LoadServer(serverPath string) (ServerConfig, error) {
 // is used by client-side commands that need the target -> org mapping but do
 // not want to resolve every target's strangle.yml.
 func LoadCollection(collectionPath string) ([]TargetSpec, error) {
-	data, err := os.ReadFile(collectionPath)
+	coll, err := readCollection(collectionPath)
 	if err != nil {
-		return nil, fmt.Errorf("read collection %q: %w", collectionPath, err)
+		return nil, err
 	}
-	var coll CollectionConfig
-	if err := yaml.Unmarshal(data, &coll); err != nil {
-		return nil, fmt.Errorf("parse collection %q: %w", collectionPath, err)
-	}
-	if len(coll.Targets) == 0 {
-		return nil, fmt.Errorf("collection %q: targets is required (non-empty list)", collectionPath)
-	}
-	seen := map[string]struct{}{}
-	for i := range coll.Targets {
-		spec := &coll.Targets[i]
-		if spec.Name == "" {
-			return nil, errors.New("collection: every target needs a name")
-		}
-		if _, dup := seen[spec.Name]; dup {
-			return nil, fmt.Errorf("collection: duplicate target name %q", spec.Name)
-		}
-		seen[spec.Name] = struct{}{}
-		if spec.Org == "" {
-			spec.Org = DefaultOrg
-		}
-		if !validOrgName(spec.Org) {
-			return nil, fmt.Errorf("collection: target %q: invalid org name %q", spec.Name, spec.Org)
-		}
+	if err := normalizeTargetSpecs(&coll); err != nil {
+		return nil, err
 	}
 	return coll.Targets, nil
 }
@@ -894,9 +908,8 @@ func resolveSchedule(scheduleSpec, interval string, td templateData, where strin
 		if err != nil {
 			return "", fmt.Errorf("%s: interval: %w", where, err)
 		}
-		d, err := time.ParseDuration(rendered)
-		if err != nil || d <= 0 {
-			return "", fmt.Errorf("%s: interval %q must be a positive duration", where, interval)
+		if _, err := positiveDuration(rendered, where+": interval", interval); err != nil {
+			return "", err
 		}
 		raw = rendered
 	} else if raw != "" {
@@ -932,9 +945,9 @@ func resolveNotifications(specs []NotificationSpec, where, baseDir string) ([]No
 
 		timeout := 10 * time.Second
 		if spec.Timeout != "" {
-			d, err := time.ParseDuration(spec.Timeout)
-			if err != nil || d <= 0 {
-				return nil, fmt.Errorf("%s: timeout %q must be a positive duration", label, spec.Timeout)
+			d, err := positiveDuration(spec.Timeout, label+": timeout", spec.Timeout)
+			if err != nil {
+				return nil, err
 			}
 			timeout = d
 		}
