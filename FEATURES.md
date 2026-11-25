@@ -49,11 +49,12 @@ command line · **[SCHED]** scheduling · **[GIT]** git-backed collections ·
 - [x] 34. [UI] Host search box in the hosts view (name filter)
 - [x] 35. [SSH] [AUTH] Ephemeral SSH certificates (short-lived, internal CA or a vault PKI / approle integration, pluggable in the ssh options)
 - [x] 36. [API] [DOCS] Swagger / OpenAPI documentation of the API, generated against the versioned routes and served from the server (e.g. `/api/docs`)
-- [x] 37. [CLI] [API] CLI client: subcommands hitting the versioned API (`strangle run <target> <playbook>`, `strangle runs|hosts|host <name>`, `strangle hostkeys list/accept/reject`) with the auth token from config
+- [x] 37. [CLI] [API] CLI client: subcommands hitting the versioned API (`strangle-cli run <target> <playbook>`, `strangle-cli runs|hosts|host <name>`, `strangle-cli hostkeys list/accept/reject`) with the auth token from config
 
 ## Additional (beyond TODO)
 
-- [x] [CLI] CLI shape: `strangle <command> --flags` (no bare `strangle` with flags) and a `strangle serve` command to launch the server
+- [x] [CLI] CLI shape: `strangle-cli <command> --flags` (no bare `strangle-cli` with flags) and a `strangle-server serve` command to launch the server
+- [x] [CLI] [INFRA] Separate binaries: `cmd/strangle-cli` holds the client-side commands, `cmd/strangle-server` holds `serve` and `worker`
 
 ## Order notes
 

@@ -2,17 +2,19 @@
 
 ## Process model
 
-strangle is a single binary with two roles:
+strangle has two binaries: `strangle-server` runs the master and worker
+processes, while `strangle-cli` holds the operator-facing commands (the API
+client and the user/token/collection administration commands).
 
 ```
-strangle (master)
+strangle-server serve (master)
   ├── config: server.yml, collection.yml, per-target strangle.yml
   ├── collection.Manager: git-backed targets (clone/pin/sync/reload)
   ├── worker.Manager: spawns and supervises the worker pool
   ├── scheduler + River client: enqueues playbook runs
   └── HTTP server: /api/*, /metrics and the embedded web UI
 
-strangle worker --socket /tmp/.../worker-N.sock   (× N, N = workers)
+strangle-server worker --socket /tmp/.../worker-N.sock   (× N, N = workers)
   ├── one embedded CPython interpreter + Ansible (go.nhat.io/cpy/v3)
   ├── SSH managers (one per job using the Go-managed transport)
   └── gRPC Runner service over a unix socket

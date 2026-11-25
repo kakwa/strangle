@@ -11,9 +11,9 @@ flat list endpoints are filtered. Provision memberships from the command
 line (a database is required):
 
 ```
-strangle collection grant <user> <org> <collection>
-strangle collection revoke <user> <org> <collection>
-strangle collection list [--user <user>]
+strangle-cli collection grant <user> <org> <collection>
+strangle-cli collection revoke <user> <org> <collection>
+strangle-cli collection list [--user <user>]
 ```
 
 While no membership is configured every authenticated user can access every
@@ -78,7 +78,7 @@ Both are public, even when UI authentication is on: they describe the API but
 expose no run, host or collection data themselves. Operation schemas are
 derived from the request/response Go types.
 
-The bundled CLI client (`strangle run|runs|hosts|host|hostkeys`) is generated
+The `strangle-cli` client (`strangle-cli run|runs|hosts|host|hostkeys`) is generated
 against the same versioned routes: it resolves a target's org from
 collection.yml and only then calls a
 `/api/v1/orgs/{org}/collections/{collection}/...` path. It sends a user bearer
@@ -107,7 +107,7 @@ the comparison is constant-time). A valid UI session also works on
 
 **User API tokens (bearer).** When a database is configured, local accounts
 can create their own bearer tokens (in the web UI under *Tokens* or with
-`strangle token`, see [configuration](configuration.md#api-tokens)). A
+`strangle-cli token`, see [configuration](configuration.md#api-tokens)). A
 valid token authenticates **every** `/api/*` request as its owner, sent as
 `Authorization: Bearer st_…` or, webhook-friendly,
 `X-Strangle-Token: st_…` (the bearer header wins when both are present).
@@ -164,7 +164,7 @@ Authenticate a local account and start a session. The session cookie
 `200` returns the same body as `GET /api/me`. Errors: `400` invalid JSON,
 `401` `invalid username or password` (returned for both an unknown username
 and a wrong password, to prevent account enumeration), and `401`
-`authentication is not enabled: no users are configured (strangle user add
+`authentication is not enabled: no users are configured (strangle-cli user add
 <name> --password <pw>)` when no account exists.
 
 ## POST /api/logout

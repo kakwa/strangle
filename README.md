@@ -16,9 +16,10 @@ duration, change/failed counts — are derived from the stored history.
 
 ## How it works
 
-The master process (`strangle serve`) owns the configuration, the HTTP API and the
-schedule. It spawns a pool of worker child processes (`strangle worker`), each
-owning one embedded Ansible interpreter, and dispatches playbook runs to them
+The server binary (`strangle-server serve`) owns the configuration, the HTTP API
+and the schedule. It spawns a pool of worker child processes
+(`strangle-server worker`), each owning one embedded Ansible interpreter, and
+dispatches playbook runs to them
 over unix sockets (a small gRPC service, `proto/strangle/v1/runner.proto`).
 A master supervises the workers: health pings, automatic restarts with
 backoff, and `GET /api/workers` for observability.
@@ -45,7 +46,8 @@ user certificates signed by a local CA or by Vault through AppRole.
 ## Layout
 
 ```
-cmd/strangle/        entrypoint: config, wiring, worker subcommand, graceful shutdown
+cmd/strangle-server/ server entrypoint: config, wiring, worker subcommand, graceful shutdown
+cmd/strangle-cli/    client entrypoint: API client and account/token/access commands
 internal/
   ansible/           embedded CPython runner + Go-backed Ansible connection plugin
   config/            YAML config: server.yml, collection.yml, per-target strangle.yml
@@ -69,16 +71,23 @@ web/                 React (Vite) web UI, styled with Mantine; built assets are
 config/              base configuration, loaded by default
   server.yml           process-level settings (listen address, interval, DSN)
   collection.yml       the list of Ansible projects (targets) to apply
-  strangle.yml         sample per-target configuration (reference)
-demo/                self-contained demo target (applies a playbook to
-                     localhost); add it to collection.yml to run it
-  strangle.yml           per-target configuration
-  playbook.yml           the demo playbook
-  inventory.ini          the demo inventory
-tests/               test configurations
+tests/               test/demo configurations and their Ansible playbooks
+  config/
+    strangle.yml         sample per-target configuration (reference)
+  demo/                self-contained demo target (applies a playbook to
+                       localhost); add it to collection.yml to run it
+    strangle.yml           per-target configuration
+    playbook.yml           the demo playbook
+    inventory.ini          the demo inventory
   ssh/                   Go-managed SSH transport example
     playbook.yml             the SSH demo playbook
     inventory.ini            inventory pointing at a remote host
+  sandbox/validate/      Landlock isolation validation collection
+    README.md                setup and checks
+    strangle.yml             per-target configuration
+    validate.yml             the validation playbook
+    inventory.ini            local inventory
+    secret.txt               the collection's own secret
 docs/                documentation: architecture, configuration, API, git collections
 ```
 
@@ -167,7 +176,7 @@ and `-c` flags (defaults `./config/server.yml` and `./config/collection.yml`).
 There are no environment variables.
 
 ```sh
-strangle serve [-s config/server.yml] [-c config/collection.yml]
+strangle-server serve [-s config/server.yml] [-c config/collection.yml]
 ```
 
 ### server.yml — process-level settings
@@ -191,7 +200,7 @@ strangle serve [-s config/server.yml] [-c config/collection.yml]
 With `sandbox.enabled: true`, Landlock confines each worker to one collection:
 playbooks cannot read another collection's credentials or modify their own
 checkout. Ansible writes are redirected to a per-worker scratch directory.
-A [validating collection](sandbox/validate/README.md) is provided to verify
+A [validating collection](tests/sandbox/validate/README.md) is provided to verify
 the isolation. See [configuration](docs/configuration.md#collection-sandboxing).
 
 ### UI authentication
@@ -202,9 +211,9 @@ While on, every `/api/*` endpoint needs a valid 12-hour session cookie,
 except health, login, logout and me. Manage accounts:
 
 ```sh
-strangle user add <name> --password-stdin
-strangle user list
-strangle user remove <name>
+strangle-cli user add <name> --password-stdin
+strangle-cli user list
+strangle-cli user remove <name>
 ```
 
 #### API tokens
@@ -214,9 +223,9 @@ Local accounts can create bearer **API tokens** that authenticate any
 Tokens are managed in the web UI under *Tokens* or from the command line:
 
 ```sh
-strangle token create ci --user admin --ttl 72h   # prints the raw value once
-strangle token list [--user admin]
-strangle token remove ci --user admin
+strangle-cli token create ci --user admin --ttl 72h   # prints the raw value once
+strangle-cli token list [--user admin]
+strangle-cli token remove ci --user admin
 ```
 
 Only the SHA-256 digest of a token is stored; the raw value is shown exactly
@@ -226,18 +235,19 @@ mechanism: it only opens `POST /api/sync` and is not a user account.
 
 #### CLI client
 
-The API-backed subcommands use the canonical collection-scoped routes under
+The `strangle-cli` binary holds the client-side commands. Its API-backed
+subcommands use the canonical collection-scoped routes under
 `/api/v1/orgs/{org}/collections/{collection}`. The org comes from
 collection.yml (default `default`), or from `--org`:
 
 ```sh
-strangle run <target> <playbook> [--check]
-strangle runs <target> [--playbook NAME] [--host NAME] [--from RFC3339] [--to RFC3339] [--limit N] [--offset N]
-strangle hosts <target>
-strangle host <name> <target> [--limit N]
-strangle hostkeys list <target>
-strangle hostkeys accept <target/playbook> <host> <fingerprint>
-strangle hostkeys reject <target/playbook> <host>
+strangle-cli run <target> <playbook> [--check]
+strangle-cli runs <target> [--playbook NAME] [--host NAME] [--from RFC3339] [--to RFC3339] [--limit N] [--offset N]
+strangle-cli hosts <target>
+strangle-cli host <name> <target> [--limit N]
+strangle-cli hostkeys list <target>
+strangle-cli hostkeys accept <target/playbook> <host> <fingerprint>
+strangle-cli hostkeys reject <target/playbook> <host>
 ```
 
 All of them accept `-s/--server-config`, `-c/--collection-config`, `--url`,
@@ -256,9 +266,9 @@ aliases. An org comes from the optional `org` field of a collection.yml entry
 their own collections:
 
 ```sh
-strangle collection grant alice lab edge
-strangle collection revoke alice lab edge
-strangle collection list [--user alice]
+strangle-cli collection grant alice lab edge
+strangle-cli collection revoke alice lab edge
+strangle-cli collection list [--user alice]
 ```
 
 ### collection.yml — the targets
@@ -330,17 +340,18 @@ headers and Ansible importable from that Python. The `make` targets configure
 `python3-embed` package; use them rather than plain `go build`/`go test` (or
 set `PKG_CONFIG` yourself).
 
-The web UI is built with Vite and **embedded into the binary** (`go:embed`),
-so `bin/strangle` is self-contained — no `web/dist` needed at runtime.
-`make build` rebuilds the UI before compiling.
+The web UI is built with Vite and **embedded into the server binary**
+(`go:embed`), so `bin/strangle-server` is self-contained — no `web/dist` needed
+at runtime. `make build` rebuilds the UI before compiling both binaries.
 
 ```sh
-# build the UI (into web/dist) and the server, UI embedded
+# build the UI (into web/dist), then the server and client binaries
 make build
-./bin/strangle serve                # reads ./config/server.yml and ./config/collection.yml
+./bin/strangle-server serve         # reads ./config/server.yml and ./config/collection.yml
+./bin/strangle-cli runs demo        # talks to the server through its API
 
 # or point at explicit config files
-./bin/strangle serve -s config/server.yml -c config/collection.yml
+./bin/strangle-server serve -s config/server.yml -c config/collection.yml
 
 # web UI (development): Vite dev server on :5173, proxies /api to :8080
 make web-dev

@@ -4,7 +4,7 @@ Configuration is file-only: three kinds of YAML files. There are no
 environment variables. The files are located with flags:
 
 ```sh
-strangle serve [-s config/server.yml] [-c config/collection.yml]
+strangle-server serve [-s config/server.yml] [-c config/collection.yml]
 ```
 
 | Flag | Meaning | Default |
@@ -84,7 +84,7 @@ and cannot modify its own checkout. The policy uses
 `go-landlock`'s best-effort mode: older kernels enforce as much of it as they
 can, and kernels without Landlock log a warning and run without isolation.
 `config/server.yml` contains a commented example. The
-[validating collection](../sandbox/validate/README.md) can be added to a
+[validating collection](../tests/sandbox/validate/README.md) can be added to a
 collection.yml to verify the isolation from inside a worker.
 
 ## UI authentication
@@ -96,9 +96,9 @@ Accounts live in the `users` table of the configured database, so a DSN in
 
 ```sh
 # create the first account (enables authentication from the next restart on)
-strangle user add admin --password-stdin
-strangle user list
-strangle user remove admin
+strangle-cli user add admin --password-stdin
+strangle-cli user list
+strangle-cli user remove admin
 ```
 
 Passwords are hashed with argon2id and stored in the `PHC` format. With
@@ -114,9 +114,9 @@ other integrations. They are managed per user in the web UI (under
 *Tokens*) or with the `token` command group:
 
 ```sh
-strangle token create ci --user admin --ttl 72h   # prints the raw value once
-strangle token list [--user admin]                # all users' tokens without --user
-strangle token remove ci --user admin
+strangle-cli token create ci --user admin --ttl 72h   # prints the raw value once
+strangle-cli token list [--user admin]                # all users' tokens without --user
+strangle-cli token remove ci --user admin
 ```
 
 As with users, the command group needs a database, so `-s` (the
@@ -134,7 +134,7 @@ server.yml) must point at a config with `database.dsn` set.
 - The static `auth.token` (see the table above) is a separate mechanism:
   it only opens `POST /api/sync` and is not a user account.
 - Put a generated token in `auth.cli_token` in server.yml to use the CLI
-  commands (`strangle run`, `runs`, `hosts`, `host`, `hostkeys`) against an
+  commands (`strangle-cli run`, `runs`, `hosts`, `host`, `hostkeys`) against an
   authenticated server. `--token` overrides it.
 
 See [the API reference](api.md#api-tokens-self-service) for the

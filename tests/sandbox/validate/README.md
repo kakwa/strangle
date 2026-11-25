@@ -9,7 +9,7 @@ targets:
   - name: home                       # an ordinary collection
     path: /path/to/home
   - name: sandbox-validate
-    path: /path/to/strangle/sandbox/validate
+    path: /path/to/strangle/tests/sandbox/validate
 ```
 
 Enable sandboxing in `server.yml`:
@@ -24,7 +24,7 @@ collection that the validating playbook must not be able to read:
 
 ```sh
 STRANGLE_VALIDATE_NEIGHBOR=/path/to/home/secrets.txt \
-  strangle serve -s config/server.yml -c config/collection.yml
+  strangle-server serve -s config/server.yml -c config/collection.yml
 ```
 
 Run the `isolation` playbook of `sandbox-validate` (from the UI, the API or

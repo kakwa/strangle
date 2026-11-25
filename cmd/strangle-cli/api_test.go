@@ -40,7 +40,7 @@ func apiTestConfigs(t *testing.T) (string, string) {
 func executeAPICommand(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	root := &cobra.Command{
-		Use:           "strangle",
+		Use:           "strangle-cli",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}

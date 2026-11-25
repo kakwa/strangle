@@ -9,14 +9,15 @@ export PKG_CONFIG := $(CURDIR)/scripts/pkg-config-cpy
 
 all: build
 
-# Build the web UI into web/dist first: the output is embedded into the Go
+# Build the web UI into web/dist first: the output is embedded into the server
 # binary at compile time (see web/web.go), so a stale or missing dist would
-# end up baked into bin/strangle.
+# end up baked into bin/strangle-server.
 build: web
-	$(GO) build -o bin/strangle ./cmd/strangle
+	$(GO) build -o bin/strangle-server ./cmd/strangle-server
+	$(GO) build -o bin/strangle-cli ./cmd/strangle-cli
 
 run: build
-	./bin/strangle serve
+	./bin/strangle-server serve
 
 test:
 	$(GO) test ./...

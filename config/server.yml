@@ -28,7 +28,7 @@ workers: 2
 #
 # UI authentication is a separate mechanism with no flag: it is on as soon as
 # at least one local account exists. Accounts live in the database above:
-#   strangle user add <name> --password-stdin
+#   strangle-cli user add <name> --password-stdin
 # auth:
 #   token: change-me       # webhook token, only accepted by POST /api/sync
 #   cli_token: st_...      # user API token used by the CLI subcommands

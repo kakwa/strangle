@@ -23,24 +23,27 @@ const apiResponseLimit = 8 << 20
 
 // apiOptions holds the flags shared by the API-backed commands.
 type apiOptions struct {
-	url      string
-	token    string
-	org      string
-	target   string
-	json     bool
-	limit    int
-	offset   int
-	playbook string
-	host     string
-	from     string
-	to       string
-	check    bool
+	serverConfig     string
+	collectionConfig string
+	url              string
+	token            string
+	org              string
+	target           string
+	json             bool
+	limit            int
+	offset           int
+	playbook         string
+	host             string
+	from             string
+	to               string
+	check            bool
 }
 
 type apiClient struct {
-	base  string
-	token string
-	http  *http.Client
+	base             string
+	token            string
+	collectionConfig string
+	http             *http.Client
 }
 
 type apiScope struct {
@@ -355,8 +358,8 @@ func decideHostKey(cmd *cobra.Command, opts apiOptions, decision string, args []
 }
 
 func addAPIFlags(cmd *cobra.Command, opts *apiOptions) {
-	cmd.Flags().StringVarP(&serverConfigPath, "server-config", "s", "config/server.yml", "path to the server configuration file")
-	cmd.Flags().StringVarP(&collectionConfigPath, "collection-config", "c", "config/collection.yml", "path to the collection configuration file")
+	cmd.Flags().StringVarP(&opts.serverConfig, "server-config", "s", "config/server.yml", "path to the server configuration file")
+	cmd.Flags().StringVarP(&opts.collectionConfig, "collection-config", "c", "config/collection.yml", "path to the collection configuration file")
 	cmd.Flags().StringVar(&opts.url, "url", "", "API base URL (default derived from server.yml)")
 	cmd.Flags().StringVar(&opts.token, "token", "", "user API token (default auth.cli_token from server.yml)")
 	cmd.Flags().StringVar(&opts.org, "org", "", "org of the target (default from collection.yml)")
@@ -379,7 +382,7 @@ func commandTarget(args []string, opts apiOptions) (string, error) {
 }
 
 func newAPIClient(opts apiOptions) (*apiClient, error) {
-	cfg, err := config.LoadServer(serverConfigPath)
+	cfg, err := config.LoadServer(opts.serverConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -392,9 +395,10 @@ func newAPIClient(opts apiOptions) (*apiClient, error) {
 		token = cfg.Auth.CLIToken
 	}
 	return &apiClient{
-		base:  strings.TrimRight(base, "/"),
-		token: token,
-		http:  &http.Client{Timeout: 30 * time.Second},
+		base:             strings.TrimRight(base, "/"),
+		token:            token,
+		collectionConfig: opts.collectionConfig,
+		http:             &http.Client{Timeout: 30 * time.Second},
 	}, nil
 }
 
@@ -428,7 +432,7 @@ func (c *apiClient) resolveScope(target, orgOverride string) (apiScope, error) {
 	if orgOverride != "" {
 		return apiScope{org: orgOverride, collection: target}, nil
 	}
-	specs, err := config.LoadCollection(collectionConfigPath)
+	specs, err := config.LoadCollection(c.collectionConfig)
 	if err != nil {
 		return apiScope{}, fmt.Errorf("resolve org of target %q: %w (pass --org or --collection-config)", target, err)
 	}
@@ -437,7 +441,7 @@ func (c *apiClient) resolveScope(target, orgOverride string) (apiScope, error) {
 			return apiScope{org: spec.Org, collection: target}, nil
 		}
 	}
-	return apiScope{}, fmt.Errorf("unknown target %q in %q (pass --org to set its org explicitly)", target, collectionConfigPath)
+	return apiScope{}, fmt.Errorf("unknown target %q in %q (pass --org to set its org explicitly)", target, c.collectionConfig)
 }
 
 // scopePath builds a canonical collection-scoped API path. Every segment is

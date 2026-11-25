@@ -156,7 +156,7 @@ func New(addr string, apr *applier.Ansible, st store.Store, ssh *sshpool.Multi, 
 // at least one user: every /api/* request then needs a valid session,
 // except the login endpoints, GET /api/health (liveness), GET /api/docs and
 // GET /api/v1/openapi.json. Without users the server runs open and logs a
-// warning pointing at `strangle user add`.
+// warning pointing at `strangle-cli user add`.
 func (s *Server) Routes() http.Handler {
 	handler, _ := s.buildRoutes()
 	return handler
@@ -197,7 +197,7 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 		}
 		if !s.authOn || s.users == nil {
 			writeError(w, http.StatusUnauthorized,
-				errors.New("authentication is not enabled: no users are configured (strangle user add <name> --password <pw>)"))
+				errors.New("authentication is not enabled: no users are configured (strangle-cli user add <name> --password <pw>)"))
 			return
 		}
 		user, err := s.users.GetUser(r.Context(), req.Username)
@@ -922,7 +922,7 @@ func (s *Server) initAuth() {
 	case err != nil:
 		s.logger.Warn("cannot count users; running open", zap.Error(err))
 	case n == 0:
-		s.logger.Warn("no users configured; the API is open. Create the first account with: strangle user add <name> --password <pw>")
+		s.logger.Warn("no users configured; the API is open. Create the first account with: strangle-cli user add <name> --password <pw>")
 	default:
 		s.authOn = true
 		s.logger.Info("UI authentication enabled", zap.Int("users", n))

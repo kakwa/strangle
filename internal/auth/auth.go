@@ -1,7 +1,7 @@
 // Package auth implements local UI authentication: argon2id password
 // hashing, a user store, and in-memory server-side sessions.
 //
-// Users are provisioned out of band (the `strangle user` subcommand), not
+// Users are provisioned out of band (the `strangle-cli user` subcommand), not
 // through the API. Sessions live in the master process only, so they do not
 // survive a restart: the UI asks for a login again afterwards.
 package auth
