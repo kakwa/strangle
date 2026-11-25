@@ -35,6 +35,11 @@ node_modules/
 web/dist/*
 !web/dist/index.html
 
+# Cypress run artifacts
+web/cypress/videos/
+web/cypress/screenshots/
+web/cypress/downloads/
+
 # Generated SSH host-key state (per-playbook scope files)
 strangle.*.known_hosts
 strangle.*.auto.json

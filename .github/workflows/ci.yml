@@ -59,3 +59,9 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # The e2e suite serves the production build (dist/) through a mock
+      # API server (cypress/support/mock-server.mjs), so it must run after
+      # the build and needs no other services.
+      - name: E2E (Cypress)
+        run: npm run test:e2e
