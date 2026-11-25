@@ -16,21 +16,21 @@ all: build
 # Build the web UI into web/dist first: the output is embedded into the server
 # binary at compile time (see web/web.go), so a stale or missing dist would
 # end up baked into bin/strangle-server.
-build: web
+build: swag web
 	$(GO) build -o bin/strangle-server ./cmd/strangle-server
 	$(GO) build -o bin/strangle-cli ./cmd/strangle-cli
 
 run: build
 	./bin/strangle-server serve
 
-test:
+test: swag
 	$(GO) test ./...
 
-coverage:
+coverage: swag
 	$(GO) test -coverprofile=coverage.out ./...
 	$(GO) tool cover -func=coverage.out | tail -1
 
-vet:
+vet: swag
 	$(GO) vet ./...
 
 tidy:
