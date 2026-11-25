@@ -35,14 +35,13 @@ func TestCollectionRestrictions(t *testing.T) {
 	seedTargetRun(t, st, "home")
 	seedTargetRun(t, st, "edge")
 	seedRunWithState(t, st, 100, "edge", store.RunStateRunning, "99")
-	users := auth.NewMemUserStore()
-	seedUser(t, users, "alice", "pw")
-	access := auth.NewMemCollectionAccess()
+	seedUser(t, st.Users(), "alice", "pw")
+	access := st.Access()
 	if err := access.Add(context.Background(), "alice", "lab", "edge"); err != nil {
 		t.Fatalf("Add(): %v", err)
 	}
 	enq := &recEnqueuer{status: "queued"}
-	s := newAccessTestServer(st, users, access, enq)
+	s := newAccessTestServer(st, st.Users(), access, enq)
 	cookie := loginCookie(t, s, "alice", "pw")
 	headers := map[string]string{"Cookie": cookie.String()}
 
@@ -162,10 +161,8 @@ func TestNoMembershipsMeansUnrestricted(t *testing.T) {
 	st := testutil.OpenDB(t, "server")
 	seedTargetRun(t, st, "home")
 	seedTargetRun(t, st, "edge")
-	users := auth.NewMemUserStore()
-	seedUser(t, users, "bob", "pw")
-	access := auth.NewMemCollectionAccess()
-	s := newAccessTestServer(st, users, access, &recEnqueuer{status: "queued"})
+	seedUser(t, st.Users(), "bob", "pw")
+	s := newAccessTestServer(st, st.Users(), st.Access(), &recEnqueuer{status: "queued"})
 	cookie := loginCookie(t, s, "bob", "pw")
 
 	rec := getAuthWith(t, s, "/api/runs", map[string]string{"Cookie": cookie.String()})

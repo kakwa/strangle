@@ -1,5 +1,6 @@
 // Package auth implements local UI authentication: argon2id password
-// hashing, a user store, and in-memory server-side sessions.
+// hashing, store interfaces backed by PostgreSQL and in-memory server-side
+// sessions.
 //
 // Users are provisioned out of band (the `strangle-cli user` subcommand), not
 // through the API. Sessions live in the master process only, so they do not
@@ -14,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -35,7 +35,7 @@ type User struct {
 }
 
 // UserStore stores local UI users. Implementations must be safe for
-// concurrent use.
+// concurrent use. The production implementation is db.UserStore on PostgreSQL.
 type UserStore interface {
 	// CreateUser stores a new user with the given argon2id hash. It fails
 	// if the name already exists.
@@ -101,69 +101,3 @@ func VerifyPassword(hash, pw string) bool {
 	dk := argon2.Key([]byte(pw), salt, uint32(t), uint32(m), uint8(p), uint32(len(key)))
 	return subtle.ConstantTimeCompare(dk, key) == 1
 }
-
-// MemUserStore is an in-memory UserStore. It is used in tests; production
-// uses the gorm-backed store in package db.
-type MemUserStore struct {
-	mu    sync.RWMutex
-	users map[string]string // name -> hash
-}
-
-// NewMemUserStore returns an empty in-memory user store.
-func NewMemUserStore() *MemUserStore {
-	return &MemUserStore{users: make(map[string]string)}
-}
-
-func (m *MemUserStore) CreateUser(_ context.Context, name, hash string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.users[name]; ok {
-		return fmt.Errorf("auth: user %q already exists", name)
-	}
-	m.users[name] = hash
-	return nil
-}
-
-func (m *MemUserStore) GetUser(_ context.Context, name string) (*User, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	hash, ok := m.users[name]
-	if !ok {
-		return nil, ErrNotFound
-	}
-	return &User{Name: name, Hash: hash}, nil
-}
-
-func (m *MemUserStore) ListUsers(_ context.Context) ([]*User, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	out := make([]*User, 0, len(m.users))
-	for name, hash := range m.users {
-		out = append(out, &User{Name: name, Hash: hash})
-	}
-	// Map iteration order is random; sort for stable output.
-	for i := 1; i < len(out); i++ {
-		for j := i; j > 0 && out[j].Name < out[j-1].Name; j-- {
-			out[j], out[j-1] = out[j-1], out[j]
-		}
-	}
-	return out, nil
-}
-
-func (m *MemUserStore) Count(_ context.Context) (int, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return len(m.users), nil
-}
-
-func (m *MemUserStore) RemoveUser(_ context.Context, name string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.users[name]; !ok {
-		return ErrNotFound
-	}
-	delete(m.users, name)
-	return nil
-}
-
-func (m *MemUserStore) Close() error { return nil }

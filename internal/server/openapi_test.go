@@ -12,6 +12,7 @@ import (
 	"github.com/kakwa/strangle/internal/applier"
 	"github.com/kakwa/strangle/internal/auth"
 	"github.com/kakwa/strangle/internal/cfg"
+	"github.com/kakwa/strangle/internal/testutil"
 	swag "github.com/swaggo/swag/v2"
 	"go.uber.org/zap"
 )
@@ -202,7 +203,9 @@ func TestOpenAPIEndpoints(t *testing.T) {
 }
 
 func TestOpenAPIDocsArePublicWhenAuthOn(t *testing.T) {
-	users := auth.NewMemUserStore()
+	d := testutil.OpenDB(t, "openapi")
+	defer d.Close()
+	users := d.Users()
 	hash, err := auth.HashPassword("s3cret")
 	if err != nil {
 		t.Fatalf("HashPassword(): %v", err)

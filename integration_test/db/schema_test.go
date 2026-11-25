@@ -120,14 +120,45 @@ func TestHostAndAnsibleRunSchema(t *testing.T) {
 	}
 	if err := conn.QueryRow(`SELECT COUNT(*) FROM hosts h
 		JOIN collections c ON c.id = h.collection_id
-		JOIN orgs o ON o.id = h.org_id
+		JOIN orgs o ON o.id = c.org_id
 		WHERE h.name = 'web1' AND c.name = 'home' AND o.name = 'default'`).Scan(&linked); err != nil || linked != 2 {
 		t.Errorf("linked hosts = %d, %v; want 2", linked, err)
 	}
 	if err := conn.QueryRow(`SELECT COUNT(*) FROM ansible_runs ar
 		JOIN hosts h ON h.id = ar.host_id
-		WHERE h.name = 'web1' AND ar.mode = 'check'`).Scan(&runs); err != nil || runs != 2 {
+		JOIN runs r ON r.id = ar.run_id
+		WHERE h.name = 'web1' AND r.check = true`).Scan(&runs); err != nil || runs != 2 {
 		t.Errorf("ansible runs = %d, %v; want 2", runs, err)
+	}
+	// UUIDv7 encodes the creation time in the first 48 bits, so ordering by
+	// id also orders the runs chronologically.
+	var ids []string
+	rows, err := conn.Query(`SELECT ar.id::text FROM ansible_runs ar
+		JOIN hosts h ON h.id = ar.host_id WHERE h.name = 'web1' ORDER BY ar.id`)
+	if err != nil {
+		t.Fatalf("list ansible run ids: %v", err)
+	}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			t.Fatalf("scan ansible run id: %v", err)
+		}
+		ids = append(ids, id)
+	}
+	_ = rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate ansible run ids: %v", err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("ansible run ids = %v; want 2", ids)
+	}
+	var versions []int
+	for _, id := range ids {
+		versions = append(versions, int(id[14]-'0'))
+	}
+	if versions[0] != 7 || versions[1] != 7 {
+		t.Errorf("ansible run uuid versions = %v; want v7", versions)
 	}
 
 	var tasks, stats, facts string
@@ -138,7 +169,11 @@ func TestHostAndAnsibleRunSchema(t *testing.T) {
 	}
 	assertContains(t, tasks, `"task":"install nginx"`)
 	assertContains(t, stats, `"changed":1`)
-	assertContains(t, stats, `"mode":"check"`)
+	// Mode is a run-level field, not repeated in every host's stats blob.
+	var checked int
+	if err := conn.QueryRow(`SELECT COUNT(*) FROM runs WHERE check = true`).Scan(&checked); err != nil || checked != 2 {
+		t.Errorf("check runs = %d, %v; want 2", checked, err)
+	}
 	testutil.AssertJSONEqual(t, json.RawMessage(facts), json.RawMessage(`{"os":"linux"}`))
 }
 

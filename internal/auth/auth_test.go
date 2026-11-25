@@ -1,8 +1,6 @@
 package auth
 
 import (
-	"context"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -55,59 +53,6 @@ func TestVerifyPasswordForeignParameters(t *testing.T) {
 	// returns false for a wrong password.
 	if VerifyPassword(hash, "anything") {
 		t.Error("VerifyPassword() = true with a forged key")
-	}
-}
-
-func TestMemUserStore(t *testing.T) {
-	ctx := context.Background()
-	m := NewMemUserStore()
-
-	if n, err := m.Count(ctx); err != nil || n != 0 {
-		t.Fatalf("Count() = %d, %v; want 0, nil", n, err)
-	}
-	if err := m.CreateUser(ctx, "alice", "hash-a"); err != nil {
-		t.Fatalf("CreateUser() error: %v", err)
-	}
-	if err := m.CreateUser(ctx, "alice", "hash-a2"); err == nil {
-		t.Error("CreateUser() on an existing name must fail")
-	}
-	if err := m.CreateUser(ctx, "bob", "hash-b"); err != nil {
-		t.Fatalf("CreateUser() error: %v", err)
-	}
-
-	u, err := m.GetUser(ctx, "bob")
-	if err != nil {
-		t.Fatalf("GetUser() error: %v", err)
-	}
-	if u.Name != "bob" || u.Hash != "hash-b" {
-		t.Errorf("GetUser() = %+v", u)
-	}
-	if _, err := m.GetUser(ctx, "nobody"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("GetUser() missing user: err = %v, want ErrNotFound", err)
-	}
-
-	users, err := m.ListUsers(ctx)
-	if err != nil {
-		t.Fatalf("ListUsers() error: %v", err)
-	}
-	if len(users) != 2 || users[0].Name != "alice" || users[1].Name != "bob" {
-		t.Errorf("ListUsers() = %+v, want alice then bob", users)
-	}
-	if n, err := m.Count(ctx); err != nil || n != 2 {
-		t.Errorf("Count() = %d, %v; want 2", n, err)
-	}
-
-	if err := m.RemoveUser(ctx, "alice"); err != nil {
-		t.Fatalf("RemoveUser() error: %v", err)
-	}
-	if _, err := m.GetUser(ctx, "alice"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("GetUser() after removal: err = %v, want ErrNotFound", err)
-	}
-	if err := m.RemoveUser(ctx, "alice"); !errors.Is(err, ErrNotFound) {
-		t.Errorf("RemoveUser() twice: err = %v, want ErrNotFound", err)
-	}
-	if err := m.Close(); err != nil {
-		t.Errorf("Close() error: %v", err)
 	}
 }
 

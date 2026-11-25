@@ -13,16 +13,16 @@ import (
 
 	"github.com/kakwa/strangle/internal/applier"
 	"github.com/kakwa/strangle/internal/auth"
+	"github.com/kakwa/strangle/internal/db"
 	"go.uber.org/zap"
 )
 
-// newAuthTestServer builds a Server with one target and the given user
-// store (nil keeps the server open).
-func newAuthTestServer(t *testing.T, users auth.UserStore) *server.Server {
+// newAuthTestServer builds a Server with one target and a DB-backed user
+// store. An empty users table keeps the server open.
+func newAuthTestServer(t *testing.T, d *db.DB) *server.Server {
 	t.Helper()
-	st := testutil.OpenDB(t, "server")
-	apr := applier.NewAnsible(testTargets, stubExecutor{}, st, zap.NewNop())
-	return server.New("test", apr, st, nil, &recEnqueuer{status: "queued"}, nil, nil, users, nil, "", zap.NewNop())
+	apr := applier.NewAnsible(testTargets, stubExecutor{}, d, zap.NewNop())
+	return server.New("test", apr, d, nil, &recEnqueuer{status: "queued"}, nil, nil, d.Users(), nil, "", zap.NewNop())
 }
 
 func seedUser(t *testing.T, users auth.UserStore, name, pw string) {
@@ -107,7 +107,9 @@ func TestMeWhenAuthOff(t *testing.T) {
 }
 
 func TestMeWithEmptyUserStore(t *testing.T) {
-	s := newAuthTestServer(t, auth.NewMemUserStore()) // store, but no users
+	d := testutil.OpenDB(t, "server")
+	defer d.Close()
+	s := newAuthTestServer(t, d) // store, but no users
 
 	rec := doGet(t, s, "/api/me")
 	if rec.Code != http.StatusOK {
@@ -134,9 +136,10 @@ func TestMeWithEmptyUserStore(t *testing.T) {
 }
 
 func TestLoginFlow(t *testing.T) {
-	users := auth.NewMemUserStore()
-	seedUser(t, users, "alice", "s3cret")
-	s := newAuthTestServer(t, users)
+	d := testutil.OpenDB(t, "server")
+	defer d.Close()
+	seedUser(t, d.Users(), "alice", "s3cret")
+	s := newAuthTestServer(t, d)
 
 	// Gated without a session.
 	if rec := doGet(t, s, "/api/stats"); rec.Code != http.StatusUnauthorized {
@@ -205,17 +208,17 @@ func TestLoginFlow(t *testing.T) {
 }
 
 func TestSyncWithSession(t *testing.T) {
-	users := auth.NewMemUserStore()
-	seedUser(t, users, "alice", "s3cret")
+	st := testutil.OpenDB(t, "server")
+	defer st.Close()
+	seedUser(t, st.Users(), "alice", "s3cret")
 
 	fake := &fakeSyncer{
 		rev:     "abc123",
 		changed: true,
 		targets: testTargets,
 	}
-	st := testutil.OpenDB(t, "server")
 	apr := applier.NewAnsible(testTargets, stubExecutor{}, st, zap.NewNop())
-	s := server.New("test", apr, st, nil, &recEnqueuer{status: "queued"}, nil, fake, users, nil, "", zap.NewNop())
+	s := server.New("test", apr, st, nil, &recEnqueuer{status: "queued"}, nil, fake, st.Users(), nil, "", zap.NewNop())
 
 	// Auth on, no token configured: a bare sync is rejected.
 	if rec := postSync(t, s, `{"target":"home"}`, nil); rec.Code != http.StatusUnauthorized {
@@ -234,13 +237,13 @@ func TestSyncWithSession(t *testing.T) {
 }
 
 func TestSyncTokenWithAuthOn(t *testing.T) {
-	users := auth.NewMemUserStore()
-	seedUser(t, users, "alice", "s3cret")
+	st := testutil.OpenDB(t, "server")
+	defer st.Close()
+	seedUser(t, st.Users(), "alice", "s3cret")
 
 	fake := &fakeSyncer{rev: "abc123", targets: testTargets}
-	st := testutil.OpenDB(t, "server")
 	apr := applier.NewAnsible(testTargets, stubExecutor{}, st, zap.NewNop())
-	s := server.New("test", apr, st, nil, &recEnqueuer{status: "queued"}, nil, fake, users, nil, "sekrit", zap.NewNop())
+	s := server.New("test", apr, st, nil, &recEnqueuer{status: "queued"}, nil, fake, st.Users(), nil, "sekrit", zap.NewNop())
 
 	// The configured token still works for machine-to-machine syncs.
 	rec := postSync(t, s, `{"target":"home"}`, map[string]string{"X-Strangle-Token": "sekrit"})

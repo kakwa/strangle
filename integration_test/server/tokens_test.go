@@ -12,15 +12,15 @@ import (
 
 	"github.com/kakwa/strangle/internal/applier"
 	"github.com/kakwa/strangle/internal/auth"
+	"github.com/kakwa/strangle/internal/db"
 	"go.uber.org/zap"
 )
 
-// newTokenTestServer builds a Server with a user store and a token store.
-func newTokenTestServer(t *testing.T, users auth.UserStore, tokens auth.TokenStore) *server.Server {
+// newTokenTestServer builds a Server with DB-backed user and token stores.
+func newTokenTestServer(t *testing.T, d *db.DB) *server.Server {
 	t.Helper()
-	st := testutil.OpenDB(t, "server")
-	apr := applier.NewAnsible(testTargets, stubExecutor{}, st, zap.NewNop())
-	return server.New("test", apr, st, nil, &recEnqueuer{status: "queued"}, nil, nil, users, tokens, "", zap.NewNop())
+	apr := applier.NewAnsible(testTargets, stubExecutor{}, d, zap.NewNop())
+	return server.New("test", apr, d, nil, &recEnqueuer{status: "queued"}, nil, nil, d.Users(), d.Tokens(), "", zap.NewNop())
 }
 
 func deleteAuth(t *testing.T, s *server.Server, path string, headers map[string]string) *httptest.ResponseRecorder {
@@ -35,10 +35,10 @@ func deleteAuth(t *testing.T, s *server.Server, path string, headers map[string]
 }
 
 func TestTokensCRUDWithSession(t *testing.T) {
-	users := auth.NewMemUserStore()
-	seedUser(t, users, "alice", "s3cret")
-	tokens := auth.NewMemTokenStore()
-	s := newTokenTestServer(t, users, tokens)
+	d := testutil.OpenDB(t, "server")
+	defer d.Close()
+	seedUser(t, d.Users(), "alice", "s3cret")
+	s := newTokenTestServer(t, d)
 
 	c := loginCookie(t, s, "alice", "s3cret")
 	h := map[string]string{"Cookie": c.String()}
@@ -120,10 +120,10 @@ func TestTokensCRUDWithSession(t *testing.T) {
 }
 
 func TestTokensRequireUser(t *testing.T) {
-	users := auth.NewMemUserStore()
-	seedUser(t, users, "alice", "s3cret")
-	tokens := auth.NewMemTokenStore()
-	s := newTokenTestServer(t, users, tokens)
+	d := testutil.OpenDB(t, "server")
+	defer d.Close()
+	seedUser(t, d.Users(), "alice", "s3cret")
+	s := newTokenTestServer(t, d)
 
 	// No identity at all: the API is gated before the handler runs.
 	if rec := getAuthNoHeader(t, s, "/api/tokens"); rec.Code != http.StatusUnauthorized {
@@ -146,12 +146,12 @@ func getAuthNoHeader(t *testing.T, s *server.Server, path string) *httptest.Resp
 }
 
 func TestTokenBearerAuthenticates(t *testing.T) {
-	users := auth.NewMemUserStore()
-	seedUser(t, users, "alice", "s3cret")
-	tokens := auth.NewMemTokenStore()
-	s := newTokenTestServer(t, users, tokens)
+	d := testutil.OpenDB(t, "server")
+	defer d.Close()
+	seedUser(t, d.Users(), "alice", "s3cret")
+	s := newTokenTestServer(t, d)
 
-	raw, _, err := tokens.Create(context.Background(), "alice", "cli", 0)
+	raw, _, err := d.Tokens().Create(context.Background(), "alice", "cli", 0)
 	if err != nil {
 		t.Fatalf("Create() error: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestTokenBearerAuthenticates(t *testing.T) {
 	}
 
 	// A revoked token stops working.
-	if err := tokens.Remove(context.Background(), "alice", "cli"); err != nil {
+	if err := d.Tokens().Remove(context.Background(), "alice", "cli"); err != nil {
 		t.Fatalf("Remove() error: %v", err)
 	}
 	if rec := getAuthWith(t, s, "/api/stats", map[string]string{"Authorization": "Bearer " + raw}); rec.Code != http.StatusUnauthorized {
@@ -179,12 +179,11 @@ func TestTokenBearerAuthenticates(t *testing.T) {
 }
 
 func TestStaticTokenIsNotAUser(t *testing.T) {
-	users := auth.NewMemUserStore()
-	seedUser(t, users, "alice", "s3cret")
-	tokens := auth.NewMemTokenStore()
 	st := testutil.OpenDB(t, "server")
+	defer st.Close()
+	seedUser(t, st.Users(), "alice", "s3cret")
 	apr := applier.NewAnsible(testTargets, stubExecutor{}, st, zap.NewNop())
-	s := server.New("test", apr, st, nil, &recEnqueuer{status: "queued"}, nil, nil, users, tokens, "sekrit", zap.NewNop())
+	s := server.New("test", apr, st, nil, &recEnqueuer{status: "queued"}, nil, nil, st.Users(), st.Tokens(), "sekrit", zap.NewNop())
 
 	// The static sync token is not a user: it cannot pass the auth gate.
 	rec := getAuthWith(t, s, "/api/tokens", map[string]string{"X-Strangle-Token": "sekrit"})
@@ -200,7 +199,9 @@ func TestStaticTokenIsNotAUser(t *testing.T) {
 func TestTokensNoUserIdentity(t *testing.T) {
 	// No users (auth off) but a token store exists: the endpoints are
 	// reachable, yet without a user identity they are rejected.
-	s := newTokenTestServer(t, auth.NewMemUserStore(), auth.NewMemTokenStore())
+	d := testutil.OpenDB(t, "server")
+	defer d.Close()
+	s := newTokenTestServer(t, d)
 
 	if rec := getAuthNoHeader(t, s, "/api/tokens"); rec.Code != http.StatusForbidden {
 		t.Errorf("GET /api/tokens anonymous = %d, want %d", rec.Code, http.StatusForbidden)

@@ -9,6 +9,25 @@ import (
 	"gorm.io/gorm"
 )
 
+// Collection is the database counterpart of one collection.yml entry. Its
+// content is replaced from the YAML at startup, so the file stays the source
+// of truth while the API and foreign keys can refer to stable numeric IDs.
+// Options, Playbooks and Settings are jsonb columns mirroring the YAML.
+type Collection struct {
+	ID        uint64 `gorm:"primaryKey"`
+	OrgID     uint64 `gorm:"not null;index;uniqueIndex:idx_collection_org_name,priority:1"`
+	Org       Org    `gorm:"foreignKey:OrgID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
+	Name      string `gorm:"size:255;not null;uniqueIndex:idx_collection_org_name,priority:2"`
+	Path      string `gorm:"size:1024"`
+	Options   []byte `gorm:"type:jsonb"`
+	Playbooks []byte `gorm:"type:jsonb"`
+	Settings  []byte `gorm:"type:jsonb"`
+	Schedule  string `gorm:"size:255"`
+	Hosts     []Host `gorm:"foreignKey:CollectionID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
+}
+
+func (Collection) TableName() string { return "collections" }
+
 // SyncCollections replaces the collections table with the contents of the
 // loaded collection.yml. Called at startup (after any git checkout has been
 // refreshed), so the file remains the source of truth while the database gets
@@ -151,49 +170,25 @@ func deleteCollection(tx *gorm.DB, id uint64) error {
 	return tx.Delete(&Collection{}, "id = ?", id).Error
 }
 
-// ensureCollection returns the collection and org IDs for a run's target,
-// creating a placeholder collection when a run arrives before the startup
-// sync (as happens in tests and for ad-hoc targets).
-func ensureCollection(tx *gorm.DB, name string) (uint64, uint64, error) {
+// ensureCollection returns the collection ID for a run's target, creating a
+// placeholder collection when a run arrives before the startup sync (as in
+// tests and for ad-hoc targets).
+func ensureCollection(tx *gorm.DB, name string) (uint64, error) {
 	var coll Collection
 	err := tx.Where("name = ?", name).Order("org_id").First(&coll).Error
 	if err == nil {
-		return coll.ID, coll.OrgID, nil
+		return coll.ID, nil
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return 0, 0, err
+		return 0, err
 	}
 	orgID := defaultOrgID(tx)
 	if orgID == 0 {
-		return 0, 0, errors.New("default org is missing")
+		return 0, errors.New("default org is missing")
 	}
 	coll = Collection{OrgID: orgID, Name: name, Options: []byte("{}"), Playbooks: []byte("[]"), Settings: []byte("{}")}
 	if err := tx.Create(&coll).Error; err != nil {
-		return 0, 0, fmt.Errorf("insert collection %q: %w", name, err)
+		return 0, fmt.Errorf("insert collection %q: %w", name, err)
 	}
-	return coll.ID, orgID, nil
-}
-
-func defaultOrgID(tx *gorm.DB) uint64 {
-	org, err := firstOrCreateOrg(tx, cfg.DefaultOrg)
-	if err != nil {
-		return 0
-	}
-	return org.ID
-}
-
-func firstOrCreateOrg(tx *gorm.DB, name string) (Org, error) {
-	var org Org
-	err := tx.Where("name = ?", name).First(&org).Error
-	if err == nil {
-		return org, nil
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return Org{}, err
-	}
-	org = Org{Name: name}
-	if err := tx.Create(&org).Error; err != nil {
-		return Org{}, fmt.Errorf("insert org %q: %w", name, err)
-	}
-	return org, nil
+	return coll.ID, nil
 }

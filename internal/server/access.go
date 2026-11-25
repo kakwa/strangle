@@ -27,7 +27,7 @@ func (s *Server) accessibleTargets(ctx context.Context, r *http.Request) map[str
 	if !s.restricted(ctx) {
 		return nil
 	}
-	user, ok := s.userFrom(r)
+	user, ok := userFromRequest(r)
 	if !ok {
 		return map[string]bool{}
 	}
@@ -54,7 +54,7 @@ func (s *Server) mayUse(ctx context.Context, r *http.Request, org, collection st
 	if !s.restricted(ctx) {
 		return true
 	}
-	if user, ok := s.userFrom(r); ok {
+	if user, ok := userFromRequest(r); ok {
 		ok, err := s.access.Allows(ctx, user, org, collection)
 		return err == nil && ok
 	}

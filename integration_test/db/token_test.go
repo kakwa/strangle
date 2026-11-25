@@ -22,8 +22,8 @@ func TestTokenStoreCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error: %v", err)
 	}
-	if !strings.HasPrefix(raw, auth.TokenPrefix) {
-		t.Errorf("raw token = %q, want %q prefix", raw, auth.TokenPrefix)
+	if !strings.HasPrefix(raw, auth.TokenPrefix) || len(raw) != len(auth.TokenPrefix)+2*auth.TokenRandomSize {
+		t.Errorf("raw token = %q, want %q prefix and %d hex chars", raw, auth.TokenPrefix, 2*auth.TokenRandomSize)
 	}
 	if tok.Name != "ci" || tok.Prefix != raw[:len(auth.TokenPrefix)+8] {
 		t.Errorf("token = %+v", tok)
