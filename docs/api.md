@@ -51,7 +51,8 @@ Org and collection resources exist only under the versioned prefix:
 
 Collection-scoped aliases are available for the data endpoints:
 `runs`, `runs/{id}`, `hosts`, `hosts/{host}/runs`, `hosts/{host}/changes`,
-`playbooks`, `stats`, and `POST run` / `POST sync`. For example:
+`playbooks`, `stats`, `hostkeys`, `ssh/stats`, and `POST run` / `POST sync`.
+For example:
 
 ```
 GET  /api/v1/orgs/lab/collections/edge/runs
@@ -430,14 +431,20 @@ returns `404`.
 ## Host keys (SSH transport only)
 
 These endpoints apply to jobs using the Go-managed SSH transport with the
-`api` host-key policy. The `target` field is the SSH scope key
-`<target>/<playbook name>`.
+`api` host-key policy. They are collection-scoped: every path carries
+`/api/v1/orgs/{org}/collections/{collection}` and is checked against the
+caller's collection membership. There is no master-level or flat `/api/*`
+route for SSH administration. In requests the `target` field is the SSH scope
+key `<target>/<playbook name>`; its first component must be the collection in
+the URL, or the request is answered with `400`. The UI's **SSH** screen reads
+each visible collection and sends approve/reject through that collection's
+URL.
 
-### GET /api/hostkeys
+### GET /api/v1/orgs/{org}/collections/{collection}/hostkeys
 
-Host keys pending approval, aggregated across all scopes. `status` is
-`pending` for an unknown key and `rejected` for a changed key on an approved
-host; both are resolved with accept or reject.
+Host keys pending approval for this collection. `status` is `pending` for an
+unknown key and `rejected` for a changed key on an approved host; both are
+resolved with accept or reject below.
 
 ```json
 [
@@ -447,7 +454,7 @@ host; both are resolved with accept or reject.
 ]
 ```
 
-### POST /api/hostkeys/accept
+### POST /api/v1/orgs/{org}/collections/{collection}/hostkeys/accept
 
 ```json
 {"target": "site/prod", "host": "10.0.0.9", "fingerprint": "SHA256:..."}
@@ -460,7 +467,7 @@ persists it for future connections.
 {"status": "accepted", "host": "10.0.0.9"}
 ```
 
-### POST /api/hostkeys/reject
+### POST /api/v1/orgs/{org}/collections/{collection}/hostkeys/reject
 
 ```json
 {"target": "site/prod", "host": "10.0.0.9"}
@@ -472,18 +479,17 @@ Removes the pending key; the connection stays refused until re-approved.
 {"status": "rejected", "host": "10.0.0.9"}
 ```
 
-### GET /api/ssh/stats
+### GET /api/v1/orgs/{org}/collections/{collection}/ssh/stats
 
-Counters of the master's SSH managers, keyed by scope:
+Counters of the SSH managers of this collection, keyed by scope:
 
 ```json
 {
   "site/prod": {"active_connections": 0, "total_dials": 0},
-  "home/hypervisors": {"active_connections": 0, "total_dials": 0}
+  "site/common": {"active_connections": 1, "total_dials": 4}
 }
 ```
 
 The managers of the process serving this API exist for the host-key approval
 endpoints; the playbook's actual SSH connections are pooled inside the worker
-process that runs it. The endpoint is mainly useful to see which scopes are
-configured (one entry per job with the transport enabled).
+process that runs it.

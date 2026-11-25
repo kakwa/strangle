@@ -50,6 +50,10 @@ taken per host from the inventory, with these as fallbacks.
 | `insecure` | Accept any key. Development only. |
 
 Fingerprints use the `SHA256:` format (OpenSSH `ssh-keygen -lf` style).
+Approval is per collection: the endpoints below live under
+`/api/v1/orgs/{org}/collections/{collection}` and are checked against the
+caller's collection membership. The SSH scope in the JSON body
+(`<target>/<playbook name>`) must belong to the collection in the URL.
 
 ### The approval workflow (`api` policy)
 
@@ -58,7 +62,7 @@ Fingerprints use the `SHA256:` format (OpenSSH `ssh-keygen -lf` style).
 2. List the pending keys:
 
    ```sh
-   curl localhost:8080/api/hostkeys
+   curl localhost:8080/api/v1/orgs/default/collections/site/hostkeys
    ```
 
    ```json
@@ -71,7 +75,7 @@ Fingerprints use the `SHA256:` format (OpenSSH `ssh-keygen -lf` style).
 3. Approve the fingerprint (or reject it):
 
    ```sh
-   curl -X POST localhost:8080/api/hostkeys/accept \
+   curl -X POST localhost:8080/api/v1/orgs/default/collections/site/hostkeys/accept \
      -d '{"target": "site/prod", "host": "10.0.0.9", "fingerprint": "SHA256:..."}'
    ```
 
@@ -99,7 +103,8 @@ files between jobs.
 
 ## Observability
 
-`GET /api/ssh/stats` reports `active_connections` and `total_dials` per
-scope (of the master's managers; the playbook connections themselves are
-pooled inside the workers). When connections are being reused, a host that is
-reached on every run contributes dials only the first time.
+`GET /api/v1/orgs/{org}/collections/{collection}/ssh/stats` reports
+`active_connections` and `total_dials` per scope of that collection (of the
+master's managers; the playbook connections themselves are pooled inside the
+workers). When connections are being reused, a host that is reached on every
+run contributes dials only the first time.

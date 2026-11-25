@@ -4,7 +4,10 @@
 // of fixture data whose JSON shapes match the real API exactly (see
 // internal/server/server.go and internal/store/store.go). POST /api/run is
 // stateful: it appends a new run to /api/runs so the UI's pending-run
-// tracking can be exercised end to end.
+// tracking can be exercised end to end. Host-key decisions are stateful too;
+// /api/_mock/reset-hostkeys (mock-only) restores the fixtures between tests.
+// /api/v1/... paths are normalized to their flat aliases so the UI can use
+// the canonical versioned endpoints against this server.
 
 import { createServer } from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
@@ -181,6 +184,73 @@ const PLAYBOOKS = {
   ],
 }
 
+// --- SSH administration (mirrors internal/server) --------------------------
+
+const ORGS = [
+  {
+    name: 'default',
+    collections: [
+      { name: 'alpha', org: 'default', playbooks: PLAYBOOKS.alpha.map((pb) => ({ name: pb.name })) },
+    ],
+  },
+  {
+    name: 'lab',
+    collections: [
+      { name: 'beta', org: 'lab', playbooks: PLAYBOOKS.beta.map((pb) => ({ name: pb.name })) },
+    ],
+  },
+]
+
+const SSH_STATS = {
+  'alpha/web': { active_connections: 2, total_dials: 7 },
+  'beta/databases': { active_connections: 0, total_dials: 3 },
+}
+
+const HOSTKEY_FIXTURES = [
+  {
+    target: 'alpha/web', host: '10.0.1.10',
+    fingerprint: 'SHA256:mock-alpha-key',
+    public_key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAlpha',
+    status: 'pending', first_seen: iso(5 * MIN),
+  },
+  {
+    target: 'beta/databases', host: '10.0.2.20',
+    fingerprint: 'SHA256:mock-beta-key',
+    public_key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBeta',
+    status: 'rejected', first_seen: iso(HOUR),
+  },
+]
+let hostkeys = HOSTKEY_FIXTURES.map((k) => ({ ...k }))
+
+function collectionExists(org, collection) {
+  return ORGS.some((o) => o.name === org && o.collections.some((c) => c.name === collection))
+}
+
+function decideHostKey(req, res, kind, collection) {
+  let body = ''
+  req.on('data', (c) => (body += c))
+  req.on('end', () => {
+    let req2
+    try {
+      req2 = JSON.parse(body || '{}')
+    } catch {
+      return json(res, 400, { error: 'invalid JSON' })
+    }
+    const scope = req2.target
+    if (!scope) return json(res, 400, { error: 'target scope is required' })
+    if (collection && scope.split('/')[0] !== collection) {
+      return json(res, 400, { error: `scope ${scope} is not in collection ${collection}` })
+    }
+    const i = hostkeys.findIndex((k) => k.target === scope && k.host === req2.host)
+    if (i < 0) return json(res, 400, { error: `no pending host key for ${scope}:${req2.host}` })
+    if (kind === 'accept' && req2.fingerprint && hostkeys[i].fingerprint !== req2.fingerprint) {
+      return json(res, 400, { error: 'fingerprint mismatch' })
+    }
+    hostkeys.splice(i, 1)
+    return json(res, 200, { status: kind === 'accept' ? 'accepted' : 'rejected', host: req2.host })
+  })
+}
+
 // --- auth (mirrors internal/server) ----------------------------------------
 //
 // The mock enforces the same contract as the real server: with a user
@@ -250,9 +320,17 @@ function json(res, status, body) {
 }
 
 function handleApi(req, res, url) {
-  const p = url.pathname
+  // The UI uses canonical /api/v1 paths; normalize them to the flat aliases
+  // handled below. Org/collection subresources are matched separately.
+  const p = url.pathname.replace(/^\/api\/v\d+\//, '/api/')
   if (req.method === 'GET' && p === '/api/health') {
     return json(res, 200, { status: 'ok' })
+  }
+  // Mock-only test hook: host-key decisions are stateful, so each spec can
+  // restore the fixtures without restarting the server.
+  if (req.method === 'POST' && p === '/api/_mock/reset-hostkeys') {
+    hostkeys = HOSTKEY_FIXTURES.map((k) => ({ ...k }))
+    return json(res, 200, { status: 'reset' })
   }
   if (req.method === 'POST' && p === '/api/login') {
     let body = ''
@@ -323,6 +401,30 @@ function handleApi(req, res, url) {
   }
   if (req.method === 'GET' && p === '/api/playbooks') {
     return json(res, 200, PLAYBOOKS)
+  }
+  if (req.method === 'GET' && p === '/api/orgs') {
+    return json(res, 200, ORGS)
+  }
+  const collResource = p.match(/^\/api\/orgs\/([^/]+)\/collections\/([^/]+)\/(hostkeys|ssh\/stats)$/)
+  if (req.method === 'GET' && collResource) {
+    const org = decodeURIComponent(collResource[1])
+    const coll = decodeURIComponent(collResource[2])
+    if (!collectionExists(org, coll)) return json(res, 404, { error: `unknown collection ${org}/${coll}` })
+    if (collResource[3] === 'hostkeys') {
+      return json(res, 200, hostkeys.filter((k) => k.target.split('/')[0] === coll))
+    }
+    const stats = {}
+    for (const [scope, s] of Object.entries(SSH_STATS)) {
+      if (scope.split('/')[0] === coll) stats[scope] = s
+    }
+    return json(res, 200, stats)
+  }
+  const collDecision = p.match(/^\/api\/orgs\/([^/]+)\/collections\/([^/]+)\/hostkeys\/(accept|reject)$/)
+  if (req.method === 'POST' && collDecision) {
+    const org = decodeURIComponent(collDecision[1])
+    const coll = decodeURIComponent(collDecision[2])
+    if (!collectionExists(org, coll)) return json(res, 404, { error: `unknown collection ${org}/${coll}` })
+    return decideHostKey(req, res, collDecision[3], coll)
   }
   // --- API token self-service (mirrors internal/server) -------------------
   if (req.method === 'GET' && p === '/api/tokens') {

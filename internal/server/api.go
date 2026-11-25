@@ -163,6 +163,17 @@ func runSummary(run store.RunRecord) store.RunRecord {
 	return run
 }
 
+// sshScopeCollection returns the collection (configured target) part of an SSH
+// scope key, "<target>/<playbook name>". Host-key decisions are made per
+// collection, never globally: a key offered by one collection must not be
+// approvable through another collection's URL.
+func sshScopeCollection(scope string) string {
+	if i := strings.IndexByte(scope, '/'); i >= 0 {
+		return scope[:i]
+	}
+	return scope
+}
+
 // collectionStats returns aggregate stats for one collection.
 func (s *Server) collectionStats(ctx context.Context, collection string) (*store.Stats, error) {
 	return s.statsForTargets(ctx, map[string]bool{collection: true})

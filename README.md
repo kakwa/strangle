@@ -110,9 +110,12 @@ docs/                documentation: architecture, configuration, API, git collec
 - `POST /api/tokens`     — body `{"name": "...", "ttl_hours": N}`; create one,
   returns the raw value exactly once
 - `DELETE /api/tokens/{name}` — revoke one
-- `GET /api/hostkeys`    — host keys pending approval (SSH transport only)
-- `POST /api/hostkeys/accept` / `POST /api/hostkeys/reject`
-- `GET /api/ssh/stats`   — SSH pool counters per scope
+- `GET /api/v1/orgs/{org}/collections/{collection}/hostkeys` — SSH host keys
+  pending approval (collection-scoped, like all collection data)
+- `POST /api/v1/orgs/{org}/collections/{collection}/hostkeys/accept` /
+  `POST /api/v1/orgs/{org}/collections/{collection}/hostkeys/reject`
+- `GET /api/v1/orgs/{org}/collections/{collection}/ssh/stats` — SSH pool
+  counters per scope
 
 Full request/response examples: [docs/api.md](docs/api.md).
 
@@ -133,6 +136,8 @@ button:
   plus a manual-run button per job.
 - `/tokens` — **Tokens**: the signed-in user's API tokens — create one (the
   raw value is shown once), see its prefix, lifetime and last use, revoke it.
+- `/ssh` — **SSH**: pending SSH host keys, with approve/reject actions, and
+  the master's SSH connection-pool counters.
 
 ## Configuration
 

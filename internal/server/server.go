@@ -663,64 +663,85 @@ func (s *Server) Routes() http.Handler {
 	apiHandler(mux, "POST", apiPrefix+"/sync", handleSync)
 	mux.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/sync", s.withCollectionAccess(handleSync))
 
-	// Host-key endpoints identify an SSH scope as "<target>/<playbook name>"
-	// in their `target` field (or the JSON response's `target` key).
-	apiHandler(mux, "GET", apiPrefix+"/hostkeys", func(w http.ResponseWriter, _ *http.Request) {
+	// SSH host keys and pool counters are collection-scoped resources: every
+	// endpoint below lives under /api/v1/orgs/{org}/collections/{collection},
+	// passes the membership check and validates the org/collection pair. An
+	// SSH scope is "<target>/<playbook name>", so its first component must be
+	// the collection in the URL.
+	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hostkeys", s.withCollectionAccess(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := s.requireCollection(w, r); !ok {
+			return
+		}
+		coll := r.PathValue("collection")
 		keys := []sshpool.HostKey{}
 		if s.ssh != nil {
-			keys = s.ssh.PendingHostKeys()
+			for _, key := range s.ssh.PendingHostKeys() {
+				if sshScopeCollection(key.Target) == coll {
+					keys = append(keys, key)
+				}
+			}
 		}
 		writeJSON(w, http.StatusOK, keys)
-	})
+	}))
 
-	apiHandler(mux, "GET", apiPrefix+"/ssh/stats", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/ssh/stats", s.withCollectionAccess(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := s.requireCollection(w, r); !ok {
+			return
+		}
+		coll := r.PathValue("collection")
 		stats := map[string]sshpool.Stats{}
 		if s.ssh != nil {
-			stats = s.ssh.Stats()
+			for scope, st := range s.ssh.Stats() {
+				if sshScopeCollection(scope) == coll {
+					stats[scope] = st
+				}
+			}
 		}
 		writeJSON(w, http.StatusOK, stats)
-	})
+	}))
 
-	apiHandler(mux, "POST", apiPrefix+"/hostkeys/accept", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Target      string `json:"target"`
-			Host        string `json:"host"`
-			Fingerprint string `json:"fingerprint"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
+	decideHostKey := func(w http.ResponseWriter, kind, scope, host, fingerprint string) {
 		if s.ssh == nil {
 			writeError(w, http.StatusBadRequest, errors.New("SSH host key approval is not enabled"))
 			return
 		}
-		if err := s.ssh.ApproveHostKey(req.Target, req.Host, req.Fingerprint); err != nil {
+		var err error
+		if kind == "accept" {
+			err = s.ssh.ApproveHostKey(scope, host, fingerprint)
+		} else {
+			err = s.ssh.RejectHostKey(scope, host)
+		}
+		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "accepted", "host": req.Host})
-	})
+		writeJSON(w, http.StatusOK, map[string]string{"status": kind + "ed", "host": host})
+	}
 
-	apiHandler(mux, "POST", apiPrefix+"/hostkeys/reject", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Target string `json:"target"`
-			Host   string `json:"host"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		if s.ssh == nil {
-			writeError(w, http.StatusBadRequest, errors.New("SSH host key approval is not enabled"))
-			return
-		}
-		if err := s.ssh.RejectHostKey(req.Target, req.Host); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": "rejected", "host": req.Host})
-	})
+	registerScopedDecision := func(kind string) http.HandlerFunc {
+		return s.withCollectionAccess(func(w http.ResponseWriter, r *http.Request) {
+			if _, ok := s.requireCollection(w, r); !ok {
+				return
+			}
+			var req struct {
+				Target      string `json:"target"`
+				Host        string `json:"host"`
+				Fingerprint string `json:"fingerprint"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			coll := r.PathValue("collection")
+			if sshScopeCollection(req.Target) != coll {
+				writeError(w, http.StatusBadRequest, fmt.Errorf("SSH scope %q does not belong to collection %q", req.Target, coll))
+				return
+			}
+			decideHostKey(w, kind, req.Target, req.Host, req.Fingerprint)
+		})
+	}
+	mux.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/hostkeys/accept", registerScopedDecision("accept"))
+	mux.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/hostkeys/reject", registerScopedDecision("reject"))
 
 	mux.Handle("/", spaHandler(uiFS))
 

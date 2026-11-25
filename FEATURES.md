@@ -34,7 +34,7 @@ command line · **[SCHED]** scheduling · **[GIT]** git-backed collections ·
 - [x] 19. [SANDBOXING] Sandboxing: file-system isolation between collections (Landlock via go-landlock; deny ansible FS writes; keep one collection's credentials away from the others) + a validating playbook collection
 - [x] 20. [API] [UI] Run detail: `GET /api/v1/orgs/{org}/collections/{collection}/runs/{id}` and a run view with the full captured output; stop inlining the full output of the last 50 runs into the collection's runs listing on every poll
 - [x] 21. [API] Filter a collection's runs (`/api/v1/orgs/{org}/collections/{collection}/runs`) by playbook, host and time range (+ pagination)
-- [ ] 22. [UI] [SSH] UI for pending SSH host keys (approve/reject) and SSH pool stats — master-level endpoints, versioned under the new layout
+- [x] 22. [UI] [SSH] UI for pending SSH host keys (approve/reject) and SSH pool stats — collection-scoped versioned endpoints under `/api/v<>/orgs/{org}/collections/{collection}`
 - [ ] 23. [SCHED] Per-target or per-playbook interval instead of the single global interval (ideally cron-like)
 - [ ] 24. [NOTIFY] Notify on run failure (webhook, email, slack or similar), configured per collection
 - [ ] 25. [DB] Task history: keep the per-task results of every run
@@ -57,6 +57,12 @@ command line · **[SCHED]** scheduling · **[GIT]** git-backed collections ·
 
 ## Order notes
 
+- **API layout rule:** apart from common/global endpoints (auth, token
+  self-service, org discovery), every new HTTP endpoint must use
+  `/api/v<>/orgs/{org}/collections/{collection}/...`. Collection data and
+  actions belong to the collection that owns them; the flat `/api/*` routes
+  are legacy aliases from feature 17, not a pattern for new work. Do not add
+  new master-level or flat routes for collection-scoped features.
 - **The API rework (17) is placed before the features that build on the
   new layout** — per-collection access restrictions (18) and the
   per-collection run endpoints (20, 21, 27) — so they are implemented

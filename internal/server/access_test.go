@@ -117,6 +117,25 @@ func TestCollectionRestrictions(t *testing.T) {
 	if enq.called() != 1 || enq.last() != "edge/site" {
 		t.Errorf("enqueuer calls = %v, want one edge/site", enq.calls)
 	}
+
+	// SSH host keys are per collection too: neither the view nor a decision
+	// may reach a collection the user does not belong to.
+	if rec = getAuthWith(t, s, "/api/v1/orgs/default/collections/home/hostkeys", headers); rec.Code != http.StatusForbidden {
+		t.Errorf("GET home hostkeys: status = %d, want 403", rec.Code)
+	}
+	if rec = getAuthWith(t, s, "/api/v1/orgs/lab/collections/edge/hostkeys", headers); rec.Code != http.StatusOK {
+		t.Errorf("GET edge hostkeys: status = %d, want 200", rec.Code)
+	}
+	if rec = getAuthWith(t, s, "/api/v1/orgs/default/collections/home/ssh/stats", headers); rec.Code != http.StatusForbidden {
+		t.Errorf("GET home ssh stats: status = %d, want 403", rec.Code)
+	}
+	body := `{"target":"home/site","host":"web1","fingerprint":"SHA256:abc"}`
+	if rec = post("/api/v1/orgs/default/collections/home/hostkeys/accept", body); rec.Code != http.StatusForbidden {
+		t.Errorf("POST home hostkey accept: status = %d, want 403", rec.Code)
+	}
+	if rec = post("/api/v1/orgs/lab/collections/edge/hostkeys/accept", body); rec.Code != http.StatusBadRequest {
+		t.Errorf("POST edge URL with home scope: status = %d, want 400", rec.Code)
+	}
 }
 
 func TestNoMembershipsMeansUnrestricted(t *testing.T) {

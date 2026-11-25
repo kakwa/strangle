@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"github.com/kakwa/strangle/internal/applier"
 	"github.com/kakwa/strangle/internal/collection"
 	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/sshpool"
 	"github.com/kakwa/strangle/internal/store"
 	"github.com/kakwa/strangle/internal/worker"
 	"go.uber.org/zap"
@@ -248,7 +251,7 @@ func TestGetPlaybooks(t *testing.T) {
 func TestGetHostkeysDisabled(t *testing.T) {
 	s := newTestServer(&recEnqueuer{status: "queued"}) // no ssh pool
 
-	rec := doGet(t, s, "/api/hostkeys")
+	rec := doGet(t, s, "/api/v1/orgs/default/collections/home/hostkeys")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
@@ -264,7 +267,7 @@ func TestGetHostkeysDisabled(t *testing.T) {
 func TestSshStatsDisabled(t *testing.T) {
 	s := newTestServer(&recEnqueuer{status: "queued"}) // no ssh pool
 
-	rec := doGet(t, s, "/api/ssh/stats")
+	rec := doGet(t, s, "/api/v1/orgs/default/collections/home/ssh/stats")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
@@ -280,7 +283,8 @@ func TestSshStatsDisabled(t *testing.T) {
 func TestHostkeyAcceptDisabled(t *testing.T) {
 	s := newTestServer(&recEnqueuer{status: "queued"}) // no ssh pool
 
-	rec := postRunJSON(t, s, "/api/hostkeys/accept", `{"target":"home","host":"web1","fingerprint":"sha256:ab"}`)
+	rec := postRunJSON(t, s, "/api/v1/orgs/default/collections/home/hostkeys/accept",
+		`{"target":"home/site","host":"web1","fingerprint":"sha256:ab"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
 	}
@@ -289,9 +293,155 @@ func TestHostkeyAcceptDisabled(t *testing.T) {
 func TestHostkeyRejectDisabled(t *testing.T) {
 	s := newTestServer(&recEnqueuer{status: "queued"}) // no ssh pool
 
-	rec := postRunJSON(t, s, "/api/hostkeys/reject", `{"target":"home","host":"web1"}`)
+	rec := postRunJSON(t, s, "/api/v1/orgs/default/collections/home/hostkeys/reject",
+		`{"target":"home/site","host":"web1"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+// SSH administration is a collection-scoped feature: there are no master or
+// flat routes for it, and every request validates the org/collection pair.
+func TestCollectionScopedSSHAdminRoutes(t *testing.T) {
+	s := newTestServer(&recEnqueuer{status: "queued"}) // no ssh pool
+
+	for _, path := range []string{
+		"/api/hostkeys", "/api/v1/hostkeys", "/api/ssh/stats", "/api/v1/ssh/stats",
+		"/api/hostkeys/accept", "/api/v1/hostkeys/accept",
+		"/api/hostkeys/reject", "/api/v1/hostkeys/reject",
+	} {
+		rec := doGet(t, s, path)
+		// An unregistered API path falls through to the SPA handler, which
+		// answers with HTML rather than JSON.
+		if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+			t.Errorf("GET %s: content type = %q, want the SPA fallback (no master-level API route)", path, ct)
+		}
+	}
+	for _, path := range []string{
+		"/api/v1/orgs/default/collections/nope/hostkeys",
+		"/api/v1/orgs/lab/collections/home/hostkeys",
+		"/api/v1/orgs/default/collections/home/ssh/stats",
+	} {
+		want := http.StatusOK
+		if strings.Contains(path, "/nope/") || strings.Contains(path, "/lab/") {
+			want = http.StatusNotFound
+		}
+		if rec := doGet(t, s, path); rec.Code != want {
+			t.Errorf("GET %s: status = %d, want %d", path, rec.Code, want)
+		}
+	}
+	for _, suffix := range []string{
+		"/api/v1/orgs/default/collections/home/hostkeys/accept",
+		"/api/v1/orgs/default/collections/home/hostkeys/reject",
+	} {
+		rec := postRunJSON(t, s, suffix, `{"target":"home/site","host":"web1"}`)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("POST %s: status = %d, want 400 with SSH disabled", suffix, rec.Code)
+		}
+	}
+}
+
+func TestHostKeyApprovalViaVersionedAPI(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, filepath.Join(dir, "pending.json"), `{
+  "10.0.0.9": {"host":"10.0.0.9","fingerprint":"SHA256:abc","public_key":"ssh-ed25519 AAAA","status":"pending","first_seen":"2026-11-25T00:00:00Z"},
+  "10.0.0.10": {"host":"10.0.0.10","fingerprint":"SHA256:def","public_key":"ssh-ed25519 BBBB","status":"pending","first_seen":"2026-11-25T00:00:00Z"}
+}`)
+	cfg := config.SSHConfig{
+		Enabled:        true,
+		Password:       "secret",
+		HostKeyPolicy:  config.PolicyAPI,
+		AutoAcceptFile: filepath.Join(dir, "accepted.json"),
+		PendingFile:    filepath.Join(dir, "pending.json"),
+	}
+	mgr, err := sshpool.New(cfg)
+	if err != nil {
+		t.Fatalf("sshpool.New: %v", err)
+	}
+	pool, err := sshpool.NewMulti(map[string]*sshpool.Manager{"home/site": mgr})
+	if err != nil {
+		t.Fatalf("sshpool.NewMulti: %v", err)
+	}
+	defer pool.Close()
+
+	st := store.NewMem()
+	defer st.Close()
+	apr := applier.NewAnsible(testTargets, stubExecutor{}, st, zap.NewNop())
+	s := New("test", apr, st, pool, &recEnqueuer{status: "queued"}, nil, nil, nil, nil, "", zap.NewNop())
+
+	homeKeys := "/api/v1/orgs/default/collections/home/hostkeys"
+	var keys []sshpool.HostKey
+	rec := doGet(t, s, homeKeys)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET hostkeys: status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &keys); err != nil {
+		t.Fatalf("decode hostkeys: %v", err)
+	}
+	if len(keys) != 2 {
+		t.Fatalf("hostkeys = %+v, want two keys", keys)
+	}
+	byHost := map[string]sshpool.HostKey{}
+	for _, key := range keys {
+		byHost[key.Host] = key
+	}
+	for host, fingerprint := range map[string]string{"10.0.0.9": "SHA256:abc", "10.0.0.10": "SHA256:def"} {
+		key, ok := byHost[host]
+		if !ok || key.Target != "home/site" || key.Fingerprint != fingerprint {
+			t.Errorf("hostkey for %s = %+v, want scope home/site with fingerprint %s", host, key, fingerprint)
+		}
+	}
+
+	stats := map[string]sshpool.Stats{}
+	rec = doGet(t, s, "/api/v1/orgs/default/collections/home/ssh/stats")
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &stats) != nil {
+		t.Fatalf("GET ssh stats: status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	if _, ok := stats["home/site"]; !ok {
+		t.Errorf("ssh stats = %+v, want a home/site scope", stats)
+	}
+
+	// Decisions are taken through the collection URL: a key from another
+	// collection cannot be approved by guessing its scope in the body.
+	wrong := postRunJSON(t, s, "/api/v1/orgs/default/collections/home/hostkeys/accept",
+		`{"target":"edge/site","host":"10.0.0.9","fingerprint":"SHA256:abc"}`)
+	if wrong.Code != http.StatusBadRequest {
+		t.Errorf("accept with another collection's scope: status = %d, want 400", wrong.Code)
+	}
+	rec = doGet(t, s, "/api/v1/orgs/default/collections/home/hostkeys")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "10.0.0.9") {
+		t.Fatalf("GET home hostkeys: status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	rec = postRunJSON(t, s, "/api/v1/orgs/default/collections/home/hostkeys/accept",
+		`{"target":"home/site","host":"10.0.0.9","fingerprint":"SHA256:abc"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("accept: status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	rec = postRunJSON(t, s, "/api/v1/orgs/default/collections/home/hostkeys/reject",
+		`{"target":"home/site","host":"10.0.0.10"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reject: status = %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	rec = doGet(t, s, homeKeys)
+	keys = nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &keys); err != nil {
+		t.Fatalf("decode hostkeys after decisions: %v", err)
+	}
+	if len(keys) != 0 {
+		t.Errorf("hostkeys after accept/reject = %+v, want empty", keys)
+	}
+	// A wrong fingerprint must not approve a key.
+	rec = postRunJSON(t, s, homeKeys+"/accept", `{"target":"home/site","host":"10.0.0.9","fingerprint":"SHA256:wrong"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("accept with wrong fingerprint: status = %d, want 400", rec.Code)
+	}
+}
+
+func writeFixture(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write fixture %s: %v", path, err)
 	}
 }
 

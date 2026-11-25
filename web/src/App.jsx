@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   IconBook,
   IconClock,
+  IconFingerprint,
   IconKey,
   IconMoonStars,
   IconPlayerPlay,
@@ -45,6 +46,14 @@ import { createToken, fetchMe, fetchTokens, logout, removeToken } from './auth'
 
 const POLL_INTERVAL_MS = 10_000
 
+// SSH administration is collection-scoped: every read and decision uses the
+// versioned org/collection prefix. Org discovery is a common endpoint.
+const ORGS_PATH = '/api/v1/orgs'
+
+function collectionAPI(org, collection, resource) {
+  return `/api/v1/orgs/${encodeURIComponent(org)}/collections/${encodeURIComponent(collection)}/${resource}`
+}
+
 // The API should always return arrays/objects, but older or partial responses
 // may contain null. Normalize them so a rendering bug cannot take down the UI.
 function asArray(value) {
@@ -55,6 +64,12 @@ function asObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value
     : {}
+}
+
+// SSH scopes are "<collection>/<playbook name>"; the first component is the
+// collection that owns the key and therefore the only one allowed to decide.
+function sshScopeCollection(scope) {
+  return String(scope || '').split('/')[0]
 }
 
 function normalizeStats(value) {
@@ -719,6 +734,216 @@ function RunDetail({ onBack }) {
   )
 }
 
+// SSHView is the master-level SSH administration screen: keys offered by
+// workers (one SSH scope per target/playbook) and the pool counters of the
+// server process. A decision is sent to the versioned API and the list is
+// reloaded immediately, so a worker can offer the key again if it is rejected.
+function SSHView() {
+  const [keys, setKeys] = useState([])
+  const [stats, setStats] = useState({})
+  const [orgsByCollection, setOrgsByCollection] = useState({})
+  const [error, setError] = useState(null)
+  const [actionError, setActionError] = useState(null)
+  const [busy, setBusy] = useState(null)
+
+  const refresh = useCallback(async () => {
+    try {
+      const orgsRes = await fetch(ORGS_PATH)
+      if (!orgsRes.ok) throw new Error(`HTTP ${orgsRes.status}`)
+      const byCollection = {}
+      const targets = []
+      for (const org of asArray(await orgsRes.json())) {
+        for (const coll of asArray(org?.collections)) {
+          if (!coll?.name) continue
+          byCollection[coll.name] = org.name
+          targets.push([org.name, coll.name])
+        }
+      }
+      const responses = await Promise.all(
+        targets.flatMap(([org, coll]) => [
+          fetch(collectionAPI(org, coll, 'hostkeys')),
+          fetch(collectionAPI(org, coll, 'ssh/stats')),
+        ]),
+      )
+      const failed = responses.find((r) => !r.ok)
+      if (failed) throw new Error(`HTTP ${failed.status}`)
+
+      const allKeys = []
+      const allStats = {}
+      for (let i = 0; i < targets.length; i++) {
+        allKeys.push(...asArray(await responses[2 * i].json()))
+        Object.assign(allStats, asObject(await responses[2 * i + 1].json()))
+      }
+      setKeys(allKeys)
+      setStats(allStats)
+      setOrgsByCollection(byCollection)
+      setError(null)
+    } catch (err) {
+      setError(err.message)
+    }
+  }, [])
+
+  useEffect(() => {
+    refresh()
+    const id = setInterval(refresh, POLL_INTERVAL_MS)
+    return () => clearInterval(id)
+  }, [refresh])
+
+  const decide = async (kind, key) => {
+    const label = `${kind}|${key.target}|${key.host}`
+    setActionError(null)
+    setBusy(label)
+    try {
+      // A key belongs to one collection; decisions must go through that
+      // collection's URL so membership checks and scoping apply.
+      const collection = sshScopeCollection(key.target)
+      const org = orgsByCollection[collection]
+      if (!org) throw new Error(`unknown collection ${collection} for ${key.host}`)
+      const body = kind === 'accept'
+        ? { target: key.target, host: key.host, fingerprint: key.fingerprint }
+        : { target: key.target, host: key.host }
+      const res = await fetch(collectionAPI(org, collection, `hostkeys/${kind}`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || `HTTP ${res.status}`)
+      }
+      await refresh()
+    } catch (err) {
+      setActionError(err.message)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const scopes = Object.entries(stats).sort((a, b) => a[0].localeCompare(b[0]))
+
+  return (
+    <Stack gap="md">
+      <Card withBorder>
+        <Group justify="space-between" wrap="wrap">
+          <Group gap="sm">
+            <ThemeIcon variant="light" color="orange" size={32}>
+              <IconFingerprint size={18} stroke={1.5} />
+            </ThemeIcon>
+            <Title order={4}>Pending host keys</Title>
+            {keys.length > 0 && <Badge color="orange" variant="light">{keys.length}</Badge>}
+          </Group>
+          <Text size="sm" c="dimmed" onClick={refresh} style={{ cursor: 'pointer' }}>
+            ↻ refresh
+          </Text>
+        </Group>
+        <Text size="xs" c="dimmed" mt="xs">
+          Unknown or changed SSH keys are held here until you approve or reject
+          them. The scope is the target/playbook the connection belongs to.
+        </Text>
+        {error && <Alert color="red" mt="sm" title="API unavailable">{error}</Alert>}
+        {actionError && <Alert color="red" mt="sm" title="Could not update the host key">{actionError}</Alert>}
+        <Table mt="sm">
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Scope</Table.Th>
+              <Table.Th>Host</Table.Th>
+              <Table.Th>Fingerprint / key</Table.Th>
+              <Table.Th>First seen</Table.Th>
+              <Table.Th>Status</Table.Th>
+              <Table.Th>Actions</Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {keys.map((key) => {
+              const keyId = `${key.target}|${key.host}`
+              return (
+                <Table.Tr key={keyId}>
+                  <Table.Td><Code>{key.target}</Code></Table.Td>
+                  <Table.Td>{key.host}</Table.Td>
+                  <Table.Td>
+                    <Stack gap={2}>
+                      <Text size="xs" ff="monospace">{key.fingerprint}</Text>
+                      {key.public_key && (
+                        <Text size="xs" c="dimmed" ff="monospace" style={{ wordBreak: 'break-all' }}>
+                          {key.public_key.trim()}
+                        </Text>
+                      )}
+                    </Stack>
+                  </Table.Td>
+                  <Table.Td>{fmtTime(key.first_seen)}</Table.Td>
+                  <Table.Td>
+                    <Badge color={key.status === 'rejected' ? 'red' : 'orange'} variant="light">
+                      {key.status || 'pending'}
+                    </Badge>
+                  </Table.Td>
+                  <Table.Td>
+                    <Group gap="xs" wrap="nowrap">
+                      <Button
+                        size="xs"
+                        color="green"
+                        variant="light"
+                        loading={busy === `accept|${keyId}`}
+                        onClick={() => decide('accept', key)}
+                      >
+                        Approve
+                      </Button>
+                      <Button
+                        size="xs"
+                        color="red"
+                        variant="light"
+                        loading={busy === `reject|${keyId}`}
+                        onClick={() => decide('reject', key)}
+                      >
+                        Reject
+                      </Button>
+                    </Group>
+                  </Table.Td>
+                </Table.Tr>
+              )
+            })}
+            {keys.length === 0 && !error && (
+              <Table.Tr>
+                <Table.Td colSpan={6}>No pending host keys.</Table.Td>
+              </Table.Tr>
+            )}
+          </Table.Tbody>
+        </Table>
+      </Card>
+
+      <Card withBorder>
+        <Title order={4} mb="sm">SSH connection pools</Title>
+        <Text size="xs" c="dimmed" mb="sm">
+          Counters of the SSH managers serving this API; the actual playbook
+          connections live in the worker processes.
+        </Text>
+        <Table>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Scope</Table.Th>
+              <Table.Th>Active connections</Table.Th>
+              <Table.Th>Total dials</Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {scopes.map(([scope, s]) => (
+              <Table.Tr key={scope}>
+                <Table.Td><Code>{scope}</Code></Table.Td>
+                <Table.Td>{s?.active_connections ?? 0}</Table.Td>
+                <Table.Td>{s?.total_dials ?? 0}</Table.Td>
+              </Table.Tr>
+            ))}
+            {scopes.length === 0 && !error && (
+              <Table.Tr>
+                <Table.Td colSpan={3}>No SSH managers configured.</Table.Td>
+              </Table.Tr>
+            )}
+          </Table.Tbody>
+        </Table>
+      </Card>
+    </Stack>
+  )
+}
+
 function ColorSchemeToggle() {
   const { colorScheme, toggleColorScheme } = useMantineColorScheme()
   return (
@@ -925,6 +1150,7 @@ function sectionFromPath(pathname) {
   if (pathname === '/hosts') return { section: 'Hosts', selectedHost: null }
   if (pathname === '/playbooks') return { section: 'Playbooks', selectedHost: null }
   if (pathname === '/tokens') return { section: 'Tokens', selectedHost: null }
+  if (pathname === '/ssh') return { section: 'SSH', selectedHost: null }
   return { section: 'Dashboard', selectedHost: null }
 }
 
@@ -1091,6 +1317,7 @@ function AppInner({ user, onLogout }) {
     if (label === 'Hosts') navigate('/hosts')
     else if (label === 'Playbooks') navigate('/playbooks')
     else if (label === 'Tokens') navigate('/tokens')
+    else if (label === 'SSH') navigate('/ssh')
     else navigate('/')
   }
 
@@ -1195,6 +1422,7 @@ function AppInner({ user, onLogout }) {
                 }
               />
               <Route path="/tokens" element={<TokensView />} />
+              <Route path="/ssh" element={<SSHView />} />
               <Route
                 path="/runs/:id"
                 element={<RunDetail onBack={() => navigate('/')} />}
