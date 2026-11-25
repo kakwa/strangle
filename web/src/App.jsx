@@ -7,6 +7,7 @@ import {
   IconKey,
   IconMoonStars,
   IconPlayerPlay,
+  IconSearch,
   IconServer,
   IconSun,
 } from '@tabler/icons-react'
@@ -406,14 +407,26 @@ function RunsTable({ runs, onRun }) {
 }
 
 function HostsTable({ hosts, onHost, filter, setFilter }) {
-  const visible = filter === 'all' ? hosts : hosts.filter((h) =>
-    filter === 'active' ? h.active : !h.active && h.in_inventory
-  )
+  const [query, setQuery] = useState('')
+  const needle = query.trim().toLowerCase()
+  const visible = hosts.filter((h) => {
+    const matchesFilter = filter === 'all' ||
+      (filter === 'active' ? h.active : !h.active && h.in_inventory)
+    return matchesFilter && (!needle || h.name.toLowerCase().includes(needle))
+  })
   return (
     <Card withBorder>
       <Group justify="space-between" mb="md">
         <Title order={4}>Hosts</Title>
         <Group gap="xs">
+          <Input
+            aria-label="Search hosts by name"
+            placeholder="Search hosts by name"
+            leftSection={<IconSearch size={14} />}
+            value={query}
+            onChange={(event) => setQuery(event.currentTarget.value)}
+            style={{ width: 220 }}
+          />
           {['all', 'active', 'disappeared'].map((f) => (
             <Badge
               key={f}

@@ -49,6 +49,26 @@ describe('Hosts', () => {
     cy.get('table tbody tr').should('have.length', 5)
   })
 
+  it('filters hosts by name', () => {
+    const search = 'input[placeholder="Search hosts by name"]'
+    cy.get(search).type('web-')
+    cy.get('table tbody tr').should('have.length', 2)
+    cy.contains('td', 'db-01').should('not.exist')
+
+    cy.get(search).clear().type('DB-01')
+    cy.get('table tbody tr').should('have.length', 1)
+    cy.contains('td', 'db-01')
+
+    // The search combines with the status filters.
+    cy.contains('span', 'disappeared').click()
+    cy.get('table tbody tr').should('have.length', 1)
+    cy.get('table tbody tr').should('contain.text', 'No hosts')
+
+    cy.get(search).clear()
+    cy.contains('span', 'all').click()
+    cy.get('table tbody tr').should('have.length', 5)
+  })
+
   it('opens a host from its row and from the sidebar', () => {
     cy.contains('td', 'web-02').click()
     cy.location('pathname').should('eq', '/hosts/web-02')
