@@ -9,8 +9,9 @@
 #
 # A collection may carry a `git` upstream: strangle clones the repository into
 # `path` and pins it to the tracked ref (branch, tag or commit) on startup
-# and on every sync. POST /api/sync re-syncs one collection (and, with a
-# `branch` field, switches the tracked branch). In a git collection's
+# and on every sync. POST /api/v1/orgs/{org}/collections/{collection}/hook
+# re-syncs one collection (and, with a `branch` field, switches the tracked
+# branch). In a git collection's
 # strangle.yml the `working_dir`, `playbook` and `inventory` fields may use
 # `{{ .Branch }}` and `{{ .Name }}` templates, e.g. to load a different
 # inventory per branch.

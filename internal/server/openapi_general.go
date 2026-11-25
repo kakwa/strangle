@@ -10,7 +10,7 @@ package server
 
 // @title            Strangle API
 // @version          v1
-// @description      HTTP API for running, inspecting and administering Ansible playbook collections.
+// @description      Versioned HTTP API for inspecting and administering Ansible playbook collections.
 // @license.name     GPL-3.0
 // @servers.url      /
 func swaggerGeneralInfo() {}
@@ -24,10 +24,10 @@ func swaggerSessionCookieScheme() {}
 // @securityDefinitions.apikey syncToken
 // @in                         header
 // @name                       X-Strangle-Token
-// @description                Static auth.token, accepted by the sync endpoints.
+// @description                Static auth.token, accepted by collection hook endpoints.
 func swaggerSyncTokenScheme() {}
 
 // @securityDefinitions.bearerauth userBearer
 // @bearerFormat                  st_
-// @description                   Personal access token created through POST /api/v1/tokens.
+// @description                   Collection-scoped personal access token created through POST /api/v1/orgs/{org}/collections/{collection}/tokens.
 func swaggerUserBearerScheme() {}

@@ -5,20 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io/fs"
 	"net/http"
 	"path"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/kakwa/strangle/internal/applier"
 	"github.com/kakwa/strangle/internal/auth"
 	"github.com/kakwa/strangle/internal/cfg"
-	"github.com/kakwa/strangle/internal/collection"
 	"github.com/kakwa/strangle/internal/db"
+	"github.com/kakwa/strangle/internal/server/handlers"
 	"github.com/kakwa/strangle/internal/sshpool"
 	"github.com/kakwa/strangle/internal/worker"
 	"github.com/kakwa/strangle/web"
@@ -31,38 +29,36 @@ import (
 	_ "github.com/kakwa/strangle/docs"
 )
 
+const (
+	jsonMedia = "application/json"
+	htmlMedia = "text/html"
+	// SessionCookie is the name of the cookie carrying a UI session token.
+	SessionCookie = handlers.SessionCookie
+)
+
 // RunEnqueuer accepts a request to run one playbook now by enqueueing a River
-// job. runID is the store record created for this run; the returned string is
-// the queue job ID (used by the cancel endpoint).
+// job. The HTTP server no longer exposes manual run endpoints, but the queue
+// is still used by the scheduler in cmd/strangle-server.
 type RunEnqueuer interface {
 	EnqueueRun(ctx context.Context, target, playbook string, runID uint64, check bool) (string, error)
 }
 
-// RunCanceler cancels a queued or running playbook job. It is a separate
-// interface so an enqueuer that does not implement cancellation can still
-// serve runs.
-type RunCanceler interface {
-	CancelRun(ctx context.Context, jobID string) error
-}
-
 // WorkerReporter reports the state of the master's worker pool. It is nil
-// when no workers are managed.
+// when no workers are managed; /metrics then reports zero worker slots.
 type WorkerReporter interface {
 	WorkerStatuses(ctx context.Context) []worker.WorkerStatus
 }
 
-// Syncer syncs a git-backed collection target: moves its checkout to the
-// tracked ref and reloads its strangle.yml. It is nil when no target has a
+// Syncer syncs a git-backed collection target. It is nil when no target has a
 // git upstream.
 type Syncer interface {
 	Sync(ctx context.Context, target, branch string) (string, bool, error)
 	// Targets reports the resolved target configs, so the applier's view
-	// can be refreshed after a sync.
+	// can be refreshed after a hook.
 	Targets() []cfg.TargetConfig
 }
 
 // Server is the strangle HTTP server.
-// Option customises a Server at construction time.
 type Option func(*Server)
 
 // WithCollectionAccess enables per-collection authorization. Without it the
@@ -72,8 +68,8 @@ func WithCollectionAccess(a auth.CollectionAccess) Option {
 }
 
 // WithWorkerReporter overrides the worker-pool status reporter used by
-// GET /api/workers. Production passes the worker manager to New; tests can
-// supply a canned reporter without starting real workers.
+// /metrics. Production passes the worker manager to New; tests can supply a
+// canned reporter without starting real workers.
 func WithWorkerReporter(w WorkerReporter) Option {
 	return func(s *Server) { s.workers = w }
 }
@@ -92,7 +88,6 @@ type Server struct {
 	applier     *applier.Ansible
 	store       db.Store
 	ssh         *sshpool.Multi
-	run         RunEnqueuer
 	workers     WorkerReporter
 	syncer      Syncer
 	users       auth.UserStore
@@ -106,15 +101,6 @@ type Server struct {
 	logger      *zap.Logger
 }
 
-// playbookInfo describes one configured job with its latest run outcome.
-type playbookInfo struct {
-	Name       string     `json:"name"`
-	Playbook   string     `json:"playbook"`
-	Inventory  string     `json:"inventory"`
-	LastStatus string     `json:"last_status,omitempty"` // ok | failed | ""
-	LastRunAt  *time.Time `json:"last_run_at,omitempty"`
-}
-
 // uiFS is the built web UI, embedded in the binary at compile time
 // (see package web), rooted at web/dist.
 var uiFS = func() fs.FS {
@@ -126,28 +112,24 @@ var uiFS = func() fs.FS {
 	return ui
 }()
 
-// SessionCookie is the name of the cookie carrying a UI session token.
-const SessionCookie = "strangle_session"
-
 // New returns a Server. The web UI is embedded in the binary; build it with
 // `make web` (or `make build`) before compiling. ssh may be nil when no
-// target uses the Go-managed SSH transport. run accepts manual playbook runs
-// as River jobs. workers may be nil when no worker pool is managed. syncer may
-// be nil when no target
-// has a git upstream. users, when non-nil, is the store of UI accounts; UI
-// authentication is enforced as soon as it holds at least one user (see
-// Routes). tokens, when non-nil, is the store of user API tokens: a valid
-// bearer token authenticates any /api request as its owner (self-service,
-// for user-linked CLIs and webhooks). authToken, when non-empty, is a
-// static bearer token accepted on the sync endpoint only (legacy
-// machine-to-machine webhook protection, not tied to a user).
-func New(addr string, apr *applier.Ansible, st db.Store, ssh *sshpool.Multi, run RunEnqueuer, workers WorkerReporter, syncer Syncer, users auth.UserStore, tokens auth.TokenStore, authToken string, logger *zap.Logger, opts ...Option) *Server {
+// target uses the Go-managed SSH transport. workers may be nil when no worker
+// pool is managed. syncer may be nil when no target has a git upstream.
+// users, when non-nil, is the store of UI accounts; UI authentication is
+// enforced as soon as it holds at least one user (see Routes). tokens, when
+// non-nil, is the store of collection-scoped user API tokens. authToken, when
+// non-empty, is a static bearer token accepted on the collection hook only.
+// The run argument is kept for source compatibility and ignored.
+func New(addr string, apr *applier.Ansible, st db.Store, ssh *sshpool.Multi, _ RunEnqueuer, workers WorkerReporter, syncer Syncer, users auth.UserStore, tokens auth.TokenStore, authToken string, logger *zap.Logger, opts ...Option) *Server {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	s := &Server{
 		addr:      addr,
 		applier:   apr,
 		store:     st,
 		ssh:       ssh,
-		run:       run,
 		workers:   workers,
 		syncer:    syncer,
 		users:     users,
@@ -161,12 +143,13 @@ func New(addr string, apr *applier.Ansible, st db.Store, ssh *sshpool.Multi, run
 	return s
 }
 
-// Routes builds the HTTP handler: the /api endpoints plus the web UI.
+// Routes builds the HTTP handler: the /api/v1 endpoints, /metrics, the API
+// docs and the embedded web UI.
 //
-// UI authentication is enforced when a user store is configured and holds
-// at least one user: every /api/* request then needs a valid session,
-// except the login endpoints, GET /api/health (liveness), GET /api/docs and
-// its assets, and GET /api/v1/openapi.json. Without users the server runs open and logs a
+// UI authentication is enforced when a user store is configured and holds at
+// least one user: every /api/* request then needs a valid session or user
+// token, except the login endpoints, GET /api/v1/health (liveness), the docs
+// and GET /api/v1/openapi.json. Without users the server runs open and logs a
 // warning pointing at `strangle-cli user add`.
 func (s *Server) Routes() http.Handler {
 	return s.buildRoutes()
@@ -211,746 +194,21 @@ func (s *Server) buildRoutes() *echo.Echo {
 		}
 		writeError(c.Response(), code, err)
 	}
-	e.Use(s.authMiddleware)
+	api := s.api()
+	e.Use(s.authMiddleware, collectionAccessMiddleware(api))
 
-	routes := echoRegistrar{e: e}
-
-	apiHandler(routes, "GET", apiPrefix+"/health", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	})
-	s.registerOrgRoutes(routes)
+	s.registerAPIRoutes(echoRegistrar{e: e}, api)
 
 	// Prometheus scrape endpoint. It is intentionally outside /api so it is
-	// reachable without a UI session; only aggregate counts are exposed.
-	e.GET("/metrics", echo.WrapHandler(metricsHandler(s.store, s.workers, s.logger)))
+	// reachable without a UI session, and reports worker and runtime state.
+	e.GET("/metrics", echo.WrapHandler(metricsHandler(s.workers)))
 
 	// Machine-readable API description and Swagger UI. Both are public: the
 	// spec describes the routes but exposes no collection data itself.
 	s.registerDocsRoutes(e)
 
-	// --- UI authentication -------------------------------------------------
-
-	// POST /api/login authenticates a local user and starts a session.
-	apiHandler(routes, "POST", apiPrefix+"/login", func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Username string `json:"username"`
-			Password string `json:"password"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		if !s.authOn || s.users == nil {
-			writeError(w, http.StatusUnauthorized,
-				errors.New("authentication is not enabled: no users are configured (strangle-cli user add <name> --password <pw>)"))
-			return
-		}
-		user, err := s.users.GetUser(r.Context(), req.Username)
-		if err != nil || !auth.VerifyPassword(user.Hash, req.Password) {
-			// Same error for unknown user and wrong password: no account
-			// enumeration.
-			writeError(w, http.StatusUnauthorized, errors.New("invalid username or password"))
-			return
-		}
-		token := s.sessions.Create(user.Name)
-		http.SetCookie(w, &http.Cookie{
-			Name:     SessionCookie,
-			Value:    token,
-			Path:     "/",
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
-			MaxAge:   int(auth.SessionTTL.Seconds()),
-		})
-		s.logger.Info("user logged in", zap.String("username", user.Name))
-		writeJSON(w, http.StatusOK, meResponse{Authenticated: true, Username: user.Name})
-	})
-
-	// POST /api/logout ends the session carried by the request cookie.
-	apiHandler(routes, "POST", apiPrefix+"/logout", func(w http.ResponseWriter, r *http.Request) {
-		if c, err := r.Cookie(SessionCookie); err == nil && s.sessions != nil {
-			s.sessions.Destroy(c.Value)
-		}
-		http.SetCookie(w, &http.Cookie{
-			Name:   SessionCookie,
-			Value:  "",
-			Path:   "/",
-			MaxAge: -1,
-		})
-		writeJSON(w, http.StatusOK, map[string]string{"status": "logged out"})
-	})
-
-	// GET /api/me answers "who is logged in?" and doubles as the UI's probe
-	// for whether authentication is on at all:
-	//   200 {authenticated: false}          auth off (open server)
-	//   200 {authenticated: true, username} valid session
-	//   401                                 auth on, no valid session
-	apiHandler(routes, "GET", apiPrefix+"/me", func(w http.ResponseWriter, r *http.Request) {
-		if !s.authOn {
-			writeJSON(w, http.StatusOK, meResponse{})
-			return
-		}
-		username, ok := sessionUserFromRequest(r)
-		if !ok {
-			writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
-			return
-		}
-		writeJSON(w, http.StatusOK, meResponse{Authenticated: true, Username: username})
-	})
-
-	// --- API token self-service ---------------------------------------------
-	//
-	// Users manage their own bearer tokens for CLIs, webhooks and other
-	// integrations. A valid token authenticates any /api request as its
-	// owner, so these endpoints accept a session cookie or a bearer token.
-
-	// GET /api/tokens lists the caller's tokens. Raw values are never
-	// returned; only a display prefix.
-	apiHandler(routes, "GET", apiPrefix+"/tokens", func(w http.ResponseWriter, r *http.Request) {
-		if s.tokens == nil {
-			writeError(w, http.StatusServiceUnavailable, errors.New("token storage is not configured"))
-			return
-		}
-		owner, ok := userFromRequest(r)
-		if !ok {
-			writeError(w, http.StatusForbidden, errors.New("a user account is required to manage tokens (use a session or a user token)"))
-			return
-		}
-		tokens, err := s.tokens.List(r.Context(), owner)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, tokens)
-	})
-
-	// POST /api/tokens creates one. Body: {"name": "...", "ttl_hours": N}
-	// where ttl_hours is optional (absent or 0: no expiry). The raw value is
-	// returned exactly once, in the 201 response.
-	apiHandler(routes, "POST", apiPrefix+"/tokens", func(w http.ResponseWriter, r *http.Request) {
-		if s.tokens == nil {
-			writeError(w, http.StatusServiceUnavailable, errors.New("token storage is not configured"))
-			return
-		}
-		owner, ok := userFromRequest(r)
-		if !ok {
-			writeError(w, http.StatusForbidden, errors.New("a user account is required to manage tokens (use a session or a user token)"))
-			return
-		}
-		var req struct {
-			Name     string `json:"name"`
-			TTLHours int64  `json:"ttl_hours"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		raw, tok, err := s.tokens.Create(r.Context(), owner, req.Name, time.Duration(req.TTLHours)*time.Hour)
-		if err != nil {
-			if strings.Contains(err.Error(), "already exists") {
-				writeError(w, http.StatusConflict, err)
-				return
-			}
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		s.logger.Info("API token created", zap.String("username", owner), zap.String("token", tok.Name))
-		writeJSON(w, http.StatusCreated, map[string]any{"raw": raw, "token": tok})
-	})
-
-	// DELETE /api/tokens/{name} revokes one.
-	apiHandler(routes, "DELETE", apiPrefix+"/tokens/{name}", func(w http.ResponseWriter, r *http.Request) {
-		if s.tokens == nil {
-			writeError(w, http.StatusServiceUnavailable, errors.New("token storage is not configured"))
-			return
-		}
-		owner, ok := userFromRequest(r)
-		if !ok {
-			writeError(w, http.StatusForbidden, errors.New("a user account is required to manage tokens (use a session or a user token)"))
-			return
-		}
-		if err := s.tokens.Remove(r.Context(), owner, r.PathValue("name")); err != nil {
-			if errors.Is(err, auth.ErrNotFound) {
-				writeError(w, http.StatusNotFound, err)
-				return
-			}
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	})
-
-	// --- data endpoints ----------------------------------------------------
-
-	handleStats := func(w http.ResponseWriter, r *http.Request) {
-		coll, ok := s.collectionScope(r)
-		if !ok {
-			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
-			return
-		}
-		allowed := s.accessibleTargets(r.Context(), r)
-		if coll != "" {
-			allowed = map[string]bool{coll: true}
-		}
-		stats, err := s.statsForTargets(r.Context(), allowed)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, stats)
-	}
-	apiHandler(routes, "GET", apiPrefix+"/stats", handleStats)
-	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/stats", s.withCollectionAccess(handleStats))
-
-	handleRuns := func(w http.ResponseWriter, r *http.Request) {
-		coll, ok := s.collectionScope(r)
-		if !ok {
-			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
-			return
-		}
-		filter, err := parseRunFilter(r, coll)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		runs, err := s.filteredRuns(r.Context(), filter)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		allowed := s.accessibleTargets(r.Context(), r)
-		if coll != "" {
-			allowed = map[string]bool{coll: true}
-		}
-		visible := make([]db.RunRecord, 0, len(runs))
-		for _, run := range runs {
-			if targetVisible(allowed, run.Target) {
-				visible = append(visible, runSummary(run))
-			}
-		}
-		total := len(visible)
-		start := min(filter.Offset, total)
-		end := min(start+filter.Limit, total)
-		w.Header().Set("X-Total-Count", strconv.Itoa(total))
-		writeJSON(w, http.StatusOK, visible[start:end])
-	}
-	apiHandler(routes, "GET", apiPrefix+"/runs", handleRuns)
-	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/runs", s.withCollectionAccess(handleRuns))
-
-	// Run detail: the only endpoint that includes the full captured output.
-	// On collection-scoped paths a run from a sibling collection is a 404, so
-	// even guessing another collection's run ID does not reveal its log.
-	handleRunDetail := func(w http.ResponseWriter, r *http.Request) {
-		coll, ok := s.collectionScope(r)
-		if !ok {
-			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
-			return
-		}
-		id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
-		if err != nil || id == 0 {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid run id %q", r.PathValue("id")))
-			return
-		}
-		run, err := s.store.Run(r.Context(), id)
-		if errors.Is(err, db.ErrNotFound) {
-			writeError(w, http.StatusNotFound, err)
-			return
-		}
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		if coll != "" && run.Target != coll {
-			writeError(w, http.StatusNotFound, fmt.Errorf("run %d not found in collection %q", id, coll))
-			return
-		}
-		allowed := s.accessibleTargets(r.Context(), r)
-		if coll != "" {
-			allowed = map[string]bool{coll: true}
-		}
-		if !targetVisible(allowed, run.Target) {
-			writeError(w, http.StatusNotFound, errors.New("run not found"))
-			return
-		}
-		writeJSON(w, http.StatusOK, run)
-	}
-	apiHandler(routes, "GET", apiPrefix+"/runs/{id}", handleRunDetail)
-	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/runs/{id}", s.withCollectionAccess(handleRunDetail))
-
-	// Task history is new collection-scoped data: no flat alias, and only
-	// reachable for a run belonging to the URL's collection.
-	handleRunTasks := func(w http.ResponseWriter, r *http.Request) {
-		coll, ok := s.collectionScope(r)
-		if !ok {
-			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
-			return
-		}
-		id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
-		if err != nil || id == 0 {
-			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid run id %q", r.PathValue("id")))
-			return
-		}
-		run, err := s.store.Run(r.Context(), id)
-		if errors.Is(err, db.ErrNotFound) {
-			writeError(w, http.StatusNotFound, err)
-			return
-		}
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		if coll != "" && run.Target != coll {
-			writeError(w, http.StatusNotFound, fmt.Errorf("run %d not found in collection %q", id, coll))
-			return
-		}
-		allowed := s.accessibleTargets(r.Context(), r)
-		if coll != "" {
-			allowed = map[string]bool{coll: true}
-		}
-		if !targetVisible(allowed, run.Target) {
-			writeError(w, http.StatusNotFound, errors.New("run not found"))
-			return
-		}
-		tasks, err := s.store.RunTasks(r.Context(), id)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, tasks)
-	}
-	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/runs/{id}/tasks", s.withCollectionAccess(handleRunTasks))
-
-	handleHosts := func(w http.ResponseWriter, r *http.Request) {
-		coll, ok := s.collectionScope(r)
-		if !ok {
-			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
-			return
-		}
-		hosts, err := s.store.ListHosts(r.Context())
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		allowed := s.accessibleTargets(r.Context(), r)
-		if coll != "" {
-			allowed = map[string]bool{coll: true}
-		}
-		filtered := make([]db.HostRecord, 0, len(hosts))
-		for _, h := range hosts {
-			if (coll == "" || h.Target == coll) && targetVisible(allowed, h.Target) {
-				filtered = append(filtered, h)
-			}
-		}
-		writeJSON(w, http.StatusOK, filtered)
-	}
-	apiHandler(routes, "GET", apiPrefix+"/hosts", handleHosts)
-	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hosts", s.withCollectionAccess(handleHosts))
-
-	handleHostRuns := func(w http.ResponseWriter, r *http.Request) {
-		limit := intQuery(r, "limit", 10)
-		runs, err := s.store.HostRuns(r.Context(), r.PathValue("host"), limit)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		allowed := s.accessibleTargets(r.Context(), r)
-		if coll := r.PathValue("collection"); coll != "" {
-			allowed = map[string]bool{coll: true}
-		}
-		filtered := make([]db.HostRunRecord, 0, len(runs))
-		for _, run := range runs {
-			if targetVisible(allowed, run.Target) {
-				filtered = append(filtered, run)
-			}
-		}
-		writeJSON(w, http.StatusOK, filtered)
-	}
-	apiHandler(routes, "GET", apiPrefix+"/hosts/{host}/runs", handleHostRuns)
-	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hosts/{host}/runs", s.withCollectionAccess(handleHostRuns))
-
-	handleHostChanges := func(w http.ResponseWriter, r *http.Request) {
-		limit := intQuery(r, "limit", 200)
-		changes, err := s.store.HostChanges(r.Context(), r.PathValue("host"), limit)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		allowed := s.accessibleTargets(r.Context(), r)
-		if coll := r.PathValue("collection"); coll != "" {
-			allowed = map[string]bool{coll: true}
-		}
-		filtered := make([]db.TaskStateRecord, 0, len(changes))
-		for _, c := range changes {
-			if targetVisible(allowed, c.Target) {
-				filtered = append(filtered, c)
-			}
-		}
-		writeJSON(w, http.StatusOK, filtered)
-	}
-	apiHandler(routes, "GET", apiPrefix+"/hosts/{host}/changes", handleHostChanges)
-	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hosts/{host}/changes", s.withCollectionAccess(handleHostChanges))
-
-	// /api/v1/playbooks maps each collection (target) to its configured
-	// jobs, with the latest run outcome of each job. The collection-level
-	// variant returns only the requested collection.
-	handlePlaybooks := func(w http.ResponseWriter, r *http.Request) {
-		coll, ok := s.collectionScope(r)
-		if !ok {
-			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
-			return
-		}
-		runs, err := s.store.ListRuns(r.Context(), 1000)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		latest := map[string]db.RunRecord{}
-		for _, run := range runs {
-			if coll != "" && run.Target != coll {
-				continue
-			}
-			key := run.Target + "\x00" + run.Playbook
-			if cur, ok := latest[key]; !ok || run.FinishedAt.After(cur.FinishedAt) {
-				latest[key] = run
-			}
-		}
-
-		out := map[string][]playbookInfo{}
-		targets := s.applier.TargetNames()
-		if coll != "" {
-			targets = []string{coll}
-		}
-		allowed := s.accessibleTargets(r.Context(), r)
-		visibleTargets := make([]string, 0, len(targets))
-		for _, target := range targets {
-			if targetVisible(allowed, target) {
-				visibleTargets = append(visibleTargets, target)
-			}
-		}
-		for _, target := range visibleTargets {
-			configs := s.applier.PlaybookConfigs(target)
-			pbs := make([]playbookInfo, 0, len(configs))
-			for _, pb := range configs {
-				info := playbookInfo{
-					Name:      pb.Name,
-					Playbook:  strings.TrimPrefix(pb.Playbook, "./"),
-					Inventory: strings.TrimPrefix(pb.Inventory, "./"),
-				}
-				if run, ok := latest[target+"\x00"+pb.Name]; ok {
-					info.LastStatus = map[bool]string{true: "ok", false: "failed"}[run.Success]
-					at := run.FinishedAt
-					info.LastRunAt = &at
-				}
-				pbs = append(pbs, info)
-			}
-			out[target] = pbs
-		}
-		writeJSON(w, http.StatusOK, out)
-	}
-	apiHandler(routes, "GET", apiPrefix+"/playbooks", handlePlaybooks)
-	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/playbooks", s.withCollectionAccess(handlePlaybooks))
-
-	// /api/v1/workers reports the master's worker pool: one entry per worker
-	// process, with liveness probed over the worker JSON-RPC API.
-	apiHandler(routes, "GET", apiPrefix+"/workers", func(w http.ResponseWriter, r *http.Request) {
-		if s.workers == nil {
-			writeJSON(w, http.StatusOK, []worker.WorkerStatus{})
-			return
-		}
-		writeJSON(w, http.StatusOK, s.workers.WorkerStatuses(r.Context()))
-	})
-
-	handleRun := func(w http.ResponseWriter, r *http.Request) {
-		coll, ok := s.collectionScope(r)
-		if !ok {
-			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
-			return
-		}
-		var req struct {
-			Target   string `json:"target"`
-			Playbook string `json:"playbook"`
-			Check    bool   `json:"check"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		if coll != "" {
-			// On a collection-scoped route the URL wins; a body target is
-			// only accepted when it agrees with the URL.
-			if req.Target != "" && req.Target != coll {
-				writeError(w, http.StatusBadRequest, errors.New("target does not match the collection in the URL"))
-				return
-			}
-			req.Target = coll
-		}
-		if req.Target == "" {
-			writeError(w, http.StatusBadRequest, errors.New("target is required"))
-			return
-		}
-		// Unknown targets are reported as 404 by the playbook check below;
-		// only known collections are subject to membership checks.
-		if org, known := s.collectionTarget(req.Target); known && !s.mayUse(r.Context(), r, org, req.Target) {
-			writeError(w, http.StatusForbidden, errors.New("access to this collection is denied"))
-			return
-		}
-		if req.Playbook == "" {
-			writeError(w, http.StatusBadRequest, errors.New("playbook is required"))
-			return
-		}
-		if !s.applier.KnownPlaybook(req.Target, req.Playbook) {
-			writeError(w, http.StatusNotFound, fmt.Errorf("unknown playbook %q for target %q", req.Playbook, req.Target))
-			return
-		}
-		// req.Playbook is the job name from strangle.yml, not a file path.
-		// Reserve a run record now so the run has an ID before it finishes
-		// and can be canceled while in flight.
-		record := db.RunRecord{
-			Target:   req.Target,
-			Playbook: req.Playbook,
-			State:    db.RunStateQueued,
-			Check:    req.Check,
-		}
-		if s.store != nil {
-			if err := s.store.CreateRun(r.Context(), &record); err != nil {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
-		}
-		jobID, err := s.run.EnqueueRun(r.Context(), req.Target, req.Playbook, record.ID, req.Check)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		record.JobID = jobID
-		if s.store != nil && record.ID != 0 {
-			if err := s.store.UpdateRun(r.Context(), record); err != nil {
-				s.logger.Warn("failed to store job ID for run", zap.Uint64("run", record.ID), zap.Error(err))
-			}
-		}
-		writeJSON(w, http.StatusAccepted, map[string]any{
-			"status":   "queued",
-			"target":   req.Target,
-			"playbook": req.Playbook,
-			"run_id":   record.ID,
-			"check":    req.Check,
-		})
-	}
-	apiHandler(routes, "POST", apiPrefix+"/run", handleRun)
-	routes.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/run", s.withCollectionAccess(handleRun))
-
-	// Cancel a queued or running playbook run. Only the versioned,
-	// collection-scoped route exists: a run belongs to one collection and
-	// cancelling it through a sibling collection would bypass the membership
-	// check.
-	handleCancelRun := s.withCollectionAccess(func(w http.ResponseWriter, r *http.Request) {
-		coll, ok := s.collectionScope(r)
-		if !ok {
-			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
-			return
-		}
-		id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
-		if err != nil || id == 0 {
-			writeError(w, http.StatusBadRequest, errors.New("invalid run ID"))
-			return
-		}
-		if s.store == nil {
-			writeError(w, http.StatusNotFound, errors.New("run store unavailable"))
-			return
-		}
-		record, err := s.store.Run(r.Context(), id)
-		if err != nil {
-			if errors.Is(err, db.ErrNotFound) {
-				writeError(w, http.StatusNotFound, err)
-			} else {
-				writeError(w, http.StatusInternalServerError, err)
-			}
-			return
-		}
-		if record.Target != coll || !targetVisible(s.accessibleTargets(r.Context(), r), record.Target) {
-			writeError(w, http.StatusNotFound, db.ErrNotFound)
-			return
-		}
-		if record.State != db.RunStateQueued && record.State != db.RunStateRunning {
-			writeError(w, http.StatusConflict, errors.New("run is not active"))
-			return
-		}
-		canceler, ok := s.run.(RunCanceler)
-		if !ok {
-			writeError(w, http.StatusNotImplemented, errors.New("run cancellation is not available"))
-			return
-		}
-		if record.JobID == "" {
-			writeError(w, http.StatusConflict, errors.New("run has no queue job"))
-			return
-		}
-		if err := canceler.CancelRun(r.Context(), record.JobID); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		record.State = db.RunStateCancelled
-		record.Canceled = true
-		if err := s.store.UpdateRun(context.WithoutCancel(r.Context()), record); err != nil {
-			s.logger.Warn("failed to record run cancellation", zap.Uint64("run", id), zap.Error(err))
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"id": id, "state": db.RunStateCancelled})
-	})
-	routes.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/runs/{id}/cancel", handleCancelRun)
-
-	// /api/v1/sync is the webhook for git-backed collections: it moves the
-	// target's checkout to its tracked ref (or to the given branch, which
-	// becomes the new tracked ref) and reloads its strangle.yml. A valid UI
-	// session is always accepted; when auth.token is set in server.yml, a
-	// matching bearer token is also accepted (machine-to-machine webhooks).
-	handleSync := func(w http.ResponseWriter, r *http.Request) {
-		if s.syncer == nil {
-			writeError(w, http.StatusNotFound, errors.New("no git-backed collection is configured"))
-			return
-		}
-		if !s.syncAllowed(r) {
-			writeError(w, http.StatusUnauthorized, errors.New("missing or invalid session or bearer token"))
-			return
-		}
-		coll, ok := s.collectionScope(r)
-		if !ok {
-			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
-			return
-		}
-		var req struct {
-			Target string `json:"target"`
-			Branch string `json:"branch"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		if coll != "" {
-			if req.Target != "" && req.Target != coll {
-				writeError(w, http.StatusBadRequest, errors.New("target does not match the collection in the URL"))
-				return
-			}
-			req.Target = coll
-		}
-		if req.Target == "" {
-			writeError(w, http.StatusBadRequest, errors.New("target is required"))
-			return
-		}
-		// An unknown target is diagnosed by the syncer itself; membership
-		// checks only apply to collections known to the configuration.
-		if org, known := s.collectionTarget(req.Target); known && !s.mayUse(r.Context(), r, org, req.Target) {
-			writeError(w, http.StatusForbidden, errors.New("access to this collection is denied"))
-			return
-		}
-		rev, changed, err := s.syncer.Sync(r.Context(), req.Target, req.Branch)
-		if err != nil {
-			switch {
-			case errors.Is(err, collection.ErrUnknownTarget):
-				writeError(w, http.StatusNotFound, err)
-			case errors.Is(err, collection.ErrNotGit):
-				writeError(w, http.StatusBadRequest, err)
-			default:
-				// A git failure (network, auth, broken strangle.yml).
-				writeError(w, http.StatusBadGateway, err)
-			}
-			return
-		}
-		// The sync may have changed the target's playbooks (a branch
-		// switch, a new strangle.yml); refresh the applier's view.
-		s.applier.UpdateTargets(s.syncer.Targets())
-		writeJSON(w, http.StatusOK, map[string]any{
-			"target":  req.Target,
-			"rev":     rev,
-			"changed": changed,
-		})
-	}
-	apiHandler(routes, "POST", apiPrefix+"/sync", handleSync)
-	routes.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/sync", s.withCollectionAccess(handleSync))
-
-	// SSH host keys and pool counters are collection-scoped resources: every
-	// endpoint below lives under /api/v1/orgs/{org}/collections/{collection},
-	// passes the membership check and validates the org/collection pair. An
-	// SSH scope is "<target>/<playbook name>", so its first component must be
-	// the collection in the URL.
-	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hostkeys", s.withCollectionAccess(func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := s.requireCollection(w, r); !ok {
-			return
-		}
-		coll := r.PathValue("collection")
-		keys := []sshpool.HostKey{}
-		if s.ssh != nil {
-			for _, key := range s.ssh.PendingHostKeys() {
-				if sshScopeCollection(key.Target) == coll {
-					keys = append(keys, key)
-				}
-			}
-		}
-		writeJSON(w, http.StatusOK, keys)
-	}))
-
-	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/ssh/stats", s.withCollectionAccess(func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := s.requireCollection(w, r); !ok {
-			return
-		}
-		coll := r.PathValue("collection")
-		stats := map[string]sshpool.Stats{}
-		if s.ssh != nil {
-			for scope, st := range s.ssh.Stats() {
-				if sshScopeCollection(scope) == coll {
-					stats[scope] = st
-				}
-			}
-		}
-		writeJSON(w, http.StatusOK, stats)
-	}))
-
-	decideHostKey := func(w http.ResponseWriter, kind, scope, host, fingerprint string) {
-		if s.ssh == nil {
-			writeError(w, http.StatusBadRequest, errors.New("SSH host key approval is not enabled"))
-			return
-		}
-		var err error
-		if kind == "accept" {
-			err = s.ssh.ApproveHostKey(scope, host, fingerprint)
-		} else {
-			err = s.ssh.RejectHostKey(scope, host)
-		}
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]string{"status": kind + "ed", "host": host})
-	}
-
-	registerScopedDecision := func(kind string) http.HandlerFunc {
-		return s.withCollectionAccess(func(w http.ResponseWriter, r *http.Request) {
-			if _, ok := s.requireCollection(w, r); !ok {
-				return
-			}
-			var req struct {
-				Target      string `json:"target"`
-				Host        string `json:"host"`
-				Fingerprint string `json:"fingerprint"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				writeError(w, http.StatusBadRequest, err)
-				return
-			}
-			coll := r.PathValue("collection")
-			if sshScopeCollection(req.Target) != coll {
-				writeError(w, http.StatusBadRequest, fmt.Errorf("SSH scope %q does not belong to collection %q", req.Target, coll))
-				return
-			}
-			decideHostKey(w, kind, req.Target, req.Host, req.Fingerprint)
-		})
-	}
-	routes.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/hostkeys/accept", registerScopedDecision("accept"))
-	routes.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/hostkeys/reject", registerScopedDecision("reject"))
-
-	// The UI owns every path not claimed by an API route. Echo's Any wildcard
-	// also preserves the old fallback behaviour for unregistered POST/PUT/... API
-	// paths: they fall through to index.html rather than returning a bare 405.
+	// The UI owns every path not claimed by an API route.
 	e.Any("/*", echo.WrapHandler(spaHandler(uiFS)))
-
-	// Authentication is enforced by Echo middleware (authMiddleware) above.
 	return e
 }
 
@@ -958,8 +216,6 @@ func (s *Server) buildRoutes() *echo.Echo {
 // embedded Swagger UI. Both are public: the spec describes the routes but
 // exposes no collection data itself.
 func (s *Server) registerDocsRoutes(e *echo.Echo) {
-	// The spec itself lives under the versioned prefix; only the human-facing
-	// Swagger UI uses the conventional /api/docs path from the feature list.
 	e.GET(apiPrefix+"/openapi.json", func(c *echo.Context) error {
 		doc, err := swag.ReadDoc()
 		if err != nil {
@@ -1003,12 +259,6 @@ func (s *Server) initAuth() {
 		s.authOn = true
 		s.logger.Info("UI authentication enabled", zap.Int("users", n))
 	}
-}
-
-// meResponse is the body of /api/me.
-type meResponse struct {
-	Authenticated bool   `json:"authenticated"`
-	Username      string `json:"username,omitempty"`
 }
 
 // tlsFiles validates the TLS option. Requiring both paths avoids silently
@@ -1068,20 +318,8 @@ func spaHandler(fsys fs.FS) http.Handler {
 	})
 }
 
-func intQuery(r *http.Request, name string, def int) int {
-	v := r.URL.Query().Get(name)
-	if v == "" {
-		return def
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil || n <= 0 {
-		return def
-	}
-	return n
-}
-
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", jsonMedia)
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }

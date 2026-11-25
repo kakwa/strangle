@@ -1,70 +1,43 @@
-// Playbooks view: per-target cards, playbook metadata, manual run lifecycle
-// (pending state resolves once the run is persisted and the next poll picks
-// it up).
+// Playbooks view: metadata comes from the selected collection's playbooks
+// endpoint. Manual run controls were removed with the run endpoints.
 describe('Playbooks', () => {
   beforeEach(() => {
     cy.login()
-    cy.visit('/playbooks')
-    cy.contains('h4', 'alpha').should('be.visible')
-    cy.contains('h4', 'beta').should('be.visible')
+    cy.visit('/playbooks?org=default&collection=alpha')
+    cy.contains('h4', 'Playbooks').should('be.visible')
   })
 
-  // Manual runs mutate the shared mock; restore the plain fixtures so later
-  // specs see the original run IDs and ordering.
-  afterEach(() => {
-    cy.request('POST', '/api/_mock/reset-runs-base')
-  })
+  const selectOrg = (name) =>
+    cy.contains('label', 'Organization').parent().find('select').select(name)
+  const selectCollection = (name) =>
+    cy.contains('label', 'Collection').parent().find('select').select(name)
 
   it('lists playbooks with path, inventory and status', () => {
-    // web: name, monospace path, inventory.
     cy.contains('td', 'web')
       .closest('tr')
       .should('contain.text', 'playbooks/web.yml')
       .and('contain.text', 'inventory/hosts')
 
-    // databases: last status failed.
-    cy.contains('td', 'databases')
+    cy.contains('td', 'common')
       .closest('tr')
-      .should('contain.text', 'failed')
-
-    // bootstrap: never run.
-    cy.contains('td', 'bootstrap')
-      .closest('tr')
-      .should('contain.text', 'never run')
+      .should('contain.text', 'playbooks/common.yml')
+      .and('contain.text', 'inventory/hosts')
   })
 
-  it('mirrors the playbook tree in the sidebar', () => {
-    cy.get('nav').should('contain.text', 'alpha')
-    cy.get('nav').should('contain.text', 'bootstrap')
-    cy.get('nav').should('contain.text', 'web')
+  it('shows successful and failed statuses from the collection', () => {
+    cy.contains('td', 'web').closest('tr').should('contain.text', 'ok')
+    cy.contains('td', 'common').closest('tr').should('contain.text', 'ok')
+    cy.contains('button', 'Run').should('not.exist')
+    cy.contains('button', 'Check').should('not.exist')
   })
 
-  it('runs a playbook and resolves the pending state on the next poll', () => {
-    const row = () => cy.contains('td', 'bootstrap').closest('tr')
-    row().contains('button', 'Run').click()
+  it('switches to another collection and mirrors its playbooks in the sidebar', () => {
+    selectOrg('lab')
+    selectCollection('beta')
 
-    // The button immediately switches to its pending state.
-    row().find('button').should('contain.text', 'Running…')
-
-    // The mock persists the run at once; the UI resolves the pending state
-    // on its next 10s poll.
-    row().find('button').should(($btn) => {
-      expect($btn.text()).to.not.contain('Running')
-    }, { timeout: 20000 })
-
-    // The new run shows up in the dashboard recent-runs table (4 → 5 rows).
-    cy.visit('/')
-    cy.get('table').first().find('tbody tr').should('have.length', 5)
-  })
-
-  it('starts a check-mode run from the playbooks view', () => {
-    const row = () => cy.contains('td', 'bootstrap').closest('tr')
-    row().contains('button', 'Check').click()
-    row().should('contain.text', 'Checking…')
-
-    // The mock echoes the check flag on the created run.
-    cy.visit('/runs/5')
-    cy.contains('Run #5').should('be.visible')
-    cy.contains('check').should('be.visible')
+    cy.contains('td', 'databases').closest('tr').should('contain.text', 'failed')
+    cy.contains('td', 'bootstrap').closest('tr').should('contain.text', 'never run')
+    cy.get('nav').should('contain.text', 'databases').and('contain.text', 'bootstrap')
+    cy.get('nav').should('not.contain.text', 'web')
   })
 })

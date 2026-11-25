@@ -114,26 +114,26 @@ CA key takes effect on the next worker build.
 
 | Policy | Behavior |
 |--------|----------|
-| `api` (default) | Unknown keys are stored as *pending* and the connection is refused until approved via the API. A changed key for a known host is refused and queued with status `rejected`. Both are resolved through the approval API. |
+| `api` (default) | Unknown keys are stored as *pending* and the connection is refused until approved through the playbook/host API. A changed key for a known host is refused and queued with status `rejected`. Both are resolved through the approval endpoints below. |
 | `known_hosts` | Strict verification against `known_hosts_file` (OpenSSH format). |
 | `ca` | Trust host certificates signed by a CA public key listed in `ca_files` (authorized_keys format). |
 | `auto` | Trust the first key seen per host; reject later changes. Accepted keys persist in `auto_accept_file`. |
 | `insecure` | Accept any key. Development only. |
 
 Fingerprints use the `SHA256:` format (OpenSSH `ssh-keygen -lf` style).
-Approval is per collection: the endpoints below live under
-`/api/v1/orgs/{org}/collections/{collection}` and are checked against the
-caller's collection membership. The SSH scope in the JSON body
-(`<target>/<playbook name>`) must belong to the collection in the URL.
+Approval is scoped to one collection, one playbook (job name from
+`strangle.yml`) and one host: every path carries
+`/api/v1/orgs/{org}/collections/{collection}/playbooks/{playbook}/hosts/{host}`
+and is checked against the caller's collection membership.
 
 ### The approval workflow (`api` policy)
 
 1. The first run of a playbook reaches a host with an unknown key: the task
    fails with a "pending approval" error and the key is stored as pending.
-2. List the pending keys:
+2. List the pending keys of that playbook and host:
 
    ```sh
-   curl localhost:8080/api/v1/orgs/default/collections/site/hostkeys
+   curl localhost:8080/api/v1/orgs/default/collections/site/playbooks/prod/hosts/10.0.0.9/hostkeys
    ```
 
    ```json
@@ -143,15 +143,22 @@ caller's collection membership. The SSH scope in the JSON body
    ]
    ```
 
-3. Approve the fingerprint (or reject it):
+3. Approve the fingerprint with a JSON Patch request (or set `/status` to
+   `"rejected"` instead):
 
    ```sh
-   curl -X POST localhost:8080/api/v1/orgs/default/collections/site/hostkeys/accept \
-     -d '{"target": "site/prod", "host": "10.0.0.9", "fingerprint": "SHA256:..."}'
+   curl -X PATCH \
+     localhost:8080/api/v1/orgs/default/collections/site/playbooks/prod/hosts/10.0.0.9 \
+     -H "Content-Type: application/json" \
+     -d '[{"op":"replace","path":"/status","value":"approved"},
+          {"op":"replace","path":"/fingerprint","value":"SHA256:..."}]'
    ```
 
-4. Re-run the playbook; the connection now succeeds and the key is trusted
-   for future runs.
+   The response is `{"status": "approved", "host": "10.0.0.9"}`. A pending
+   key is required (`404` otherwise) and a mismatched fingerprint is `409`.
+
+4. The next scheduled run connects successfully and the key is trusted for
+   future runs.
 
 A key change for an approved host is refused the same way: the old key stays
 approved, and the new key is queued with status `rejected`. It can be
@@ -174,8 +181,8 @@ files between jobs.
 
 ## Observability
 
-`GET /api/v1/orgs/{org}/collections/{collection}/ssh/stats` reports
-`active_connections` and `total_dials` per scope of that collection (of the
-master's managers; the playbook connections themselves are pooled inside the
-workers). When connections are being reused, a host that is reached on every
-run contributes dials only the first time.
+Per-scope SSH connection counters (`active_connections`, `total_dials`) are
+internal; there is no HTTP endpoint for them. The public `/metrics` endpoint
+exports worker state only, and the web UI's Monitor tab reads it. When
+connections are reused, a host reached on every run contributes dials only
+the first time.

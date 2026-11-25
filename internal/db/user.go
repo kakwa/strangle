@@ -31,7 +31,7 @@ type UserStore struct {
 
 // Users returns the auth.UserStore backed by this database.
 func (d *DB) Users() *UserStore {
-	return &UserStore{db: d.db}
+	return &UserStore{db: d.gdb}
 }
 
 func (u *UserStore) CreateUser(ctx context.Context, name, hash string) error {

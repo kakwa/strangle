@@ -21,15 +21,16 @@ database:
 # so more workers allow more concurrent runs. Defaults to 1.
 workers: 2
 
-# Webhook token for the git-collection sync endpoint. When set, POST /api/sync
-# (without a UI session) requires the token: `Authorization: Bearer <token>`
-# or the `X-Strangle-Token` header.
+# Webhook token for the git-collection hook endpoint. When set, the collection
+# hook (POST /api/v1/orgs/{org}/collections/{collection}/hook) without a UI
+# session requires the token: `Authorization: Bearer <token>` or the
+# `X-Strangle-Token` header.
 #
 # UI authentication is a separate mechanism with no flag: it is on as soon as
 # at least one local account exists. Accounts live in the database above:
 #   strangle-cli user add <name> --password-stdin
 # auth:
-#   token: change-me       # webhook token, only accepted by POST /api/sync
+#   token: change-me       # webhook token, only accepted by collection hooks
 #   cli_token: st_...      # user API token used by the CLI subcommands
 
 # Landlock sandboxing between collections. When enabled, each collection gets

@@ -19,7 +19,7 @@ import (
 
 // DB is a Store backed by PostgreSQL.
 type DB struct {
-	db *gorm.DB
+	gdb *gorm.DB
 }
 
 // Open connects to the PostgreSQL database described by dsn and migrates the
@@ -55,10 +55,11 @@ func Open(ctx context.Context, dsn string) (*DB, error) {
 	}
 
 	// AutoMigrate never drops indexes. Replace the old per-target host index
-	// with the context key (collection, hostname, playbook, inventory).
-	for _, idx := range []string{"idx_hosts_name", "idx_host_target_name"} {
+	// with the context key (collection, hostname, playbook, inventory), and the
+	// old unscoped token index with one that includes the token's scope.
+	for _, idx := range []string{"idx_hosts_name", "idx_host_target_name", "idx_api_tokens_owner_name"} {
 		if err := gdb.WithContext(ctx).Exec("DROP INDEX IF EXISTS " + idx).Error; err != nil {
-			return nil, fmt.Errorf("drop legacy hosts index: %w", err)
+			return nil, fmt.Errorf("drop legacy index %s: %w", idx, err)
 		}
 	}
 
@@ -68,7 +69,7 @@ func Open(ctx context.Context, dsn string) (*DB, error) {
 		FirstOrCreate(&Org{}, Org{Name: cfg.DefaultOrg}).Error; err != nil {
 		return nil, fmt.Errorf("initialize default org: %w", err)
 	}
-	return &DB{db: gdb}, nil
+	return &DB{gdb: gdb}, nil
 }
 
 // runIDCounter allocates run IDs before the database assigns them. Runs are
@@ -93,7 +94,7 @@ func (d *DB) CreateRun(ctx context.Context, in *RunRecord) error {
 		run.State = RunStateQueued
 		in.State = run.State
 	}
-	if err := d.db.WithContext(ctx).Create(&run).Error; err != nil {
+	if err := d.gdb.WithContext(ctx).Create(&run).Error; err != nil {
 		return fmt.Errorf("insert run: %w", err)
 	}
 	*in = fromRunModel(run)
@@ -102,7 +103,7 @@ func (d *DB) CreateRun(ctx context.Context, in *RunRecord) error {
 
 func (d *DB) UpdateRun(ctx context.Context, in RunRecord) error {
 	run := toRunModel(in)
-	res := d.db.WithContext(ctx).Model(&Run{}).Where("id = ?", in.ID).Updates(map[string]any{
+	res := d.gdb.WithContext(ctx).Model(&Run{}).Where("id = ?", in.ID).Updates(map[string]any{
 		"target": run.Target, "playbook": run.Playbook, "started_at": run.StartedAt,
 		"finished_at": run.FinishedAt, "duration_ms": run.DurationMS, "exit_code": run.ExitCode,
 		"success": run.Success, "hosts": run.Hosts, "changed_hosts": run.ChangedHosts,
@@ -125,7 +126,7 @@ func (d *DB) SaveRun(ctx context.Context, in RunInput) error {
 	if in.Run.ID == 0 {
 		in.Run.ID = runIDCounter.Add(1)
 	}
-	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return d.gdb.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		run := toRunModel(in.Run)
 		if in.Run.ID != 0 {
 			var existing Run
@@ -391,7 +392,7 @@ func (d *DB) SaveRun(ctx context.Context, in RunInput) error {
 
 func (d *DB) ListRuns(ctx context.Context, limit int) ([]RunRecord, error) {
 	var runs []Run
-	q := d.db.WithContext(ctx).Order("id DESC")
+	q := d.gdb.WithContext(ctx).Order("id DESC")
 	if limit > 0 {
 		q = q.Limit(limit)
 	}
@@ -407,7 +408,7 @@ func (d *DB) ListRuns(ctx context.Context, limit int) ([]RunRecord, error) {
 
 func (d *DB) Run(ctx context.Context, id uint64) (RunRecord, error) {
 	var run Run
-	if err := d.db.WithContext(ctx).First(&run, id).Error; err != nil {
+	if err := d.gdb.WithContext(ctx).First(&run, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return RunRecord{}, fmt.Errorf("run %d: %w", id, ErrNotFound)
 		}
@@ -426,7 +427,7 @@ func (d *DB) ListHosts(ctx context.Context) ([]HostRecord, error) {
 	var hosts []hostRow
 	// The same hostname can have one row per playbook/inventory context; the
 	// host view only shows its latest appearance per collection.
-	if err := d.db.WithContext(ctx).
+	if err := d.gdb.WithContext(ctx).
 		Raw(`SELECT DISTINCT ON (c.name, h.name) h.*, c.name AS target
 			FROM hosts h JOIN collections c ON c.id = h.collection_id
 			ORDER BY c.name, h.name, h.last_run_at DESC, h.id DESC`).
@@ -452,7 +453,7 @@ func (d *DB) HostRuns(ctx context.Context, host string, limit int) ([]HostRunRec
 		Success    bool      `gorm:"column:success"`
 	}
 	var rows []row
-	q := d.db.WithContext(ctx).Model(&HostRun{}).
+	q := d.gdb.WithContext(ctx).Model(&HostRun{}).
 		Joins("JOIN hosts h ON h.id = host_runs.host_id").
 		Joins("JOIN collections c ON c.id = h.collection_id").
 		Joins("JOIN runs r ON r.id = host_runs.run_id").
@@ -496,7 +497,7 @@ func (d *DB) HostChanges(ctx context.Context, host string, limit int) ([]TaskSta
 		HostTarget string `gorm:"column:hosttarget"`
 	}
 	var rows []row
-	if err := d.db.WithContext(ctx).Model(&TaskState{}).
+	if err := d.gdb.WithContext(ctx).Model(&TaskState{}).
 		Joins("JOIN hosts h ON h.id = task_states.host_id").
 		Joins("JOIN collections c ON c.id = h.collection_id").
 		Select("task_states.*, h.name AS hostname, c.name AS hosttarget").
@@ -552,7 +553,7 @@ func (d *DB) HostChanges(ctx context.Context, host string, limit int) ([]TaskSta
 
 func (d *DB) RunTasks(ctx context.Context, runID uint64) ([]TaskRunRecord, error) {
 	var run Run
-	if err := d.db.WithContext(ctx).Select("id").First(&run, runID).Error; err != nil {
+	if err := d.gdb.WithContext(ctx).Select("id").First(&run, runID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, fmt.Errorf("run %d: %w", runID, ErrNotFound)
 		}
@@ -565,7 +566,7 @@ func (d *DB) RunTasks(ctx context.Context, runID uint64) ([]TaskRunRecord, error
 		HostTarget string `gorm:"column:hosttarget"`
 	}
 	var rows []row
-	if err := d.db.WithContext(ctx).Model(&TaskRunResult{}).
+	if err := d.gdb.WithContext(ctx).Model(&TaskRunResult{}).
 		Joins("JOIN hosts h ON h.id = task_run_results.host_id").
 		Joins("JOIN collections c ON c.id = h.collection_id").
 		Select("task_run_results.*, h.name AS hostname, c.name AS hosttarget").
@@ -607,7 +608,7 @@ func (d *DB) PruneRuns(ctx context.Context, target string, policy RetentionPolic
 		FinishedAt time.Time
 	}
 	var rows []candidate
-	if err := d.db.WithContext(ctx).Model(&Run{}).
+	if err := d.gdb.WithContext(ctx).Model(&Run{}).
 		Select("id", "started_at", "finished_at").
 		Where("target = ?", target).
 		Where("state NOT IN ?", []string{RunStateQueued, RunStateRunning}).
@@ -641,7 +642,7 @@ func (d *DB) PruneRuns(ctx context.Context, target string, policy RetentionPolic
 		return out, nil
 	}
 
-	tx := d.db.WithContext(ctx).Begin()
+	tx := d.gdb.WithContext(ctx).Begin()
 	if tx.Error != nil {
 		return out, fmt.Errorf("begin retention transaction: %w", tx.Error)
 	}
@@ -689,7 +690,7 @@ func (d *DB) PruneHosts(ctx context.Context, target string, delay time.Duration)
 		LastSeenAt  time.Time
 	}
 	var rows []candidate
-	if err := d.db.WithContext(ctx).Model(&Host{}).
+	if err := d.gdb.WithContext(ctx).Model(&Host{}).
 		Select("id", "first_seen_at", "last_seen_at").
 		Where("collection_id IN (SELECT id FROM collections WHERE name = ?)", target).
 		Where("in_inventory = ?", false).
@@ -712,7 +713,7 @@ func (d *DB) PruneHosts(ctx context.Context, target string, delay time.Duration)
 		return 0, nil
 	}
 
-	tx := d.db.WithContext(ctx).Begin()
+	tx := d.gdb.WithContext(ctx).Begin()
 	if tx.Error != nil {
 		return 0, fmt.Errorf("begin host cleanup transaction: %w", tx.Error)
 	}
@@ -741,89 +742,8 @@ func (d *DB) PruneHosts(ctx context.Context, target string, delay time.Duration)
 	return res.RowsAffected, nil
 }
 
-func (d *DB) Stats(ctx context.Context) (*Stats, error) {
-	st := &Stats{PerPlaybook: []PlaybookStats{}}
-
-	{
-		// A hostname may have one row per playbook/inventory context, but the
-		// dashboard counts each (target, hostname) once.
-		row := struct {
-			Total  int64
-			InInv  int64
-			Active int64
-			Gone   int64
-		}{}
-		err := d.db.WithContext(ctx).Model(&Host{}).
-			Joins("JOIN collections c ON c.id = hosts.collection_id").
-			Select(`COUNT(DISTINCT (c.name, hosts.name)) AS total,
-				COUNT(DISTINCT (c.name, hosts.name)) FILTER (WHERE hosts.in_inventory) AS in_inv,
-				COUNT(DISTINCT (c.name, hosts.name)) FILTER (WHERE hosts.active) AS active,
-				COUNT(DISTINCT (c.name, hosts.name)) FILTER (WHERE hosts.in_inventory AND NOT hosts.active) AS gone`).
-			Scan(&row).Error
-		if err != nil {
-			return nil, err
-		}
-		st.Hosts = HostsStats{
-			Total:       int(row.Total),
-			InInventory: int(row.InInv),
-			Active:      int(row.Active),
-			Disappeared: int(row.Gone),
-		}
-	}
-
-	{
-		row := struct {
-			Total     int64
-			Succeeded int64
-			Failed    int64
-			AvgDur    *float64
-			Last      *time.Time
-		}{}
-		if err := d.db.WithContext(ctx).Model(&Run{}).
-			Select("COUNT(*) AS total, " +
-				"COUNT(*) FILTER (WHERE success) AS succeeded, " +
-				"COUNT(*) FILTER (WHERE NOT success) AS failed, " +
-				"AVG(duration_ms) AS avg_dur, " +
-				"MAX(finished_at) AS last").
-			Scan(&row).Error; err != nil {
-			return nil, err
-		}
-		st.Runs = RunsStats{
-			Total:     int(row.Total),
-			Succeeded: int(row.Succeeded),
-			Failed:    int(row.Failed),
-		}
-		if row.AvgDur != nil {
-			st.Runs.AvgDurationMS = int64(*row.AvgDur)
-		}
-		if row.Last != nil {
-			st.Runs.LastRunAt = *row.Last
-		}
-	}
-
-	{
-		// GORM leaves the slice nil when there are no rows; keep it non-nil
-		// so the API serializes an empty array instead of null (the UI
-		// expects an array here).
-		pbs := make([]PlaybookStats, 0)
-		err := d.db.WithContext(ctx).Model(&Run{}).
-			Select("target, playbook, COUNT(*) AS total, " +
-				"COUNT(*) FILTER (WHERE NOT success) AS failed, " +
-				"MAX(finished_at) AS last_run_at").
-			Group("target, playbook").
-			Order("target, playbook").
-			Scan(&pbs).Error
-		if err != nil {
-			return nil, err
-		}
-		st.PerPlaybook = pbs
-	}
-
-	return st, nil
-}
-
 func (d *DB) Close() error {
-	sqlDB, err := d.db.DB()
+	sqlDB, err := d.gdb.DB()
 	if err != nil {
 		return err
 	}

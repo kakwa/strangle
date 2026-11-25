@@ -27,8 +27,8 @@ STRANGLE_VALIDATE_NEIGHBOR=/path/to/home/secrets.txt \
   strangle-server serve -s config/server.yml -c config/collection.yml
 ```
 
-Run the `isolation` playbook of `sandbox-validate` (from the UI, the API or
-`POST /api/run`). It asserts that:
+Wait for the scheduler to run the `isolation` playbook of `sandbox-validate`
+(there is no HTTP endpoint to trigger a run). It asserts that:
 
 - the validating collection can read its own `secret.txt`;
 - `STRANGLE_VALIDATE_NEIGHBOR` is not readable;

@@ -28,7 +28,7 @@ type CollectionAccess struct {
 
 // Access returns the collection membership store backed by this database.
 func (d *DB) Access() *CollectionAccess {
-	return &CollectionAccess{db: d.db}
+	return &CollectionAccess{db: d.gdb}
 }
 
 func (a *CollectionAccess) Add(ctx context.Context, username, org, collection string) error {

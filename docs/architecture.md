@@ -12,7 +12,7 @@ strangle-server serve (master)
   ├── collection.Manager: git-backed targets (clone/pin/sync/reload)
   ├── worker.Manager: spawns and supervises the worker pool
   ├── scheduler + River client: enqueues playbook runs
-  └── HTTP server: /api/*, /metrics and the embedded web UI
+  └── HTTP server: /api/v1, /metrics and the embedded web UI
 
 strangle-server worker --socket /tmp/.../worker-N.sock   (× N, N = workers)
   ├── one embedded CPython interpreter + Ansible (go.nhat.io/cpy/v3)
@@ -62,17 +62,21 @@ The `worker.Manager` keeps the pool alive:
   fail until the master is restarted. Failures are forgiven if a worker
   stays up for 5 minutes.
 
-`GET /api/workers` reports each slot: `id`, `pid`, `socket`, `alive`,
-`jobs` (in-flight) and `restarts`.
+Worker state is observable through the public Prometheus `/metrics` endpoint
+and the web UI's Monitor tab: `strangle_workers{state=total|alive|dead}`,
+`strangle_worker_jobs{worker,collection}` and
+`strangle_worker_restarts_total{worker,collection}`. There is no worker API
+route.
 
 Dispatch is round-robin over the live slots (dead or respawning slots are
 skipped). A dispatch to a busy slot is fine: runs on one worker are
 serialized inside that worker, so extra jobs queue behind the in-flight one.
 
-`GET /metrics` is rendered on demand by the HTTP server from the same store
-and worker status used by the API, plus a few Go runtime gauges. It needs no
-configuration and is intentionally open like `/api/health`; see the
-[API reference](api.md#get-metrics) for the exported series.
+`GET /metrics` is rendered on demand by the HTTP server from the worker
+manager's current status, plus build information and a few Go runtime gauges.
+It needs no configuration and is intentionally open like `/api/v1/health`;
+see the [API reference](api.md#get-metrics) for the exported series. There
+are no aggregate run/host stats in the API or the store.
 
 ## Job flow
 
@@ -83,8 +87,8 @@ queue (`internal/riverqueue`):
   pair. A job's `schedule` is a robfig/cron v3 expression (or descriptor), or
   it inherits the server fallback; it waits for its first tick after the
   master starts. The live job list is reconciled every ten seconds, so a git
-  sync can change schedules without a restart. `POST /api/run` enqueues a
-  single job the same way.
+  hook can change schedules without a restart. Runs are only enqueued by the
+  scheduler; there is no HTTP route to start one.
 - A River client in the master process consumes the `playbooks` queue with
   `MaxWorkers` = `workers`, so at most as many runs execute concurrently as
   there are worker processes.
@@ -116,10 +120,11 @@ lines, append-only per-task results, per-task latest state and hosts. There is
 no in-memory fallback; `internal/db` also defines the interface and shared
 value types.
 
-Every task result parsed from a run is appended to task history, so the run
-detail can show all of its statuses, diffs and errors. The separate
-`task_states` table keeps only the latest state per host/task and powers the
-host page; history starts at the upgrade that introduced it.
+Every task result parsed from a run is appended to task history, keeping every
+status, diff and error available per run. The separate `task_states` table
+keeps only the latest state per host/task; history starts at the upgrade that
+introduced it. Neither table is exposed through an HTTP endpoint; the
+dashboard and host pages use the collection, host and playbook listings.
 
 Hosts are keyed by `target + name`, so the same host name in two targets is
 two distinct hosts. The web UI merges same-named hosts across targets when
@@ -154,9 +159,9 @@ host endpoints and rendered in the host detail view.
 `internal/collection` keeps the checkouts of git-backed targets, pinned to
 their tracked ref. All git operations are in-process (go-git, see
 `internal/git`); no system `git` binary is invoked. Startup clones (or fetches
-and updates) the checkouts; `POST /api/sync` moves a checkout to its tracked
-ref — or to a supplied branch, which becomes the new tracked ref — and
-reloads the target's `strangle.yml`. See
+and updates) the checkouts; the collection `hook` endpoint moves a checkout to
+its tracked ref — or to a supplied branch, which becomes the new tracked ref —
+and reloads the target's `strangle.yml`. See
 [git-backed collections](git-collections.md).
 
 ## The SSH transport

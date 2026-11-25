@@ -10,9 +10,10 @@ processes** through an embedded CPython interpreter (via
 
 Every run is recorded: run metadata, a per-host recap (ok / changed / failed /
 unreachable) and every per-host × per-task result with its status, diff and
-error. A separate latest-state view keeps the familiar host task traces.
-Fleet statistics — host count, hosts that disappeared from the recap, run
-duration, change/failed counts — are derived from the stored history.
+error. A separate latest-state table keeps the last status per host/task
+internally, but it is not exposed through the API. The dashboard shows simple
+counts computed from the org/collection, host and playbook listings; there is
+no aggregate stats endpoint.
 
 ## How it works
 
@@ -21,8 +22,9 @@ and the schedule. It spawns a pool of worker child processes
 (`strangle-server worker`), each owning one embedded Ansible interpreter, and
 dispatches playbook runs to them over unix sockets using a small JSON-RPC
 protocol in `internal/worker` (no code generation).
-A master supervises the workers: health pings, automatic restarts with
-backoff, and `GET /api/workers` for observability.
+A master supervises the workers: health pings and automatic restarts with
+backoff. Worker state is observable through the public Prometheus `/metrics`
+endpoint and the web UI's Monitor tab.
 
 Each (target, playbook) job has its own robfig/cron v3 schedule (or inherits
 the server fallback), and the scheduler enqueues it when due. PostgreSQL is
@@ -33,9 +35,9 @@ many concurrent runs as there are workers. River owns only queue metadata;
 the applier records every result through the store in the run-history tables.
 
 Git-backed targets are cloned into their configured directory and pinned to a
-tracked ref (branch, tag or commit); `POST /api/sync` is a webhook that
-re-syncs a target — optionally switching the tracked branch — and reloads its
-`strangle.yml`, so per-branch content takes effect immediately.
+tracked ref (branch, tag or commit); the collection `hook` endpoint is a
+webhook that re-syncs a target — optionally switching the tracked branch —
+and reloads its `strangle.yml`, so per-branch content takes effect immediately.
 
 The details: [architecture](docs/architecture.md), [configuration reference](docs/configuration.md),
 [API reference](docs/api.md), [git-backed collections](docs/git-collections.md),
@@ -105,41 +107,42 @@ docs/                documentation: architecture, configuration, API, git collec
 
 ## API (summary)
 
-- `GET /api/health`      — liveness (open, no auth)
-- `GET /metrics`         — Prometheus text exposition: aggregate run, host and worker stats (open)
+Everything is under `/api/v1`; the old flat `/api/*` routes were removed.
+
+- `GET /api/v1/health`   — liveness (open, no auth)
+- `GET /metrics`         — Prometheus text exposition: build info, Go runtime and worker state (open)
 - `GET /api/v1/openapi.json` — generated OpenAPI 3.1 document (open)
-- `GET /api/docs`        — Swagger UI for the versioned API (open)
-- `POST /api/login`      — authenticate a local account, sets a 12 h session cookie
-- `POST /api/logout`     — end the session
-- `GET /api/me`          — who is logged in; the UI's auth probe
-- `GET /api/stats`       — fleet statistics (hosts, active, disappeared, run counts, durations)
-- `GET /api/runs`        — runs, newest first (`?limit=`)
-- `GET /api/hosts`       — all hosts with their last status, disappearance state and latest facts
-- `GET /api/hosts/{host}/runs`    — the last runs that included the host (default 10)
-- `GET /api/hosts/{host}/changes` — the host's task traces, newest first (default 200)
-- `GET /api/playbooks`   — playbook job names, keyed by target name, with last outcome
-- `GET /api/workers`     — the worker pool: pid, socket, liveness, jobs, restarts
-- `POST /api/v1/orgs/{org}/collections/{collection}/run` — body
-  `{"target": "demo", "playbook": "demo", "check": false}`; starts the run in
-  the background and returns `202`. `"check": true` is a dry run (`--check`).
-  The flat `POST /api/run` remains as a legacy alias
-- `POST /api/sync`       — body `{"target": "...", "branch": "..."}`; re-syncs a
-  git-backed target, optionally switching the tracked branch. Accepts a UI
-  session, a user token, or the configured token when `auth.token` is set
-- `GET /api/tokens`      — list the caller's API tokens (prefix only, never the raw value)
-- `POST /api/tokens`     — body `{"name": "...", "ttl_hours": N}`; create one,
-  returns the raw value exactly once
-- `DELETE /api/tokens/{name}` — revoke one
-- `GET /api/v1/orgs/{org}/collections/{collection}/hostkeys` — SSH host keys
-  pending approval (collection-scoped, like all collection data)
-- `POST /api/v1/orgs/{org}/collections/{collection}/hostkeys/accept` /
-  `POST /api/v1/orgs/{org}/collections/{collection}/hostkeys/reject`
-- `GET /api/v1/orgs/{org}/collections/{collection}/ssh/stats` — SSH pool
-  counters per scope
-- `GET /api/v1/orgs/{org}/collections/{collection}/runs/{id}/tasks` — every
-  per-task result of one run
-- `POST /api/v1/orgs/{org}/collections/{collection}/runs/{id}/cancel` — cancel
-  a queued or running run; the run detail view offers the same action
+- `GET /api/docs`        — Swagger UI (open), with assets under `/api/docs/`
+- `POST /api/v1/login`   — authenticate a local account, sets a 12 h session cookie
+- `POST /api/v1/logout`  — end the session
+- `GET /api/v1/me`       — who is logged in; the UI's auth probe
+- `GET /api/v1/orgs`     — orgs and their collections, merging configured orgs
+  with orgs created through the API and stored in the database
+- `POST /api/v1/orgs`    — body `{"name": "..."}`; create an org (201, duplicate 409)
+- `GET /api/v1/orgs/{org}` — one org
+- `GET /api/v1/orgs/{org}/collections` — the collections of one org
+- `GET /api/v1/orgs/{org}/collections/{collection}` — one collection, with
+  links to `hosts`, `playbooks`, `tokens` and `hook`
+- `GET /api/v1/orgs/{org}/collections/{collection}/hosts` — hosts with last
+  status, disappearance state and latest facts
+- `GET /api/v1/orgs/{org}/collections/{collection}/playbooks` — jobs keyed by
+  collection, with the last outcome
+- `POST /api/v1/orgs/{org}/collections/{collection}/hook` — body
+  `{"branch": "..."}` (optional); re-syncs a git-backed collection,
+  optionally switching the tracked branch. Accepts a UI session, a user token
+  scoped to that collection, or the static `auth.token` (hook only)
+- `GET|POST /api/v1/orgs/{org}/collections/{collection}/tokens` — list/create
+  tokens scoped to one org/collection; create body
+  `{"name": "...", "ttl_hours": N}` returns the raw value exactly once
+- `DELETE /api/v1/orgs/{org}/collections/{collection}/tokens/{name}` — revoke one
+- `GET /api/v1/orgs/{org}/collections/{collection}/playbooks/{playbook}/hosts/{host}/hostkeys`
+  — SSH host keys pending approval for one host of one playbook
+- `PATCH /api/v1/orgs/{org}/collections/{collection}/playbooks/{playbook}/hosts/{host}`
+  — JSON Patch array, e.g.
+  `[{"op":"replace","path":"/status","value":"approved"}]` (or `rejected`),
+  with an optional `/fingerprint` replacement
+- `GET /api/v1/orgs/{org}/collections/{collection}/playbooks/{playbook}/hosts/{host}/runs?limit=N`
+  — the last runs of that host in that playbook (default 10)
 
 Full request/response examples: [docs/api.md](docs/api.md), or the served
 Swagger UI at `/api/docs` backed by `/api/v1/openapi.json`. The server routes
@@ -153,19 +156,21 @@ seconds. When UI authentication is on (see below), an unauthenticated visit
 shows a login screen; the header shows the signed-in user and a log-out
 button:
 
-- `/` — **Dashboard**: fleet stats and the most recent runs.
-- `/runs/{id}` — **Run detail**: metadata, the full captured output and the
-  run's per-task results (with expandable diffs and errors), fetched only
-  when the run is opened.
-- `/hosts` — **Hosts**: the host table with last status and disappearance state.
-- `/hosts/{host}` — **Host detail**: the latest Ansible facts, the last runs
-  for that host, and its task traces with expandable diffs and errors.
-- `/playbooks` — **Playbooks**: every target's jobs with their last outcome,
-  plus a manual-run button per job.
-- `/tokens` — **Tokens**: the signed-in user's API tokens — create one (the
-  raw value is shown once), see its prefix, lifetime and last use, revoke it.
-- `/ssh` — **SSH**: pending SSH host keys, with approve/reject actions, and
-  the master's SSH connection-pool counters.
+- `/` — **Dashboard**: simple counts of hosts, playbooks and collections,
+  derived from the org/collection, host and playbook listings (no stats API).
+- `/hosts` — **Hosts**: the collection's host table with last status and
+  disappearance state, with a name filter.
+- `/hosts/{host}` — **Host detail**: the latest Ansible facts and the last
+  runs for that host in a selected playbook.
+- `/playbooks` — **Playbooks**: the collection's jobs with their last outcome.
+- `/tokens` — **Tokens**: the signed-in user's tokens for the selected
+  org/collection — create one (the raw value is shown once), see its prefix,
+  scope, lifetime and last use, revoke it.
+- `/ssh` — **SSH**: pending SSH host keys of a selected playbook and host,
+  with approve/reject actions.
+- `/monitor` — **Monitor**: worker pool state fetched from the public
+  Prometheus `/metrics` endpoint (total/alive/dead, jobs and restarts per
+  worker).
 
 ## Configuration
 
@@ -186,7 +191,7 @@ strangle-server serve [-s config/server.yml] [-c config/collection.yml]
 | `schedule`      | `@every 15m`    | Fallback robfig/cron v3 schedule for jobs without their own `schedule` in `strangle.yml` |
 | `workers`       | `1`             | Worker child processes (one embedded interpreter each) |
 | `database.dsn`  | —               | PostgreSQL DSN; required for history, accounts and the job queue |
-| `auth.token`    | —               | Bearer token for `POST /api/sync` (webhook), independent of UI authentication |
+| `auth.token`    | —               | Bearer token for the collection `hook` webhook only, independent of UI authentication |
 | `auth.cli_token` | —               | User API token (`st_…`) used by the CLI subcommands; override with `--token` |
 | `sandbox.enabled` | `false`       | Landlock isolation: one worker set per collection, read-only checkouts, private write scratch |
 | `retention.max_age` / `retention.max_count` | — | Purge finished runs older than the duration and/or beyond the newest N per collection; `retention.interval` defaults to `1h` |
@@ -205,8 +210,9 @@ the isolation. See [configuration](docs/configuration.md#collection-sandboxing).
 
 No flag: UI authentication is **on as soon as at least one local account
 exists** (accounts live in the configured database, so a DSN is required).
-While on, every `/api/*` endpoint needs a valid 12-hour session cookie,
-except health, login, logout and me. Manage accounts:
+While on, every `/api/v1` endpoint needs a valid 12-hour session cookie,
+except health, login, logout, me, the OpenAPI document and the Swagger UI.
+Manage accounts:
 
 ```sh
 strangle-cli user add <name> --password-stdin
@@ -216,37 +222,44 @@ strangle-cli user remove <name>
 
 #### API tokens
 
-Local accounts can create bearer **API tokens** that authenticate any
-`/api/*` request as that account — for CLIs, webhooks and other integrations.
-Tokens are managed in the web UI under *Tokens* or from the command line:
+Local accounts can create bearer **API tokens** that authenticate as that
+account on one org/collection pair only — for CLIs, webhooks and other
+integrations. A token used on any other pair is rejected. Tokens are managed
+in the web UI under *Tokens* or from the command line:
 
 ```sh
-strangle-cli token create ci --user admin --ttl 72h   # prints the raw value once
-strangle-cli token list [--user admin]
-strangle-cli token remove ci --user admin
+strangle-cli token create ci --user admin --org lab --collection edge --ttl 72h  # prints the raw value once
+strangle-cli token list [--user admin] [--org lab] [--collection edge]
+strangle-cli token remove ci --user admin [--org lab] [--collection edge]
 ```
 
-Only the SHA-256 digest of a token is stored; the raw value is shown exactly
-once, at creation. A token is sent as `Authorization: Bearer st_…` or
-`X-Strangle-Token: st_…`. The static `auth.token` above is a separate
-mechanism: it only opens `POST /api/sync` and is not a user account.
+`token create` requires `--user`, `--org` and `--collection`. `list` and
+`remove` accept optional `--org`/`--collection` filters; omitting a filter
+matches all orgs/collections. Only the SHA-256 digest of a token is stored;
+the raw value is shown exactly once, at creation. A token is sent as
+`Authorization: Bearer st_…` or `X-Strangle-Token: st_…`. The static
+`auth.token` above is a separate mechanism: it only opens the collection
+`hook` route and is not a user account.
 
 #### CLI client
 
 The `strangle-cli` binary holds the client-side commands. Its API-backed
-subcommands use the canonical collection-scoped routes under
+subcommands use the only API layout, under
 `/api/v1/orgs/{org}/collections/{collection}`. The org comes from
-collection.yml (default `default`), or from `--org`:
+collection.yml (default `default`), or from `--org`. There are no `run` or
+`runs` commands: runs are scheduled, and recent runs are read through a host:
 
 ```sh
-strangle-cli run <target> <playbook> [--check]
-strangle-cli runs <target> [--playbook NAME] [--host NAME] [--from RFC3339] [--to RFC3339] [--limit N] [--offset N]
-strangle-cli hosts <target>
-strangle-cli host <name> <target> [--limit N]
-strangle-cli hostkeys list <target>
-strangle-cli hostkeys accept <target/playbook> <host> <fingerprint>
-strangle-cli hostkeys reject <target/playbook> <host>
+strangle-cli hosts [target]
+strangle-cli host <name> <target> --playbook NAME [--limit N]
+strangle-cli hostkeys list <target> --playbook NAME [host]
+strangle-cli hostkeys approve <target> <host> --playbook NAME [--fingerprint SHA256:...]
+strangle-cli hostkeys reject <target> <host> --playbook NAME
 ```
+
+`hostkeys approve` and `reject` also accept the older `<target>/<playbook>`
+spelling instead of a bare target plus `--playbook`; the fingerprint can be
+given as a third argument instead of `--fingerprint`.
 
 All of them accept `-s/--server-config`, `-c/--collection-config`, `--url`,
 `--token` and `--json`. Without `--url`, the API address is derived from
@@ -257,11 +270,13 @@ needed.
 
 #### Per-collection access
 
-The canonical API is versioned (`/api/v1`) and groups collections into orgs:
-`/api/v1/orgs/{org}/collections/{collection}`. The old flat routes remain as
-aliases. An org comes from the optional `org` field of a collection.yml entry
-(default: `default`). Once a membership exists, users only see and can use
-their own collections:
+The API is versioned (`/api/v1`) and groups collections into orgs:
+`/api/v1/orgs/{org}/collections/{collection}`; there are no flat aliases.
+An org comes from the optional `org` field of a collection.yml entry
+(default: `default`), or can be created through `POST /api/v1/orgs`. The org
+listing merges configured orgs with the ones stored in the database. Once a
+membership exists, users only see and can use their own collections; a bearer
+token is further limited to its own org/collection pair:
 
 ```sh
 strangle-cli collection grant alice lab edge
@@ -332,7 +347,7 @@ at runtime. `make build` rebuilds the UI before compiling both binaries.
 # build the UI (into web/dist), then the server and client binaries
 make build
 ./bin/strangle-server serve         # reads ./config/server.yml and ./config/collection.yml
-./bin/strangle-cli runs demo        # talks to the server through its API
+./bin/strangle-cli hosts demo       # talks to the server through its API
 
 # or point at explicit config files
 ./bin/strangle-server serve -s config/server.yml -c config/collection.yml

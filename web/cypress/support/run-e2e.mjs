@@ -2,7 +2,7 @@
 //
 // Cypress 16 removed the e2e `webServer` config option, so the mock server is
 // managed here: it is spawned before `cypress run` starts, the runner waits
-// for it to answer /api/health, and it is killed when the run finishes.
+// for it to answer /api/v1/health, and it is killed when the run finishes.
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,7 +22,7 @@ function waitForHealth(timeoutMs) {
   return new Promise((resolve, reject) => {
     const tick = async () => {
       try {
-        const res = await fetch(`${BASE}/api/health`)
+        const res = await fetch(`${BASE}/api/v1/health`)
         if (res.ok) return resolve()
       } catch {
         // not up yet

@@ -33,7 +33,7 @@ func (Collection) TableName() string { return "collections" }
 // refreshed), so the file remains the source of truth while the database gets
 // stable IDs and foreign keys for hosts and runs.
 func (d *DB) SyncCollections(ctx context.Context, targets []cfg.TargetConfig) error {
-	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return d.gdb.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		orgIDs := map[string]uint64{cfg.DefaultOrg: defaultOrgID(tx)}
 		if orgIDs[cfg.DefaultOrg] == 0 {
 			return errors.New("default org is missing")

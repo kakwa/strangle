@@ -1,70 +1,55 @@
-// Host detail: bookmarkable URL, latest Ansible facts, runs table, task
-// changes accordion with colored diffs and errors, back navigation.
+// Host detail: a playbook selector drives the playbook/host-scoped runs URL,
+// Ansible facts are shown, and the removed task-changes panel is absent.
 describe('Host detail', () => {
   beforeEach(() => {
     cy.login()
   })
 
-  it('renders from a bookmarkable URL', () => {
-    cy.visit('/hosts/web-01')
-    cy.get('h4').contains('web-01').should('be.visible')
-    cy.contains('← back to hosts')
-    cy.contains('h4', 'Last 2 runs')
-    cy.get('table').contains('td', '#3')
-    cy.get('table').contains('td', '#1')
-    cy.get('table').contains('td', 'changed')
-    cy.get('table').contains('td', 'ok')
+  const selectPlaybook = (name) =>
+    cy.contains('label', 'Playbook').parent().find('select').select(name)
 
+  it('renders runs for the selected playbook and the host facts', () => {
+    cy.intercept(
+      'GET',
+      '/api/v1/orgs/default/collections/alpha/playbooks/web/hosts/web-01/runs?limit=10',
+    ).as('webRuns')
+    cy.visit('/hosts/web-01?org=default&collection=alpha')
+    cy.wait('@webRuns')
+
+    cy.get('h4').contains('web-01').should('be.visible')
+    cy.contains('p', '← back to hosts')
+    cy.contains('h4', 'Playbook runs')
+    cy.get('table').contains('td', '#3')
+    cy.get('table').contains('td', 'changed')
     cy.contains('h4', 'Ansible facts')
     cy.contains('pre', '"ansible_hostname": "web-01"')
+    cy.contains('h4', 'Task changes').should('not.exist')
   })
 
-  it('shows a colored diff for a changed task', () => {
-    cy.visit('/hosts/web-01')
-    cy.contains('h4', 'Task changes')
+  it('refetches runs when another playbook is selected', () => {
+    cy.intercept(
+      'GET',
+      '/api/v1/orgs/default/collections/alpha/playbooks/*/hosts/web-01/runs?limit=10',
+    ).as('hostRuns')
+    cy.visit('/hosts/web-01?org=default&collection=alpha')
+    cy.wait('@hostRuns')
+    cy.get('table').contains('td', '#3')
 
-    cy.contains('p', 'Update Nginx config')
-      .closest('.mantine-Accordion-control')
-      .click()
-    cy.contains('last run:')
-    cy.contains('last changed:')
-
-    // The diff renders in a monospace block with per-line colors.
-    cy.contains('pre', 'server_name web01.example.com')
-    cy.contains('pre', 'server_name old.example.com')
-    cy.contains('pre', 'server_name web01.example.com').then(($pre) => {
-      const colors = new Set()
-      for (const span of $pre.find('span')) {
-        const c = Cypress.$(span).css('color')
-        // Skip lines without an explicit color (context lines) and the
-        // default text color, keep the diff-specific ones.
-        if (c && c !== 'rgb(0, 0, 0)' && c !== 'rgb(255, 255, 255)') {
-          colors.add(c)
-        }
-      }
-      // Added (green), removed (red), hunk header (blue) and file header
-      // (gray) lines all carry distinct colors.
-      expect(colors.size, 'at least 2 distinct line colors').to.be.gte(2)
-    })
+    selectPlaybook('common')
+    cy.wait('@hostRuns')
+    cy.get('table').contains('td', '#1')
+    cy.get('table').contains('td', '#3').should('not.exist')
   })
 
-  it('shows the error block for a failed task', () => {
-    cy.visit('/hosts/web-01')
-    cy.contains('p', 'Collect disk usage')
-      .closest('.mantine-Accordion-control')
-      .click()
-    cy.contains('pre', 'df: command not found')
+  it('shows an empty state for a host without runs in the playbook', () => {
+    cy.visit('/hosts/web-02?org=default&collection=alpha')
+    cy.contains('No runs recorded for this host in web yet')
   })
 
-  it('shows empty states for a host without runs or changes', () => {
-    cy.visit('/hosts/web-02')
-    cy.contains('No task changes recorded for this host yet')
-    cy.contains('No runs recorded for this host yet')
-  })
-
-  it('navigates back to the hosts list', () => {
-    cy.visit('/hosts/web-01')
+  it('navigates back to the hosts list with the scope preserved', () => {
+    cy.visit('/hosts/web-01?org=default&collection=alpha')
     cy.contains('p', '← back to hosts').click()
     cy.location('pathname').should('eq', '/hosts')
+    cy.location('search').should('contain', 'collection=alpha')
   })
 })

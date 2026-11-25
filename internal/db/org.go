@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -19,6 +20,41 @@ type Org struct {
 }
 
 func (Org) TableName() string { return "orgs" }
+
+// OrgRecord is the API representation of a stored organization. A stored org
+// may have no configured collections yet: organizations are created through
+// POST /api/v1/orgs and collections are added later through collection.yml.
+type OrgRecord struct {
+	ID   uint64 `json:"id"`
+	Name string `json:"name"`
+}
+
+// CreateOrg inserts an organization. It returns an error when the name is
+// already present, so callers can map that to HTTP 409.
+func (d *DB) CreateOrg(ctx context.Context, name string) (OrgRecord, error) {
+	org := Org{Name: name}
+	if err := d.gdb.WithContext(ctx).Create(&org).Error; err != nil {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			return OrgRecord{}, fmt.Errorf("org %q already exists: %w", name, err)
+		}
+		return OrgRecord{}, err
+	}
+	return OrgRecord{ID: org.ID, Name: org.Name}, nil
+}
+
+// ListOrgs returns all stored organizations in name order, including the
+// default org inserted at startup and orgs created through the API.
+func (d *DB) ListOrgs(ctx context.Context) ([]OrgRecord, error) {
+	var rows []Org
+	if err := d.gdb.WithContext(ctx).Order("name").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]OrgRecord, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, OrgRecord{ID: row.ID, Name: row.Name})
+	}
+	return out, nil
+}
 
 func defaultOrgID(tx *gorm.DB) uint64 {
 	org, err := firstOrCreateOrg(tx, cfg.DefaultOrg)

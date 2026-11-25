@@ -1,0 +1,30 @@
+/api/v1/hosts [get] < delete
+/api/v1/hosts/{host}/changes [get] < delete
+/api/v1/hosts/{host}/runs [get] < delete
+/api/v1/me [get]
+/api/v1/openapi.json [get]
+/api/v1/orgs [get] < add [post] (creation of orgs)
+/api/v1/orgs/{org}/collections/{collection} [get]
+should have a layer betwen collection and hosts with the name of the playbooks entry of stangle.yaml file> /api/v1/orgs/{org}/collections/{collection}/hostkeys/accept [post] < put it under hosts/{host} and remove the accept/reject stuff (should be a status update/patch via json-pathc)
+should have a layer betwen collection and hosts with the name of the playbooks entry of stangle.yaml file> /api/v1/orgs/{org}/collections/{collection}/hostkeys [get] < under hosts/{host}
+should have a layer betwen collection and hosts with the name of the playbooks entry of stangle.yaml file> /api/v1/orgs/{org}/collections/{collection}/hostkeys/reject [post] < remove ([patch call, json-patch)
+should have a layer betwen collection and hosts with the name of the playbooks entry of stangle.yaml file> /api/v1/orgs/{org}/collections/{collection}/hosts/{host}/changes [get] < remove
+should have a layer betwen collection and hosts with the name of the playbooks entry of stangle.yaml file> /api/v1/orgs/{org}/collections/{collection}/hosts/{host}/runs [get]
+should have a layer betwen collection and hosts with the name of the playbooks entry of stangle.yaml file> /api/v1/orgs/{org}/collections/{collection}/playbooks [get]
+/api/v1/orgs/{org}/collections/{collection}/run [post] < remove
+/api/v1/orgs/{org}/collections/{collection}/runs [get] < remove
+/api/v1/orgs/{org}/collections/{collection}/runs/{id}/cancel [post] < remove
+/api/v1/orgs/{org}/collections/{collection}/runs/{id} [get] < remoce
+/api/v1/orgs/{org}/collections/{collection}/runs/{id}/tasks [get] < remove
+/api/v1/orgs/{org}/collections/{collection}/ssh/stats [get] < remove
+/api/v1/orgs/{org}/collections/{collection}/sync [post] < rename hook
+/api/v1/playbooks [get] < remove
+/api/v1/run [post] < remove
+/api/v1/runs [get] < remove
+/api/v1/runs/{id} [get] < remove
+/api/v1/stats [get] < remove
+/api/v1/sync [post] < remove
+/api/v1/tokens [get] < move under collection
+/api/v1/tokens/{name} [delete] < move under collection
+/api/v1/tokens [post] < move under collection
+/api/v1/workers [get] < put this info in the monitor tab

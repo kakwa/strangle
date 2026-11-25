@@ -112,11 +112,16 @@ func TestStoreSaveRunAndQueries(t *testing.T) {
 	if err != nil || len(changes) != 2 {
 		t.Fatalf("HostChanges(h1) = %v, %v", changes, err)
 	}
-	if changes[0].Task != "Install nginx" {
-		t.Errorf("most recently changed first, got %q", changes[0].Task)
+	// Both tasks carry the same run timestamp, so their relative order is
+	// unspecified; find the changed task by name instead of by position.
+	var install *db.TaskStateRecord
+	for i := range changes {
+		if changes[i].Task == "Install nginx" {
+			install = &changes[i]
+		}
 	}
-	if changes[0].LastDiff != "-a\n+b" {
-		t.Errorf("changes[0].LastDiff = %q", changes[0].LastDiff)
+	if install == nil || install.LastDiff != "-a\n+b" {
+		t.Errorf("Install nginx change = %+v, want diff -a\\n+b", install)
 	}
 
 	history, err := s.RunTasks(ctx, runs[0].ID)
@@ -187,22 +192,18 @@ func TestStoreSaveRunAndQueries(t *testing.T) {
 		t.Fatalf("HostChanges(h1) = %v, %v; want 2 home + 1 other", changes, err)
 	}
 
-	stats, err := s.Stats(ctx)
-	if err != nil {
-		t.Fatalf("db.Stats() error: %v", err)
+	// The saved runs are still queryable through ListRuns after the pruning
+	// and target-scoping checks above.
+	runs, err = s.ListRuns(ctx, 10)
+	if err != nil || len(runs) != 3 {
+		t.Fatalf("ListRuns() = %v, %v; want 3 saved runs", runs, err)
 	}
-	if stats.Hosts.Total != 5 || stats.Hosts.InInventory != 3 || stats.Hosts.Active != 4 || stats.Hosts.Disappeared != 1 {
-		t.Errorf("db.Stats().Hosts = %+v", stats.Hosts)
+	byTarget := map[string]int{}
+	for _, r := range runs {
+		byTarget[r.Target]++
 	}
-	if stats.Runs.Total != 3 || stats.Runs.Succeeded != 3 {
-		t.Errorf("db.Stats().Runs = %+v", stats.Runs)
-	}
-	perPB := map[string]int{}
-	for _, pb := range stats.PerPlaybook {
-		perPB[pb.Target+"/"+pb.Playbook] = pb.Total
-	}
-	if perPB["home/site.yml"] != 2 || perPB["other/site.yml"] != 1 {
-		t.Errorf("db.Stats().PerPlaybook = %v", perPB)
+	if byTarget["home"] != 2 || byTarget["other"] != 1 {
+		t.Errorf("runs by target = %v", byTarget)
 	}
 }
 
@@ -257,7 +258,10 @@ func TestStoreEmptyCollectionsAreNotNull(t *testing.T) {
 	if changes, err := s.HostChanges(ctx, "missing", 10); err != nil || changes == nil {
 		t.Fatalf("HostChanges() = %v, %v; want non-nil empty slice", changes, err)
 	}
-	if stats, err := s.Stats(ctx); err != nil || stats.PerPlaybook == nil {
-		t.Fatalf("db.Stats().PerPlaybook = %v, %v; want non-nil empty slice", stats, err)
+	if runs, err := s.ListRuns(ctx, 10); err != nil || runs == nil {
+		t.Fatalf("ListRuns() = %v, %v; want non-nil empty slice", runs, err)
+	}
+	if hosts, err := s.ListHosts(ctx); err != nil || hosts == nil {
+		t.Fatalf("ListHosts() = %v, %v; want non-nil empty slice", hosts, err)
 	}
 }

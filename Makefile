@@ -5,7 +5,8 @@ GO := go
 # CPython version that provides the development headers.
 export PKG_CONFIG := $(CURDIR)/scripts/pkg-config-cpy
 
-SWAG := $(GO) run github.com/swaggo/swag/v2/cmd/swag
+# swaggo/swag v2 is pinned as a Go tool in go.mod; invoke it via `go tool`.
+SWAG := $(GO) tool swag
 SWAG_ARGS := init --v3.1 -g internal/server/openapi_general.go -d . -o ./docs --parseDependency --parseInternal
 
 .PHONY: all build run test coverage tidy vet web web-dev swag swag-check generate

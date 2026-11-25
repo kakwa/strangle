@@ -31,12 +31,9 @@ type apiOptions struct {
 	target           string
 	json             bool
 	limit            int
-	offset           int
 	playbook         string
 	host             string
-	from             string
-	to               string
-	check            bool
+	fingerprint      string
 }
 
 type apiClient struct {
@@ -53,101 +50,7 @@ type apiScope struct {
 
 // apiCommands returns the CLI subcommands backed by the versioned HTTP API.
 func apiCommands() []*cobra.Command {
-	return []*cobra.Command{runCmd(), runsCmd(), hostsCmd(), hostCmd(), hostkeysCmd()}
-}
-
-func runCmd() *cobra.Command {
-	opts := &apiOptions{}
-	cmd := &cobra.Command{
-		Use:   "run <target> <playbook>",
-		Short: "Queue a playbook run through the API.",
-		Args:  cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			client, err := newAPIClient(*opts)
-			if err != nil {
-				return err
-			}
-			scope, err := client.resolveScope(args[0], opts.org)
-			if err != nil {
-				return err
-			}
-			body := map[string]any{
-				"target":   scope.collection,
-				"playbook": args[1],
-				"check":    opts.check,
-			}
-			var out map[string]any
-			if err := client.do(cmd.Context(), http.MethodPost, scopePath(scope, "run"), body, &out); err != nil {
-				return err
-			}
-			if opts.json {
-				return writeAPIJSON(cmd, out)
-			}
-			tsv(cmd, out["status"], out["run_id"], scope.org+"/"+scope.collection, out["playbook"], out["check"])
-			return nil
-		},
-	}
-	addAPIFlags(cmd, opts)
-	cmd.Flags().BoolVar(&opts.check, "check", false, "run in check (dry-run) mode")
-	return cmd
-}
-
-func runsCmd() *cobra.Command {
-	opts := &apiOptions{}
-	cmd := &cobra.Command{
-		Use:   "runs [target]",
-		Short: "List runs of a collection.",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			target, err := commandTarget(args, *opts)
-			if err != nil {
-				return err
-			}
-			client, err := newAPIClient(*opts)
-			if err != nil {
-				return err
-			}
-			scope, err := client.resolveScope(target, opts.org)
-			if err != nil {
-				return err
-			}
-			q := url.Values{}
-			for name, value := range map[string]string{
-				"playbook": opts.playbook, "host": opts.host,
-				"from": opts.from, "to": opts.to,
-				"limit": fmt.Sprint(opts.limit), "offset": fmt.Sprint(opts.offset),
-			} {
-				if value != "" && value != "0" {
-					q.Set(name, value)
-				}
-			}
-			path := scopePath(scope, "runs")
-			if len(q) > 0 {
-				path += "?" + q.Encode()
-			}
-			var runs []map[string]any
-			if err := client.do(cmd.Context(), http.MethodGet, path, nil, &runs); err != nil {
-				return err
-			}
-			if opts.json {
-				return writeAPIJSON(cmd, runs)
-			}
-			for _, run := range runs {
-				tsv(cmd, run["id"], run["target"], run["playbook"], run["started_at"],
-					run["state"], run["success"], run["duration_ms"], run["hosts"],
-					run["changed_hosts"], run["failed_hosts"])
-			}
-			return nil
-		},
-	}
-	addAPIFlags(cmd, opts)
-	cmd.Flags().StringVar(&opts.playbook, "playbook", "", "only runs of this playbook")
-	cmd.Flags().StringVar(&opts.host, "host", "", "only runs that mention this host")
-	cmd.Flags().StringVar(&opts.from, "from", "", "inclusive RFC3339 start time")
-	cmd.Flags().StringVar(&opts.to, "to", "", "exclusive RFC3339 end time")
-	cmd.Flags().IntVar(&opts.limit, "limit", 0, "maximum number of runs")
-	cmd.Flags().IntVar(&opts.offset, "offset", 0, "number of matching runs to skip")
-	return cmd
+	return []*cobra.Command{hostsCmd(), hostCmd(), hostkeysCmd()}
 }
 
 func hostsCmd() *cobra.Command {
@@ -191,7 +94,7 @@ func hostCmd() *cobra.Command {
 	opts := &apiOptions{}
 	cmd := &cobra.Command{
 		Use:   "host <name> [target]",
-		Short: "Show one host, its run history and its latest changes.",
+		Short: "Show one host and its run history for a playbook.",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := opts.target
@@ -203,6 +106,9 @@ func hostCmd() *cobra.Command {
 			}
 			if target == "" {
 				return errors.New("target is required (second argument or --target)")
+			}
+			if opts.playbook == "" {
+				return errors.New("a playbook is required (--playbook)")
 			}
 			name := args[0]
 			client, err := newAPIClient(*opts)
@@ -229,52 +135,62 @@ func hostCmd() *cobra.Command {
 				return fmt.Errorf("unknown host %q in %s/%s", name, scope.org, scope.collection)
 			}
 
-			runsPath := scopePath(scope, "hosts", name, "runs")
-			changesPath := scopePath(scope, "hosts", name, "changes")
+			runsPath := scopePath(scope, "playbooks", opts.playbook, "hosts", name, "runs")
 			if opts.limit > 0 {
 				runsPath += "?limit=" + fmt.Sprint(opts.limit)
-				changesPath += "?limit=" + fmt.Sprint(opts.limit)
 			}
 			var runs []map[string]any
 			if err := client.do(cmd.Context(), http.MethodGet, runsPath, nil, &runs); err != nil {
 				return err
 			}
-			var changes []map[string]any
-			if err := client.do(cmd.Context(), http.MethodGet, changesPath, nil, &changes); err != nil {
-				return err
-			}
 			if opts.json {
-				return writeAPIJSON(cmd, map[string]any{"host": host, "runs": runs, "changes": changes})
+				return writeAPIJSON(cmd, map[string]any{"host": host, "runs": runs})
 			}
 			tsv(cmd, "host", host["name"], host["ip"], host["last_status"], host["active"], host["last_run_at"])
 			for _, run := range runs {
 				tsv(cmd, "run", run["id"], run["started_at"], run["playbook"], run["success"], run["exit_code"])
 			}
-			for _, change := range changes {
-				tsv(cmd, "change", change["task"], change["status"], change["last_run_at"], change["last_changed_at"])
-			}
 			return nil
 		},
 	}
 	addAPIFlags(cmd, opts)
-	cmd.Flags().IntVar(&opts.limit, "limit", 0, "maximum number of runs and changes")
+	cmd.Flags().StringVar(&opts.playbook, "playbook", "", "playbook whose host history to show (required)")
+	cmd.Flags().IntVar(&opts.limit, "limit", 0, "maximum number of runs")
+	_ = cmd.MarkFlagRequired("playbook")
 	return cmd
 }
 
 func hostkeysCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "hostkeys",
-		Short: "List and decide pending SSH host keys.",
+		Short: "List and decide SSH host keys.",
 	}
 	listOpts := &apiOptions{}
 	list := &cobra.Command{
-		Use:   "list [target]",
-		Short: "List pending SSH host keys of a collection.",
-		Args:  cobra.MaximumNArgs(1),
+		Use:   "list [target] [host]",
+		Short: "List the SSH host keys of one host in a playbook.",
+		Args:  cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			target, err := commandTarget(args, *listOpts)
+			targetArg := listOpts.target
+			if len(args) > 0 {
+				if targetArg != "" && targetArg != args[0] {
+					return fmt.Errorf("target %q from --target conflicts with %q", targetArg, args[0])
+				}
+				targetArg = args[0]
+			}
+			target, playbook, err := resolveTargetPlaybook(targetArg, listOpts.playbook)
 			if err != nil {
 				return err
+			}
+			host := listOpts.host
+			if len(args) > 1 {
+				if host != "" && host != args[1] {
+					return fmt.Errorf("host %q from --host conflicts with %q", host, args[1])
+				}
+				host = args[1]
+			}
+			if host == "" {
+				return errors.New("host is required (second argument or --host)")
 			}
 			client, err := newAPIClient(*listOpts)
 			if err != nil {
@@ -285,7 +201,8 @@ func hostkeysCmd() *cobra.Command {
 				return err
 			}
 			var keys []map[string]any
-			if err := client.do(cmd.Context(), http.MethodGet, scopePath(scope, "hostkeys"), nil, &keys); err != nil {
+			path := scopePath(scope, "playbooks", playbook, "hosts", host, "hostkeys")
+			if err := client.do(cmd.Context(), http.MethodGet, path, nil, &keys); err != nil {
 				return err
 			}
 			if listOpts.json {
@@ -298,17 +215,22 @@ func hostkeysCmd() *cobra.Command {
 		},
 	}
 	addAPIFlags(list, listOpts)
+	list.Flags().StringVar(&listOpts.playbook, "playbook", "", "playbook that contains the host (required)")
+	list.Flags().StringVar(&listOpts.host, "host", "", "host whose keys to list (or second argument)")
+	_ = list.MarkFlagRequired("playbook")
 
-	acceptOpts := &apiOptions{}
-	accept := &cobra.Command{
-		Use:   "accept <target/playbook> <host> <fingerprint>",
+	approveOpts := &apiOptions{}
+	approve := &cobra.Command{
+		Use:   "approve <target/playbook> <host> [fingerprint]",
 		Short: "Approve a pending SSH host key.",
-		Args:  cobra.ExactArgs(3),
+		Args:  cobra.RangeArgs(2, 3),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return decideHostKey(cmd, *acceptOpts, "accept", args)
+			return decideHostKey(cmd, *approveOpts, "approved", args)
 		},
 	}
-	addAPIFlags(accept, acceptOpts)
+	addAPIFlags(approve, approveOpts)
+	approve.Flags().StringVar(&approveOpts.playbook, "playbook", "", "playbook that contains the host (or use <target/playbook>)")
+	approve.Flags().StringVar(&approveOpts.fingerprint, "fingerprint", "", "fingerprint to record (or use the third argument)")
 
 	rejectOpts := &apiOptions{}
 	reject := &cobra.Command{
@@ -316,23 +238,49 @@ func hostkeysCmd() *cobra.Command {
 		Short: "Reject a pending SSH host key.",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return decideHostKey(cmd, *rejectOpts, "reject", args)
+			return decideHostKey(cmd, *rejectOpts, "rejected", args)
 		},
 	}
 	addAPIFlags(reject, rejectOpts)
+	reject.Flags().StringVar(&rejectOpts.playbook, "playbook", "", "playbook that contains the host (or use <target/playbook>)")
 
-	cmd.AddCommand(list, accept, reject)
+	cmd.AddCommand(list, approve, reject)
 	return cmd
 }
 
-func decideHostKey(cmd *cobra.Command, opts apiOptions, decision string, args []string) error {
-	sshScope, host := args[0], args[1]
-	target, _, ok := strings.Cut(sshScope, "/")
-	if !ok || target == "" {
-		return fmt.Errorf("SSH scope %q must be <target>/<playbook>", sshScope)
+// resolveTargetPlaybook accepts the legacy "<target>/<playbook>" spelling and
+// the newer "target plus --playbook" spelling. Both are kept because they are
+// the user-facing names of the scope, not details of the HTTP route.
+func resolveTargetPlaybook(targetArg, playbookFlag string) (string, string, error) {
+	if targetArg == "" {
+		return "", "", errors.New("target is required")
 	}
+	target, playbook, hasPlaybook := strings.Cut(targetArg, "/")
+	if hasPlaybook {
+		if target == "" || playbook == "" {
+			return "", "", fmt.Errorf("target %q must be <target>/<playbook>", targetArg)
+		}
+		if playbookFlag != "" && playbookFlag != playbook {
+			return "", "", fmt.Errorf("playbook %q from --playbook conflicts with scope %q", playbookFlag, targetArg)
+		}
+	} else {
+		target = targetArg
+		playbook = playbookFlag
+	}
+	if playbook == "" {
+		return "", "", errors.New("a playbook is required (--playbook or <target/playbook>)")
+	}
+	return target, playbook, nil
+}
+
+func decideHostKey(cmd *cobra.Command, opts apiOptions, status string, args []string) error {
+	target, playbook, err := resolveTargetPlaybook(args[0], opts.playbook)
+	if err != nil {
+		return err
+	}
+	host := args[1]
 	if opts.target != "" && opts.target != target {
-		return fmt.Errorf("target %q from --target conflicts with scope %q", opts.target, sshScope)
+		return fmt.Errorf("target %q from --target conflicts with %q", target, opts.target)
 	}
 	client, err := newAPIClient(opts)
 	if err != nil {
@@ -342,18 +290,38 @@ func decideHostKey(cmd *cobra.Command, opts apiOptions, decision string, args []
 	if err != nil {
 		return err
 	}
-	body := map[string]any{"target": sshScope, "host": host}
-	if decision == "accept" {
-		body["fingerprint"] = args[2]
+
+	fingerprint := opts.fingerprint
+	if len(args) > 2 && args[2] != "" {
+		if fingerprint != "" && fingerprint != args[2] {
+			return fmt.Errorf("fingerprint %q from --fingerprint conflicts with %q", fingerprint, args[2])
+		}
+		fingerprint = args[2]
+	}
+	ops := []map[string]any{{"op": "replace", "path": "/status", "value": status}}
+	if fingerprint != "" {
+		if status != "approved" {
+			return errors.New("a fingerprint can only be given when approving")
+		}
+		ops = append(ops, map[string]any{"op": "replace", "path": "/fingerprint", "value": fingerprint})
 	}
 	var out map[string]any
-	if err := client.do(cmd.Context(), http.MethodPost, scopePath(scope, "hostkeys", decision), body, &out); err != nil {
+	path := scopePath(scope, "playbooks", playbook, "hosts", host)
+	if err := client.do(cmd.Context(), http.MethodPatch, path, ops, &out); err != nil {
 		return err
 	}
 	if opts.json {
 		return writeAPIJSON(cmd, out)
 	}
-	tsv(cmd, out["status"], out["host"])
+	value := out["status"]
+	if value == nil {
+		value = status
+	}
+	keyHost := out["host"]
+	if keyHost == nil {
+		keyHost = host
+	}
+	tsv(cmd, value, keyHost)
 	return nil
 }
 

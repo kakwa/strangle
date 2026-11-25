@@ -110,7 +110,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 	// Git-backed targets are cloned into their configured path and pinned
 	// to their tracked ref. A failure is reported, not fatal: the target
-	// can be synced later through POST /api/sync.
+	// can be synced later through the collection hook endpoint.
 	collMgr := collection.New(conf.Targets, logger)
 	if collMgr.HasGit() {
 		if err := collMgr.InitialSync(ctx); err != nil {

@@ -3,7 +3,6 @@ package db_test
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
@@ -21,31 +20,6 @@ func openTestDB(t *testing.T) (*db.DB, string) {
 		t.Fatalf("db.Open() error: %v", err)
 	}
 	return d, dsn
-}
-
-// An empty database must serialize per_playbook as [] rather than null: the
-// web UI calls .length/.map on it and used to crash on a fresh install.
-func TestDBStatsEmpty(t *testing.T) {
-	d, _ := openTestDB(t)
-	defer d.Close()
-
-	stats, err := d.Stats(context.Background())
-	if err != nil {
-		t.Fatalf("Stats() error: %v", err)
-	}
-	if stats.PerPlaybook == nil {
-		t.Fatal("Stats().PerPlaybook is nil, want an empty slice")
-	}
-	if len(stats.PerPlaybook) != 0 {
-		t.Fatalf("Stats().PerPlaybook = %v, want empty", stats.PerPlaybook)
-	}
-	b, err := json.Marshal(stats)
-	if err != nil {
-		t.Fatalf("json.Marshal() error: %v", err)
-	}
-	if !strings.Contains(string(b), `"per_playbook":[]`) {
-		t.Fatalf("Stats JSON = %s, want per_playbook: []", b)
-	}
 }
 
 func TestDBRoundTrip(t *testing.T) {
@@ -221,22 +195,18 @@ func TestDBRoundTrip(t *testing.T) {
 		t.Errorf("HostRuns(h1) targets = %v, want home and other", targetsSeen)
 	}
 
-	stats, err := d.Stats(ctx)
-	if err != nil {
-		t.Fatalf("Stats() error: %v", err)
+	// All three saved runs remain visible through ListRuns, including the one
+	// in the other collection.
+	runs, err = d.ListRuns(ctx, 10)
+	if err != nil || len(runs) != 3 {
+		t.Fatalf("ListRuns() = %v, %v; want 3 saved runs", runs, err)
 	}
-	if stats.Hosts.Total != 4 || stats.Hosts.InInventory != 3 || stats.Hosts.Active != 2 || stats.Hosts.Disappeared != 1 {
-		t.Errorf("Stats().Hosts = %+v", stats.Hosts)
+	byPlaybook := map[string]int{}
+	for _, r := range runs {
+		byPlaybook[r.Target+"/"+r.Playbook]++
 	}
-	if stats.Runs.Total != 3 {
-		t.Errorf("Stats().Runs = %+v", stats.Runs)
-	}
-	perPB := map[string]int{}
-	for _, pb := range stats.PerPlaybook {
-		perPB[pb.Target+"/"+pb.Playbook] = pb.Total
-	}
-	if perPB["home/site.yml"] != 2 || perPB["other/site.yml"] != 1 {
-		t.Errorf("Stats().PerPlaybook = %v", perPB)
+	if byPlaybook["home/site.yml"] != 2 || byPlaybook["other/site.yml"] != 1 {
+		t.Errorf("runs by (target, playbook) = %v", byPlaybook)
 	}
 }
 

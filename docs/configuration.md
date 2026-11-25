@@ -27,8 +27,8 @@ Process-level settings for the master process.
 | `schedule` | `@every 15m` | Fallback for jobs without their own schedule in `strangle.yml`, in robfig/cron v3 format. Jobs wait for their first scheduled time; there is no startup run. |
 | `workers` | `1` | Worker child processes. Each owns one embedded Ansible interpreter, so this is the maximum number of concurrent playbook runs. |
 | `database.dsn` | — | PostgreSQL DSN. Required: run history, accounts, tokens, collection memberships and the River job queue all use this database. |
-| `auth.token` | — | When set, `POST /api/sync` (without a UI session) requires the token, either as `Authorization: Bearer <token>` or as the webhook-friendly `X-Strangle-Token: <token>` header. Independent of the UI authentication below. |
-| `auth.cli_token` | — | User API token (`st_…`) sent by the CLI subcommands on every versioned API call; a client-side setting the server ignores. Can be overridden with `--token`. |
+| `auth.token` | — | When set, the collection `hook` endpoint (without a UI session) requires the token, either as `Authorization: Bearer <token>` or as the webhook-friendly `X-Strangle-Token: <token>` header. This static token works only on `hook` and is independent of the UI authentication below. |
+| `auth.cli_token` | — | User API token (`st_…`) sent by the CLI subcommands on every API call; a client-side setting the server ignores. Tokens are scoped to one org/collection, so the configured token must match the collection the CLI reads. Can be overridden with `--token`. |
 | `sandbox.enabled` | `false` | Enables Landlock isolation: each collection gets dedicated workers, its checkout is read-only and Ansible writes go to a private scratch directory. |
 | `sandbox.read_only` | — | Extra absolute paths made readable to every sandboxed worker. |
 | `sandbox.writable` | — | Extra absolute paths a sandboxed worker may write to. Collection directories stay read-only. |
@@ -102,44 +102,48 @@ strangle-cli user remove admin
 ```
 
 Passwords are hashed with argon2id and stored in the `PHC` format. With
-authentication on, every `/api/*` request needs a valid session cookie
-(12 h, in memory), except `GET /api/health`, `POST /api/login`,
-`POST /api/logout` and `GET /api/me`; see [the API reference](api.md#authentication).
+authentication on, every `/api/v1` request needs a valid session cookie
+(12 h, in memory), except `GET /api/v1/health`, `POST /api/v1/login`,
+`POST /api/v1/logout`, `GET /api/v1/me`, `/api/v1/openapi.json` and `/api/docs`;
+see [the API reference](api.md#authentication).
 
 ## API tokens
 
 A local account can create **API tokens**: bearer credentials that
-authenticate any `/api/*` request as that account, for CLIs, webhooks and
-other integrations. They are managed per user in the web UI (under
-*Tokens*) or with the `token` command group:
+authenticate as that account on one org/collection pair, for CLIs, webhooks
+and other integrations. A token presented on another pair is rejected. They
+are managed per user in the web UI (under *Tokens*, for the selected
+org/collection) or with the `token` command group:
 
 ```sh
-strangle-cli token create ci --user admin --ttl 72h   # prints the raw value once
-strangle-cli token list [--user admin]                # all users' tokens without --user
-strangle-cli token remove ci --user admin
+strangle-cli token create ci --user admin --org lab --collection edge --ttl 72h  # prints the raw value once
+strangle-cli token list [--user admin] [--org lab] [--collection edge]
+strangle-cli token remove ci --user admin [--org lab] [--collection edge]
 ```
 
-As with users, the command group reads the DSN from `-s` (the server.yml), so
-that file must set `database.dsn`.
+`create` requires `--user`, `--org` and `--collection`; `list` and `remove`
+accept optional `--org`/`--collection` filters, and an omitted filter matches
+all orgs/collections. As with users, the command group reads the DSN from `-s`
+(the server.yml), so that file must set `database.dsn`.
 
 - A token is `st_` plus 32 random bytes in hex (`st_` + 64 hex chars).
   Only its SHA-256 digest is stored; the raw value is printed once at
   creation and can never be recovered.
-- Names are unique per user. A token's lifetime is optional
+- Names are unique per user/scope. A token's lifetime is optional
   (`--ttl`, e.g. `72h`; absent = no expiry).
 - Use a token by sending `Authorization: Bearer st_…` or
-  `X-Strangle-Token: st_…`. It acts as the owning user: with
-  authentication on it satisfies the session requirement on every
-  `/api/*` endpoint, and it also opens `POST /api/sync` without a session.
+  `X-Strangle-Token: st_…`. It acts as the owning user on its own
+  org/collection, including the collection's `hook` route without a session.
 - The static `auth.token` (see the table above) is a separate mechanism:
-  it only opens `POST /api/sync` and is not a user account.
+  it only opens the collection `hook` route and is not a user account.
 - Put a generated token in `auth.cli_token` in server.yml to use the CLI
-  commands (`strangle-cli run`, `runs`, `hosts`, `host`, `hostkeys`) against an
-  authenticated server. `--token` overrides it.
+  commands (`strangle-cli hosts`, `host`, `hostkeys`) against an
+  authenticated server. The token's org/collection must match the collection
+  being queried; `--token` overrides the configured value.
 
-See [the API reference](api.md#api-tokens-self-service) for the
-self-service endpoints and [the CLI section](../README.md#cli-client) for
-the commands.
+See [the API reference](api.md#collection-resources) for the
+collection-scoped token endpoints and [the CLI section](../README.md#cli-client)
+for the commands.
 
 ## collection.yml
 
@@ -159,7 +163,7 @@ collections:
 - Relative `path` values resolve against the collection.yml directory.
 - A `git` block makes the target **git-backed**: strangle clones the
   repository into `path` and keeps it pinned to the tracked ref on startup
-  and on every `POST /api/sync`. See
+  and on every collection `hook` call. See
   [git-backed collections](git-collections.md).
 
 ### Per-collection retention
@@ -257,7 +261,7 @@ top-level `schedule` in `strangle.yml`, then `server.yml`'s `schedule` (default
 `@every 15m`). The old `interval` key is no longer accepted.
 
 Every job waits for its first scheduled time after the master starts; there is
-no startup run. A git sync that changes a target's schedules is picked up by
+no startup run. A git hook that changes a target's schedules is picked up by
 the scheduler within about ten seconds.
 
 `schedule` accepts exactly what robfig/cron v3's `ParseStandard` accepts:
@@ -292,8 +296,8 @@ playbooks:
     inventory: inventories/{{ .Branch }}.ini   # a different inventory per branch
 ```
 
-A branch switch (`POST /api/sync` with a `branch` field) re-renders these
-paths, so the effect is visible from the next run.
+A branch switch (a collection `hook` call with a `branch` field) re-renders
+these paths, so the effect is visible from the next run.
 
 ### Run options
 
@@ -313,10 +317,10 @@ scalars distinguish "unset" from false/0, so for example
 | `ssh` | Go-managed SSH transport (below); replaces/merges the top-level `ssh` block |
 
 Password files are used instead of interactive prompts, which an embedded
-interpreter cannot answer. `--diff` is always added by the applier. A
-collection-scoped run request may set `"check": true` to add `--check` for
-that single run; this is not a configuration option and scheduled runs never
-use it. `working_dir` is chdir'd into for the duration of each run, so
+interpreter cannot answer. `--diff` is always added by the applier. Dry runs
+(`--check`) are supported by the runner but are not a configuration option and
+scheduled runs never use them; there is no HTTP endpoint to start a run.
+`working_dir` is chdir'd into for the duration of each run, so
 `ansible.cfg`, relative paths and roles resolve relative to the project.
 
 ### The Go-managed SSH transport

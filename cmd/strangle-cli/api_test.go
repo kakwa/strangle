@@ -86,89 +86,39 @@ func appendArgs(base []string, extra ...string) []string {
 	return append(append([]string(nil), base...), extra...)
 }
 
-func TestRunCommandUsesScopedPath(t *testing.T) {
+func TestHostsCommandUsesScopedPath(t *testing.T) {
 	serverPath, collectionPath := apiTestConfigs(t)
 	server, requests := apiServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, `{"status":"queued","run_id":123,"playbook":"site","check":true}`)
+		_, _ = io.WriteString(w, `[{"name":"web1","ip":"10.0.0.1","last_status":"ok"}]`)
 	})
-	args := appendArgs(apiFlags(serverPath, collectionPath, server.URL), "run", "demo", "site", "--check")
 
-	out, err := executeAPICommand(t, args...)
+	out, err := executeAPICommand(t, appendArgs(apiFlags(serverPath, collectionPath, server.URL), "hosts", "demo")...)
 	if err != nil {
-		t.Fatalf("run: %v (output %q)", err, out)
+		t.Fatalf("hosts: %v (output %q)", err, out)
 	}
 	if len(*requests) != 1 {
 		t.Fatalf("requests = %d, want 1", len(*requests))
 	}
 	got := (*requests)[0]
-	if got.method != http.MethodPost || got.path != "/api/v1/orgs/lab/collections/demo/run" {
-		t.Errorf("request = %s %s, want POST canonical run path", got.method, got.path)
+	if got.method != http.MethodGet || got.path != "/api/v1/orgs/lab/collections/demo/hosts" {
+		t.Errorf("hosts request = %s %s, want GET canonical hosts path", got.method, got.path)
 	}
 	if got.auth != "Bearer st_testtoken" {
 		t.Errorf("Authorization = %q, want the cli token", got.auth)
 	}
-	var body map[string]any
-	if err := json.Unmarshal([]byte(got.body), &body); err != nil {
-		t.Fatalf("decode body %q: %v", got.body, err)
-	}
-	if body["target"] != "demo" || body["playbook"] != "site" || body["check"] != true {
-		t.Errorf("body = %v, want demo/site/check", body)
-	}
-	if want := "queued\t123\tlab/demo\tsite\ttrue\n"; out != want {
-		t.Errorf("output = %q, want %q", out, want)
-	}
-}
-
-func TestRunsAndHostsCommandsUseScopedPaths(t *testing.T) {
-	serverPath, collectionPath := apiTestConfigs(t)
-	server, requests := apiServer(t, func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/orgs/lab/collections/demo/runs":
-			_, _ = io.WriteString(w, `[{"id":9,"target":"demo","playbook":"site","state":"completed"}]`)
-		case "/api/v1/orgs/lab/collections/demo/hosts":
-			_, _ = io.WriteString(w, `[{"name":"web1","ip":"10.0.0.1","last_status":"ok"}]`)
-		default:
-			t.Errorf("unexpected path %s", r.URL.Path)
-			http.NotFound(w, r)
-		}
-	})
-
-	out, err := executeAPICommand(t, appendArgs(apiFlags(serverPath, collectionPath, server.URL),
-		"runs", "demo", "--playbook", "site", "--limit", "5", "--json")...)
-	if err != nil {
-		t.Fatalf("runs: %v (output %q)", err, out)
-	}
-	if !strings.Contains(out, `"playbook": "site"`) {
-		t.Errorf("runs JSON output = %q", out)
-	}
-	got := (*requests)[0]
-	if got.method != http.MethodGet || got.path != "/api/v1/orgs/lab/collections/demo/runs?limit=5&playbook=site" {
-		t.Errorf("runs request = %s %s", got.method, got.path)
-	}
-
-	out, err = executeAPICommand(t, appendArgs(apiFlags(serverPath, collectionPath, server.URL), "hosts", "demo")...)
-	if err != nil {
-		t.Fatalf("hosts: %v (output %q)", err, out)
-	}
 	if want := "web1\t10.0.0.1\tok\t\t\t\t\n"; out != want {
 		t.Errorf("hosts output = %q, want %q", out, want)
 	}
-	got = (*requests)[1]
-	if got.path != "/api/v1/orgs/lab/collections/demo/hosts" {
-		t.Errorf("hosts request path = %s", got.path)
-	}
 }
 
-func TestHostCommandCombinesScopedRoutes(t *testing.T) {
+func TestHostCommandUsesPlaybookScopedRuns(t *testing.T) {
 	serverPath, collectionPath := apiTestConfigs(t)
 	server, requests := apiServer(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/orgs/lab/collections/demo/hosts":
 			_, _ = io.WriteString(w, `[{"name":"web1","ip":"10.0.0.1","last_status":"ok"}]`)
-		case "/api/v1/orgs/lab/collections/demo/hosts/web1/runs":
+		case "/api/v1/orgs/lab/collections/demo/playbooks/site/hosts/web1/runs":
 			_, _ = io.WriteString(w, `[{"id":7,"playbook":"site","success":true}]`)
-		case "/api/v1/orgs/lab/collections/demo/hosts/web1/changes":
-			_, _ = io.WriteString(w, `[{"task":"install","status":"changed"}]`)
 		default:
 			t.Errorf("unexpected path %s", r.URL.Path)
 			http.NotFound(w, r)
@@ -176,84 +126,171 @@ func TestHostCommandCombinesScopedRoutes(t *testing.T) {
 	})
 
 	out, err := executeAPICommand(t, appendArgs(apiFlags(serverPath, collectionPath, server.URL),
-		"host", "web1", "demo")...)
+		"host", "web1", "demo", "--playbook", "site", "--limit", "5")...)
 	if err != nil {
 		t.Fatalf("host: %v (output %q)", err, out)
 	}
-	if len(*requests) != 3 {
-		t.Fatalf("requests = %d, want 3", len(*requests))
-	}
-	paths := []string{(*requests)[0].path, (*requests)[1].path, (*requests)[2].path}
-	want := []string{
-		"/api/v1/orgs/lab/collections/demo/hosts",
-		"/api/v1/orgs/lab/collections/demo/hosts/web1/runs",
-		"/api/v1/orgs/lab/collections/demo/hosts/web1/changes",
-	}
-	for i := range want {
-		if paths[i] != want[i] {
-			t.Errorf("request %d path = %s, want %s", i, paths[i], want[i])
-		}
-	}
-	for _, line := range []string{"host\tweb1\t10.0.0.1\tok\t\t\n", "run\t7\t\tsite\ttrue\t\n", "change\tinstall\tchanged\t\t\n"} {
-		if !strings.Contains(out, line) {
-			t.Errorf("output %q does not contain %q", out, line)
-		}
-	}
-}
-
-func TestHostkeysCommandsUseScopedPaths(t *testing.T) {
-	serverPath, collectionPath := apiTestConfigs(t)
-	server, requests := apiServer(t, func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/orgs/lab/collections/demo/hostkeys":
-			_, _ = io.WriteString(w, `[{"target":"demo/site","host":"web1","fingerprint":"SHA256:abc","status":"pending"}]`)
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/hostkeys/accept"):
-			_, _ = io.WriteString(w, `{"status":"accepted","host":"web1"}`)
-		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/hostkeys/reject"):
-			_, _ = io.WriteString(w, `{"status":"rejected","host":"web1"}`)
-		default:
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
-			http.NotFound(w, r)
-		}
-	})
-	flags := apiFlags(serverPath, collectionPath, server.URL)
-
-	if out, err := executeAPICommand(t, appendArgs(flags, "hostkeys", "list", "demo")...); err != nil {
-		t.Fatalf("list: %v (output %q)", err, out)
-	}
-	if out, err := executeAPICommand(t, appendArgs(flags, "hostkeys", "accept", "demo/site", "web1", "SHA256:abc")...); err != nil {
-		t.Fatalf("accept: %v (output %q)", err, out)
-	}
-	if out, err := executeAPICommand(t, appendArgs(flags, "hostkeys", "reject", "demo/site", "web1")...); err != nil {
-		t.Fatalf("reject: %v (output %q)", err, out)
-	}
-
-	if len(*requests) != 3 {
-		t.Fatalf("requests = %d, want 3", len(*requests))
+	if len(*requests) != 2 {
+		t.Fatalf("requests = %d, want 2 (no changes endpoint)", len(*requests))
 	}
 	wantPaths := []string{
-		"/api/v1/orgs/lab/collections/demo/hostkeys",
-		"/api/v1/orgs/lab/collections/demo/hostkeys/accept",
-		"/api/v1/orgs/lab/collections/demo/hostkeys/reject",
+		"/api/v1/orgs/lab/collections/demo/hosts",
+		"/api/v1/orgs/lab/collections/demo/playbooks/site/hosts/web1/runs?limit=5",
 	}
 	for i, want := range wantPaths {
+		if (*requests)[i].method != http.MethodGet {
+			t.Errorf("request %d method = %s, want GET", i, (*requests)[i].method)
+		}
 		if (*requests)[i].path != want {
 			t.Errorf("request %d path = %s, want %s", i, (*requests)[i].path, want)
 		}
 	}
-	var acceptBody map[string]any
-	if err := json.Unmarshal([]byte((*requests)[1].body), &acceptBody); err != nil {
-		t.Fatalf("decode accept body: %v", err)
+	for _, line := range []string{"host\tweb1\t10.0.0.1\tok\t\t\n", "run\t7\t\tsite\ttrue\t\n"} {
+		if !strings.Contains(out, line) {
+			t.Errorf("output %q does not contain %q", out, line)
+		}
 	}
-	if acceptBody["target"] != "demo/site" || acceptBody["host"] != "web1" || acceptBody["fingerprint"] != "SHA256:abc" {
-		t.Errorf("accept body = %v", acceptBody)
+	if strings.Contains(out, "change\t") {
+		t.Errorf("output %q still contains changes", out)
 	}
-	var rejectBody map[string]any
-	if err := json.Unmarshal([]byte((*requests)[2].body), &rejectBody); err != nil {
-		t.Fatalf("decode reject body: %v", err)
+}
+
+func TestHostCommandRequiresPlaybook(t *testing.T) {
+	serverPath, collectionPath := apiTestConfigs(t)
+	_, err := executeAPICommand(t, appendArgs(apiFlags(serverPath, collectionPath, "http://127.0.0.1:1"),
+		"host", "web1", "demo")...)
+	if err == nil || !strings.Contains(err.Error(), "playbook") {
+		t.Errorf("host without --playbook: err = %v, want a playbook error", err)
 	}
-	if _, ok := rejectBody["fingerprint"]; ok {
-		t.Errorf("reject body has an unexpected fingerprint: %v", rejectBody)
+}
+
+func TestHostCommandOrgOverrideSkipsCollectionLookup(t *testing.T) {
+	serverPath, _ := apiTestConfigs(t)
+	server, requests := apiServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/hosts") {
+			_, _ = io.WriteString(w, `[{"name":"web1"}]`)
+			return
+		}
+		_, _ = io.WriteString(w, `[]`)
+	})
+
+	out, err := executeAPICommand(t, appendArgs(apiFlags(serverPath, filepath.Join(t.TempDir(), "missing.yml"), server.URL),
+		"host", "web1", "demo", "--org", "other", "--playbook", "site")...)
+	if err != nil {
+		t.Fatalf("host with --org: %v (output %q)", err, out)
+	}
+	if got := (*requests)[0].path; got != "/api/v1/orgs/other/collections/demo/hosts" {
+		t.Errorf("first request path = %s, want the --org override", got)
+	}
+	if got := (*requests)[1].path; got != "/api/v1/orgs/other/collections/demo/playbooks/site/hosts/web1/runs" {
+		t.Errorf("second request path = %s, want the --org override", got)
+	}
+}
+
+func TestRunCommandsAreRemoved(t *testing.T) {
+	for _, name := range []string{"run", "runs"} {
+		if _, err := executeAPICommand(t, name); err == nil || !strings.Contains(err.Error(), "unknown command") {
+			t.Errorf("%s: err = %v, want an unknown command error", name, err)
+		}
+	}
+}
+
+func TestHostkeysListUsesPlaybookScopedPath(t *testing.T) {
+	serverPath, collectionPath := apiTestConfigs(t)
+	server, requests := apiServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/orgs/lab/collections/demo/playbooks/site/hosts/web1/hostkeys" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, `[{"target":"demo/site","host":"web1","fingerprint":"SHA256:abc","status":"pending"}]`)
+	})
+	flags := apiFlags(serverPath, collectionPath, server.URL)
+
+	out, err := executeAPICommand(t, appendArgs(flags, "hostkeys", "list", "demo", "web1", "--playbook", "site")...)
+	if err != nil {
+		t.Fatalf("hostkeys list: %v (output %q)", err, out)
+	}
+	if want := "demo/site\tweb1\tSHA256:abc\tpending\t\n"; out != want {
+		t.Errorf("list output = %q, want %q", out, want)
+	}
+	if out, err := executeAPICommand(t, appendArgs(flags, "hostkeys", "list", "demo", "--playbook", "site", "--host", "web1")...); err != nil {
+		t.Fatalf("hostkeys list with --host: %v (output %q)", err, out)
+	}
+	for i, request := range *requests {
+		if request.method != http.MethodGet {
+			t.Errorf("request %d method = %s, want GET", i, request.method)
+		}
+		if request.path != "/api/v1/orgs/lab/collections/demo/playbooks/site/hosts/web1/hostkeys" {
+			t.Errorf("request %d path = %s", i, request.path)
+		}
+	}
+}
+
+type patchOp struct {
+	Op    string `json:"op"`
+	Path  string `json:"path"`
+	Value any    `json:"value"`
+}
+
+func TestHostkeysApproveRejectUseJSONPatch(t *testing.T) {
+	serverPath, collectionPath := apiTestConfigs(t)
+	server, requests := apiServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			t.Errorf("method = %s, want PATCH", r.Method)
+		}
+		if r.URL.Path != "/api/v1/orgs/lab/collections/demo/playbooks/site/hosts/web1" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"host":"web1"}`)
+	})
+	flags := apiFlags(serverPath, collectionPath, server.URL)
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"approve", []string{"hostkeys", "approve", "demo/site", "web1", "SHA256:abc"}, "approved\tweb1\n"},
+		{"approve flag", []string{"hostkeys", "approve", "demo/site", "web1", "--fingerprint", "SHA256:abc"}, "approved\tweb1\n"},
+		{"reject", []string{"hostkeys", "reject", "demo", "web1", "--playbook", "site"}, "rejected\tweb1\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := executeAPICommand(t, appendArgs(flags, tc.args...)...)
+			if err != nil {
+				t.Fatalf("%s: %v (output %q)", tc.name, err, out)
+			}
+			if out != tc.want {
+				t.Errorf("output = %q, want %q", out, tc.want)
+			}
+		})
+	}
+
+	if len(*requests) != 3 {
+		t.Fatalf("requests = %d, want 3", len(*requests))
+	}
+	for i, request := range *requests {
+		if request.method != http.MethodPatch || request.path != "/api/v1/orgs/lab/collections/demo/playbooks/site/hosts/web1" {
+			t.Errorf("request %d = %s %s", i, request.method, request.path)
+		}
+	}
+	for _, i := range []int{0, 1} {
+		var approveOps []patchOp
+		if err := json.Unmarshal([]byte((*requests)[i].body), &approveOps); err != nil {
+			t.Fatalf("decode approve patch %q: %v", (*requests)[i].body, err)
+		}
+		if len(approveOps) != 2 ||
+			approveOps[0].Op != "replace" || approveOps[0].Path != "/status" || approveOps[0].Value != "approved" ||
+			approveOps[1].Op != "replace" || approveOps[1].Path != "/fingerprint" || approveOps[1].Value != "SHA256:abc" {
+			t.Errorf("approve patch = %v", approveOps)
+		}
+	}
+	var rejectOps []patchOp
+	if err := json.Unmarshal([]byte((*requests)[2].body), &rejectOps); err != nil {
+		t.Fatalf("decode reject patch %q: %v", (*requests)[2].body, err)
+	}
+	if len(rejectOps) != 1 || rejectOps[0].Op != "replace" || rejectOps[0].Path != "/status" || rejectOps[0].Value != "rejected" {
+		t.Errorf("reject patch = %v", rejectOps)
 	}
 }
 
@@ -264,29 +301,12 @@ func TestAPICommandReportsHTTPErrors(t *testing.T) {
 		_, _ = io.WriteString(w, `{"error":"boom"}`)
 	})
 
-	_, err := executeAPICommand(t, appendArgs(apiFlags(serverPath, collectionPath, server.URL),
-		"run", "demo", "site")...)
+	_, err := executeAPICommand(t, appendArgs(apiFlags(serverPath, collectionPath, server.URL), "hosts", "demo")...)
 	if err == nil {
-		t.Fatal("run succeeded, want an API error")
+		t.Fatal("hosts succeeded, want an API error")
 	}
-	if !strings.Contains(err.Error(), "boom") || !strings.Contains(err.Error(), "/api/v1/orgs/lab/collections/demo/run") {
+	if !strings.Contains(err.Error(), "boom") || !strings.Contains(err.Error(), "/api/v1/orgs/lab/collections/demo/hosts") {
 		t.Errorf("error = %q, want the API message and scoped path", err)
-	}
-}
-
-func TestAPICommandOrgOverrideSkipsCollectionLookup(t *testing.T) {
-	serverPath, _ := apiTestConfigs(t)
-	server, requests := apiServer(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, `{"status":"queued","run_id":1,"playbook":"site"}`)
-	})
-
-	out, err := executeAPICommand(t, appendArgs(apiFlags(serverPath, filepath.Join(t.TempDir(), "missing.yml"), server.URL),
-		"run", "demo", "site", "--org", "other")...)
-	if err != nil {
-		t.Fatalf("run with --org: %v (output %q)", err, out)
-	}
-	if got := (*requests)[0].path; got != "/api/v1/orgs/other/collections/demo/run" {
-		t.Errorf("request path = %s, want the --org override", got)
 	}
 }
 
@@ -312,8 +332,9 @@ func configForAddr(addr string) cfg.ServerConfig {
 }
 
 func TestScopePathEscapesSegments(t *testing.T) {
-	got := scopePath(apiScope{org: "my org", collection: "demo"}, "hosts", "web 1", "runs")
-	want := "/api/v1/orgs/my%20org/collections/demo/hosts/web%201/runs"
+	got := scopePath(apiScope{org: "my org", collection: "demo"},
+		"playbooks", "site", "hosts", "web 1", "runs")
+	want := "/api/v1/orgs/my%20org/collections/demo/playbooks/site/hosts/web%201/runs"
 	if got != want {
 		t.Errorf("scopePath = %q, want %q", got, want)
 	}

@@ -25,8 +25,8 @@ func main() {
 		// The error is printed by main; keep cobra from printing it too.
 		SilenceErrors: true,
 		SilenceUsage:  true,
-		Long: "strangle-cli is the client tool for strangle. The run, runs, hosts, " +
-			"host and hostkeys commands talk to a server through its versioned " +
+		Long: "strangle-cli is the client tool for strangle. The hosts, host " +
+			"and hostkeys commands talk to a server through its versioned " +
 			"HTTP API. The user, token and collection commands provision data " +
 			"directly in the server's database; run them where the database is " +
 			"reachable. To start a server, use strangle-server serve.",
@@ -179,20 +179,29 @@ func tokenCmd() *cobra.Command {
 		"config/server.yml", "path to the server configuration file")
 
 	var user string
+	var org string
+	var collection string
 	var ttl time.Duration
 
 	create := &cobra.Command{
 		Use:   "create <name>",
-		Short: "Create an API token for a user; the raw value is shown exactly once.",
+		Short: "Create an API token scoped to an org and collection; the raw value is shown exactly once.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if user == "" {
+				return errors.New("provide the owning user with --user")
+			}
+			if org == "" {
+				return errors.New("provide the org with --org")
+			}
+			if collection == "" {
+				return errors.New("provide the collection with --collection")
+			}
 			users, tokens, err := openTokenStores(serverConfigPath)
 			if err != nil {
 				return err
 			}
-			if user == "" {
-				return errors.New("provide the owning user with --user")
-			}
+			defer func() { _ = tokens.Close() }()
 			ctx := context.Background()
 			if _, err := users.GetUser(ctx, user); err != nil {
 				if errors.Is(err, auth.ErrNotFound) {
@@ -200,98 +209,104 @@ func tokenCmd() *cobra.Command {
 				}
 				return err
 			}
-			raw, tok, err := tokens.Create(ctx, user, args[0], ttl)
+			raw, tok, err := tokens.Create(ctx, user, org, collection, args[0], ttl)
 			if err != nil {
 				return err
 			}
 			// The raw value goes to stdout (so it can be captured with
 			// $()); everything else goes to stderr.
-			fmt.Println(raw)
+			fmt.Fprintln(cmd.OutOrStdout(), raw)
 			expiry := "never expires"
 			if tok.Expires != nil {
 				expiry = "expires " + tok.Expires.Format("2006-01-02 15:04:05")
 			}
-			fmt.Fprintf(cmd.ErrOrStderr(), "created token %q for user %s (%s)\n", tok.Name, user, expiry)
+			fmt.Fprintf(cmd.ErrOrStderr(), "created token %q for user %s in %s/%s (%s)\n",
+				tok.Name, user, org, collection, expiry)
 			return nil
 		},
 	}
 	create.Flags().StringVar(&user, "user", "", "the user the token belongs to (required)")
+	create.Flags().StringVar(&org, "org", "", "the org the token is scoped to (required)")
+	create.Flags().StringVar(&collection, "collection", "", "the collection the token is scoped to (required)")
 	create.Flags().DurationVar(&ttl, "ttl", 0, "token lifetime (e.g. 72h); 0 means no expiry")
 
 	list := &cobra.Command{
 		Use:   "list",
-		Short: "List API tokens, for one user (--user) or for all users.",
+		Short: "List API tokens, optionally filtered by user, org and collection.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			users, tokens, err := openTokenStores(serverConfigPath)
 			if err != nil {
 				return err
 			}
+			defer func() { _ = tokens.Close() }()
 			ctx := context.Background()
-			owners := []string{}
-			switch {
-			case user != "":
+			owner := ""
+			if user != "" {
 				if _, err := users.GetUser(ctx, user); err != nil {
 					if errors.Is(err, auth.ErrNotFound) {
 						return fmt.Errorf("user %q not found", user)
 					}
 					return err
 				}
-				owners = []string{user}
-			default:
-				all, err := users.ListUsers(ctx)
-				if err != nil {
-					return err
-				}
-				for _, u := range all {
-					owners = append(owners, u.Name)
-				}
+				owner = user
 			}
-			for _, o := range owners {
-				toks, err := tokens.List(ctx, o)
-				if err != nil {
-					return err
+			toks, err := tokens.List(ctx, owner, org, collection)
+			if err != nil {
+				return err
+			}
+			for _, t := range toks {
+				expiry := "never expires"
+				if t.Expires != nil {
+					expiry = "expires " + t.Expires.Format("2006-01-02 15:04:05")
 				}
-				for _, t := range toks {
-					expiry := "never expires"
-					if t.Expires != nil {
-						expiry = "expires " + t.Expires.Format("2006-01-02 15:04:05")
-					}
-					last := "never used"
-					if t.LastUsedAt != nil {
-						last = "last used " + t.LastUsedAt.Format("2006-01-02 15:04:05")
-					}
-					fmt.Printf("%s\t%s\t%s\t%s\t%s\n", o, t.Name, t.Prefix, expiry, last)
+				last := "never used"
+				if t.LastUsedAt != nil {
+					last = "last used " + t.LastUsedAt.Format("2006-01-02 15:04:05")
 				}
+				name := t.Owner
+				if name == "" {
+					name = owner
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					name, t.Org, t.Collection, t.Name, t.Prefix, expiry, last)
 			}
 			return nil
 		},
 	}
 	list.Flags().StringVar(&user, "user", "", "only list this user's tokens")
+	list.Flags().StringVar(&org, "org", "", "only list tokens for this org")
+	list.Flags().StringVar(&collection, "collection", "", "only list tokens for this collection")
 
 	remove := &cobra.Command{
 		Use:   "remove <name>",
 		Short: "Revoke an API token.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if user == "" {
+				return errors.New("provide the owning user with --user")
+			}
+			if org == "" || collection == "" {
+				return errors.New("provide the token's scope with --org and --collection")
+			}
 			_, tokens, err := openTokenStores(serverConfigPath)
 			if err != nil {
 				return err
 			}
-			if user == "" {
-				return errors.New("provide the owning user with --user")
-			}
-			if err := tokens.Remove(context.Background(), user, args[0]); err != nil {
+			defer func() { _ = tokens.Close() }()
+			if err := tokens.Remove(context.Background(), user, org, collection, args[0]); err != nil {
 				if errors.Is(err, auth.ErrNotFound) {
-					return fmt.Errorf("token %q not found for user %q", args[0], user)
+					return fmt.Errorf("token %q not found for user %q in %s/%s", args[0], user, org, collection)
 				}
 				return err
 			}
-			fmt.Printf("removed token %q\n", args[0])
+			fmt.Fprintf(cmd.OutOrStdout(), "removed token %q\n", args[0])
 			return nil
 		},
 	}
 	remove.Flags().StringVar(&user, "user", "", "the user that owns the token (required)")
+	remove.Flags().StringVar(&org, "org", "", "the org the token is scoped to (required)")
+	remove.Flags().StringVar(&collection, "collection", "", "the collection the token is scoped to (required)")
 
 	cmd.AddCommand(create, list, remove)
 	return cmd

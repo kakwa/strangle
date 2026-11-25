@@ -1,18 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
+  IconActivity,
   IconBook,
-  IconCheck,
-  IconClock,
   IconFingerprint,
   IconKey,
   IconMoonStars,
-  IconPlayerPlay,
   IconSearch,
   IconServer,
   IconSun,
 } from '@tabler/icons-react'
 import {
-  Accordion,
   Alert,
   AppShell,
   Badge,
@@ -24,6 +21,7 @@ import {
   Group,
   Input,
   Loader,
+  NativeSelect,
   SimpleGrid,
   Stack,
   Table,
@@ -32,7 +30,7 @@ import {
   Title,
   UnstyledButton,
 } from '@mantine/core'
-import { useMantineColorScheme, useMantineTheme } from '@mantine/core'
+import { useMantineColorScheme } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import {
   Navigate,
@@ -41,19 +39,29 @@ import {
   useLocation,
   useNavigate,
   useParams,
+  useSearchParams,
 } from 'react-router-dom'
 import { DoubleNavbar } from './DoubleNavbar'
 import LoginScreen from './LoginScreen'
 import { createToken, fetchMe, fetchTokens, logout, removeToken } from './auth'
 
 const POLL_INTERVAL_MS = 10_000
+const V1 = '/api/v1'
 
-// SSH administration is collection-scoped: every read and decision uses the
-// versioned org/collection prefix. Org discovery is a common endpoint.
-const ORGS_PATH = '/api/v1/orgs'
+// The only API layout is the versioned, org/collection-scoped one. There are
+// no flat aliases and no global hosts/runs/stats/playbooks endpoints.
+function orgPath(org) {
+  return `${V1}/orgs/${encodeURIComponent(org)}`
+}
 
-function collectionAPI(org, collection, resource) {
-  return `/api/v1/orgs/${encodeURIComponent(org)}/collections/${encodeURIComponent(collection)}/${resource}`
+function collectionPath(org, collection, resource = '') {
+  const base = `${orgPath(org)}/collections/${encodeURIComponent(collection)}`
+  return resource ? `${base}/${resource}` : base
+}
+
+function playbookHostPath(org, collection, playbook, host, resource = '') {
+  const base = `${collectionPath(org, collection)}/playbooks/${encodeURIComponent(playbook)}/hosts/${encodeURIComponent(host)}`
+  return resource ? `${base}/${resource}` : base
 }
 
 // The API should always return arrays/objects, but older or partial responses
@@ -68,94 +76,37 @@ function asObject(value) {
     : {}
 }
 
-// SSH scopes are "<collection>/<playbook name>"; the first component is the
-// collection that owns the key and therefore the only one allowed to decide.
-function sshScopeCollection(scope) {
-  return String(scope || '').split('/')[0]
-}
-
-function normalizeStats(value) {
-  const s = asObject(value)
-  return {
-    hosts: {
-      total: 0,
-      in_inventory: 0,
-      active: 0,
-      disappeared: 0,
-      ...asObject(s.hosts),
-    },
-    runs: {
-      total: 0,
-      succeeded: 0,
-      failed: 0,
-      avg_duration_ms: undefined,
-      last_run_at: null,
-      ...asObject(s.runs),
-    },
-    per_playbook: asArray(s.per_playbook),
-  }
-}
-
-// Host records are scoped per (target, host) on the server, but the host view
-// shows one row per host name. Merge the per-target records of a host so a
-// host that appears in several targets (collections) is listed only once.
-function ts(t) {
-  return t ? new Date(t).getTime() : 0
-}
-
-function mergeHost(a, b) {
-  const primary = ts(b.last_run_at) > ts(a.last_run_at) ? b : a
-  const secondary = primary === a ? b : a
-  const later = (x, y) => (ts(y) > ts(x) ? y : x)
-  return {
-    ...primary,
-    ip: primary.ip || secondary.ip || '',
-    user: primary.user || secondary.user || '',
-    groups: [...new Set([...(primary.groups || []), ...(secondary.groups || [])])],
-    in_inventory: primary.in_inventory || secondary.in_inventory,
-    active: primary.active || secondary.active,
-    first_seen_at:
-      ts(secondary.first_seen_at) < ts(primary.first_seen_at)
-        ? secondary.first_seen_at
-        : primary.first_seen_at,
-    last_change_at: later(primary.last_change_at, secondary.last_change_at),
-    // The newer host record wins; fall back to the other target's facts when
-    // only one collection has gathered them for this host name.
-    facts: primary.facts || secondary.facts || null,
-  }
-}
-
 function normalizeHosts(value) {
   const byName = new Map()
   for (const h of asArray(value)) {
     if (!h?.name) continue
-    const cur = byName.get(h.name)
-    byName.set(h.name, cur ? mergeHost(cur, h) : h)
+    // Hosts are scoped to one collection now, but keep the last record of a
+    // duplicate name instead of rendering two identical rows.
+    byName.set(h.name, h)
   }
   return [...byName.values()]
 }
 
 function normalizePlaybooks(value) {
-  return Object.fromEntries(
-    Object.entries(asObject(value)).map(([target, pbs]) => [
-      target,
-      asArray(pbs).map((pb) => ({
-        name: pb?.name ?? '',
-        playbook: pb?.playbook ?? '',
-        inventory: pb?.inventory ?? '',
-        last_status: pb?.last_status ?? '',
-        last_run_at: pb?.last_run_at ?? null,
-      })),
-    ])
-  )
+  const list = Array.isArray(value)
+    ? value
+    : Object.values(asObject(value)).flatMap((pbs) => asArray(pbs))
+  return list.map((pb) => {
+    if (typeof pb === 'string') return { name: pb, playbook: '', inventory: '' }
+    return {
+      name: pb?.name ?? '',
+      playbook: pb?.playbook ?? '',
+      inventory: pb?.inventory ?? '',
+      last_status: pb?.last_status ?? '',
+      last_run_at: pb?.last_run_at ?? null,
+    }
+  })
 }
 
-function fmtDuration(ms) {
-  if (ms === undefined || ms === null) return '—'
-  if (ms < 1000) return `${ms}ms`
-  const s = Math.floor(ms / 1000)
-  if (s < 60) return `${s}s`
-  return `${Math.floor(s / 60)}m${s % 60}s`
+function playbookNames(detail) {
+  return asArray(detail?.playbooks).map((pb) =>
+    typeof pb === 'string' ? pb : pb?.name || pb?.playbook || '',
+  ).filter(Boolean)
 }
 
 function fmtTime(t) {
@@ -200,6 +151,9 @@ const STATUS_COLORS = {
   changed: 'blue',
   failed: 'red',
   unreachable: 'orange',
+  approved: 'green',
+  rejected: 'red',
+  pending: 'orange',
 }
 
 function StatusBadge({ status }) {
@@ -207,19 +161,6 @@ function StatusBadge({ status }) {
   return <Badge color={color} variant="light">{status || 'unknown'}</Badge>
 }
 
-// diffLineColor maps one line of a unified diff (ansible --diff) to a Mantine
-// theme color: hunk headers blue, added lines green, removed lines red, file
-// headers gray. Returns undefined for context lines.
-function diffLineColor(line, colors) {
-  if (line.startsWith('@@')) return colors.blue[7]
-  if (line.startsWith('+')) return line.startsWith('+++') ? colors.gray[5] : colors.green[7]
-  if (line.startsWith('-')) return line.startsWith('---') ? colors.gray[5] : colors.red[7]
-  if (line.startsWith('diff ') || line.startsWith('index ')) return colors.gray[5]
-  return undefined
-}
-
-// Code-block look for diff and error output: theme-aware background, border
-// and padding, with vertical and horizontal scrolling for long content.
 const CODE_BLOCK_STYLE = {
   flex: 1,
   minWidth: 0,
@@ -242,110 +183,112 @@ function formatFacts(facts) {
   }
 }
 
-function DiffBlock({ diff, error }) {
-  const { colors } = useMantineTheme()
-  if (!diff && !error) return null
-  const colorized = (text) => {
-    const lines = text.split('\n')
-    return lines.map((line, i) => (
-      <span key={i} style={{ color: diffLineColor(line, colors) }}>
-        {line}
-        {i < lines.length - 1 ? '\n' : ''}
-      </span>
-    ))
-  }
+// ScopePicker is shared by every collection-scoped screen. Both levels are
+// explicit: the org decides which collection list is offered, and the
+// collection is stored in the URL so a scope is bookmarkable.
+function ScopePicker({ orgs, org, collection, onChange, loading }) {
+  const collections = orgs.find((o) => o.name === org)?.collections || []
   return (
-    <Group gap={0} align="start" wrap="nowrap">
-      {diff && (
-        <div style={CODE_BLOCK_STYLE}>
-          <Text component="pre" size="xs" ff="monospace" style={{ margin: 0 }}>
-            {colorized(diff)}
-          </Text>
-        </div>
-      )}
-      {error && (
-        <div style={CODE_BLOCK_STYLE}>
-          <Text component="pre" size="xs" ff="monospace" c="red" style={{ margin: 0 }}>
-            {error}
-          </Text>
-        </div>
-      )}
-    </Group>
+    <Card withBorder>
+      <Group align="flex-end" gap="md" wrap="wrap">
+        <NativeSelect
+          label="Organization"
+          data={orgs.map((o) => o.name)}
+          value={org}
+          onChange={(event) => onChange(event.currentTarget.value, '')}
+          style={{ minWidth: 200 }}
+        />
+        <NativeSelect
+          label="Collection"
+          data={collections.map((c) => c.name)}
+          value={collection}
+          onChange={(event) => onChange(org, event.currentTarget.value)}
+          disabled={collections.length === 0}
+          style={{ minWidth: 200 }}
+        />
+        {loading && <Loader size="sm" aria-label="Loading collection" />}
+      </Group>
+    </Card>
   )
 }
 
-function Dashboard({ stats, runs, hosts, onHost, onRun }) {
-  const disappeared = hosts.filter((h) => !h.active && h.in_inventory)
+// The dashboard has no stats endpoint to call: every number is counted from
+// the collection detail plus that collection's hosts and playbooks lists.
+function Dashboard({ data }) {
+  const entries = data || []
+  const allHosts = entries.flatMap((e) => e.hosts || [])
+  const allPlaybooks = entries.flatMap((e) => e.playbooks || [])
+  const inInventory = allHosts.filter((h) => h.in_inventory).length
+  const active = allHosts.filter((h) => h.active).length
+  const disappeared = allHosts.filter((h) => !h.active && h.in_inventory).length
+  const failed = allPlaybooks.filter((pb) => pb.last_status === 'failed').length
+  const lastRuns = allPlaybooks.map((pb) => pb.last_run_at).filter(Boolean).sort()
+  const namesOf = (entry) => {
+    const fromDetail = playbookNames(entry.detail)
+    return fromDetail.length
+      ? fromDetail
+      : (entry.playbooks || []).map((pb) => pb.name).filter(Boolean)
+  }
+  const names = entries.flatMap(namesOf)
+
   return (
     <Stack gap="md">
       <div id="dash-overview">
         <SimpleGrid cols={{ base: 2, md: 4 }} gap="md">
-          <Stat label="Hosts" value={stats.hosts.total} icon={IconServer}>
+          <Stat label="Hosts" value={allHosts.length} icon={IconServer}>
             <Group gap="xs" mt="xs" wrap="wrap">
-              <Badge size="sm" variant="subtle">{stats.hosts.in_inventory} in inventory</Badge>
-              <Badge size="sm" color="green" variant="light">{stats.hosts.active} active</Badge>
-              {stats.hosts.disappeared > 0 && (
-                <Badge size="sm" color="orange" variant="light">{stats.hosts.disappeared} disappeared</Badge>
+              <Badge size="sm" variant="subtle">{inInventory} in inventory</Badge>
+              <Badge size="sm" color="green" variant="light">{active} active</Badge>
+              {disappeared > 0 && (
+                <Badge size="sm" color="orange" variant="light">{disappeared} disappeared</Badge>
               )}
             </Group>
           </Stat>
-          <Stat label="Runs" value={stats.runs.total} icon={IconPlayerPlay}>
-            <Group gap="xs" mt="xs" wrap="wrap">
-              <Badge size="sm" color="green" variant="light">{stats.runs.succeeded} succeeded</Badge>
-              <Badge size="sm" color="red" variant="light">{stats.runs.failed} failed</Badge>
-            </Group>
+          <Stat label="Playbooks" value={allPlaybooks.length} icon={IconBook}>
+            <Text size="xs" c="dimmed" mt="xs">{names.join(', ') || '—'}</Text>
           </Stat>
-          <Stat label="Avg duration" value={fmtDuration(stats.runs.avg_duration_ms)} icon={IconClock}>
-            <Text size="xs" c="dimmed" mt="xs">last run {fmtAgo(stats.runs.last_run_at)}</Text>
-          </Stat>
-          <Stat label="Playbooks" value={stats.per_playbook.length} icon={IconBook}>
+          <Stat label="Collections" value={entries.length} icon={IconServer}>
             <Text size="xs" c="dimmed" mt="xs">
-              {stats.per_playbook.map((p) => (p.playbook || '').split('/').pop()).join(', ') || '—'}
+              {[...new Set(entries.map((e) => e.org))].join(', ') || '—'}
+            </Text>
+          </Stat>
+          <Stat label="Failed playbooks" value={failed} icon={IconActivity}>
+            <Text size="xs" c="dimmed" mt="xs">
+              last run {fmtAgo(lastRuns[lastRuns.length - 1])}
             </Text>
           </Stat>
         </SimpleGrid>
       </div>
 
-      {disappeared.length > 0 && (
-        <Card withBorder>
-          <Title order={4} mb="sm">Disappeared hosts</Title>
-          <Group gap="sm" wrap="wrap">
-            {disappeared.map((h) => (
-              <Badge key={h.name} color="orange" variant="light" leftSection={<span>⚠</span>} onClick={() => onHost(h.name)}>
-                {h.name}
-              </Badge>
-            ))}
-          </Group>
-        </Card>
-      )}
-
-      <Card withBorder id="dash-runs">
-        <Title order={4} mb="sm">Recent runs</Title>
-        <RunsTable runs={runs} onRun={onRun} />
-      </Card>
-
-      <Card withBorder id="dash-playbooks">
-        <Title order={4} mb="sm">Per-playbook</Title>
+      <Card withBorder id="dash-collections">
+        <Title order={4} mb="sm">Collections</Title>
         <Table>
           <Table.Thead>
             <Table.Tr>
-              <Table.Th>Playbook</Table.Th>
-              <Table.Th>Runs</Table.Th>
-              <Table.Th>Failed</Table.Th>
-              <Table.Th>Last run</Table.Th>
+              <Table.Th>Organization</Table.Th>
+              <Table.Th>Collection</Table.Th>
+              <Table.Th>Hosts</Table.Th>
+              <Table.Th>Active</Table.Th>
+              <Table.Th>Playbooks</Table.Th>
+              <Table.Th>Configured playbooks</Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
-            {stats.per_playbook.map((p) => (
-              <Table.Tr key={`${p.target}/${p.playbook}`}>
-                <Table.Td>{p.playbook}</Table.Td>
-                <Table.Td>{p.total}</Table.Td>
-                <Table.Td>
-                  <Text component="span" c={p.failed > 0 ? 'red' : 'inherit'}>{p.failed}</Text>
-                </Table.Td>
-                <Table.Td>{fmtTime(p.last_run_at)}</Table.Td>
+            {entries.map((e) => (
+              <Table.Tr key={`${e.org}/${e.collection}`}>
+                <Table.Td>{e.org}</Table.Td>
+                <Table.Td>{e.collection}</Table.Td>
+                <Table.Td>{(e.hosts || []).length}</Table.Td>
+                <Table.Td>{(e.hosts || []).filter((h) => h.active).length}</Table.Td>
+                <Table.Td>{(e.playbooks || []).length}</Table.Td>
+                <Table.Td>{namesOf(e).join(', ') || '—'}</Table.Td>
               </Table.Tr>
             ))}
+            {entries.length === 0 && (
+              <Table.Tr>
+                <Table.Td colSpan={6}>No collections configured</Table.Td>
+              </Table.Tr>
+            )}
           </Table.Tbody>
         </Table>
       </Card>
@@ -353,60 +296,7 @@ function Dashboard({ stats, runs, hosts, onHost, onRun }) {
   )
 }
 
-function RunsTable({ runs, onRun }) {
-  return (
-    <Table>
-      <Table.Thead>
-        <Table.Tr>
-          <Table.Th>Run</Table.Th>
-          <Table.Th>Started</Table.Th>
-          <Table.Th>Duration</Table.Th>
-          <Table.Th>Result</Table.Th>
-          <Table.Th>Hosts</Table.Th>
-          <Table.Th>Changed</Table.Th>
-          <Table.Th>Failed</Table.Th>
-        </Table.Tr>
-      </Table.Thead>
-      <Table.Tbody>
-        {runs.map((r) => (
-          <Table.Tr key={r.id}>
-            <Table.Td>
-              <Group gap="xs" wrap="nowrap">
-                <Text size="xs" c="dimmed">#{r.id}</Text>
-                <UnstyledButton
-                  onClick={() => onRun(r.id)}
-                  title="View captured output"
-                  style={{ color: 'var(--mantine-color-blue-7)', textDecoration: 'underline' }}
-                >
-                  {r.playbook}
-                </UnstyledButton>
-              </Group>
-            </Table.Td>
-            <Table.Td>{fmtTime(r.started_at)}</Table.Td>
-            <Table.Td>{fmtDuration(r.duration_ms)}</Table.Td>
-            <Table.Td>
-              <Badge color={r.success ? 'green' : 'red'} variant="light">
-                {r.success ? 'ok' : `exit ${r.exit_code}`}
-              </Badge>
-            </Table.Td>
-            <Table.Td>{r.hosts}</Table.Td>
-            <Table.Td>{r.changed_hosts}</Table.Td>
-            <Table.Td>
-              <Text component="span" c={r.failed_hosts > 0 ? 'red' : 'inherit'}>{r.failed_hosts}</Text>
-            </Table.Td>
-          </Table.Tr>
-        ))}
-        {runs.length === 0 && (
-          <Table.Tr>
-            <Table.Td colSpan={7}>No runs recorded yet</Table.Td>
-          </Table.Tr>
-        )}
-      </Table.Tbody>
-    </Table>
-  )
-}
-
-function HostsTable({ hosts, onHost, filter, setFilter }) {
+function HostsTable({ hosts, onHost, filter, setFilter, loading }) {
   const [query, setQuery] = useState('')
   const needle = query.trim().toLowerCase()
   const visible = hosts.filter((h) => {
@@ -475,7 +365,9 @@ function HostsTable({ hosts, onHost, filter, setFilter }) {
           ))}
           {visible.length === 0 && (
             <Table.Tr>
-              <Table.Td colSpan={6}>No hosts</Table.Td>
+              <Table.Td colSpan={6}>
+                {loading ? 'Loading hosts…' : 'No hosts in this collection'}
+              </Table.Td>
             </Table.Tr>
           )}
         </Table.Tbody>
@@ -484,144 +376,115 @@ function HostsTable({ hosts, onHost, filter, setFilter }) {
   )
 }
 
-function PlaybooksView({ playbooks, onRun, pendingRuns, runError }) {
-  const entries = Object.entries(playbooks)
+function PlaybooksView({ playbooks, loading }) {
   return (
-    <Stack gap="md">
-      {runError && (
-        <Alert color="red" title="Run failed">
-          {runError}
-        </Alert>
-      )}
-      {entries.length === 0 && (
-        <Card withBorder>
-          <Text c="dimmed">No targets configured</Text>
-        </Card>
-      )}
-      {entries.map(([target, pbs]) => (
-        <Card withBorder key={target}>
-          <Title order={4} mb="sm">{target}</Title>
-          <Table>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>Playbook</Table.Th>
-                <Table.Th>Inventory</Table.Th>
-                <Table.Th>Status</Table.Th>
-                <Table.Th w={220}>Action</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {pbs.map((pb) => {
-                const key = `${target}:${pb.name}`
-                const pending = pendingRuns[key] !== undefined
-                const checkPending = pendingRuns[`${key}:check`] !== undefined
-                return (
-                  <Table.Tr key={key}>
-                    <Table.Td>
-                      <Group gap="xs" wrap="nowrap">
-                        <Text fw="semibold">{pb.name}</Text>
-                        {pb.playbook && pb.playbook !== pb.name && (
-                          <Text size="xs" c="dimmed" ff="monospace">{pb.playbook}</Text>
-                        )}
-                      </Group>
-                    </Table.Td>
-                    <Table.Td>
-                      <Text size="sm" ff="monospace">{pb.inventory || '—'}</Text>
-                    </Table.Td>
-                    <Table.Td>
-                      {pb.last_status ? (
-                        <Group gap="xs" wrap="nowrap">
-                          <StatusBadge status={pb.last_status} />
-                          <Text size="xs" c="dimmed">{fmtAgo(pb.last_run_at)}</Text>
-                        </Group>
-                      ) : (
-                        <Text size="xs" c="dimmed">never run</Text>
-                      )}
-                    </Table.Td>
-                    <Table.Td>
-                      <Group gap="xs" wrap="nowrap">
-                        <Button
-                          size="xs"
-                          variant="light"
-                          leftSection={pending ? <Loader size={12} /> : <IconPlayerPlay size={14} />}
-                          onClick={() => onRun(target, pb.name, false)}
-                          disabled={pending}
-                        >
-                          {pending ? 'Running…' : 'Run'}
-                        </Button>
-                        <Button
-                          size="xs"
-                          variant="subtle"
-                          color="gray"
-                          leftSection={checkPending ? <Loader size={12} /> : <IconCheck size={14} />}
-                          onClick={() => onRun(target, pb.name, true)}
-                          disabled={checkPending}
-                        >
-                          {checkPending ? 'Checking…' : 'Check'}
-                        </Button>
-                      </Group>
-                    </Table.Td>
-                  </Table.Tr>
-                )
-              })}
-              {pbs.length === 0 && (
-                <Table.Tr>
-                  <Table.Td colSpan={4}>No playbooks</Table.Td>
-                </Table.Tr>
-              )}
-            </Table.Tbody>
-          </Table>
-        </Card>
-      ))}
-    </Stack>
+    <Card withBorder>
+      <Title order={4} mb="sm">Playbooks</Title>
+      <Table>
+        <Table.Thead>
+          <Table.Tr>
+            <Table.Th>Playbook</Table.Th>
+            <Table.Th>Path</Table.Th>
+            <Table.Th>Inventory</Table.Th>
+            <Table.Th>Status</Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {playbooks.map((pb) => (
+            <Table.Tr key={pb.name}>
+              <Table.Td><Text fw="semibold">{pb.name}</Text></Table.Td>
+              <Table.Td>
+                <Text size="sm" ff="monospace">{pb.playbook || '—'}</Text>
+              </Table.Td>
+              <Table.Td>
+                <Text size="sm" ff="monospace">{pb.inventory || '—'}</Text>
+              </Table.Td>
+              <Table.Td>
+                {pb.last_status ? (
+                  <Group gap="xs" wrap="nowrap">
+                    <StatusBadge status={pb.last_status} />
+                    <Text size="xs" c="dimmed">{fmtAgo(pb.last_run_at)}</Text>
+                  </Group>
+                ) : (
+                  <Text size="xs" c="dimmed">never run</Text>
+                )}
+              </Table.Td>
+            </Table.Tr>
+          ))}
+          {playbooks.length === 0 && (
+            <Table.Tr>
+              <Table.Td colSpan={4}>
+                {loading ? 'Loading playbooks…' : 'No playbooks configured for this collection'}
+              </Table.Td>
+            </Table.Tr>
+          )}
+        </Table.Tbody>
+      </Table>
+    </Card>
   )
 }
 
-function HostDetail({ host, record, onBack }) {
+// HostDetail reads runs from the playbook-scoped host URL. The playbook is an
+// explicit selector because runs are no longer available through a global
+// host endpoint. Host task changes were removed from the API entirely.
+function HostDetail({ host, record, org, collection, playbooks, onBack }) {
+  const [playbook, setPlaybook] = useState('')
   const [runs, setRuns] = useState([])
-  const [changes, setChanges] = useState([])
-
-  const refresh = useCallback(async () => {
-    try {
-      const [runsRes, changesRes] = await Promise.all([
-        fetch(`/api/hosts/${encodeURIComponent(host)}/runs?limit=10`),
-        fetch(`/api/hosts/${encodeURIComponent(host)}/changes?limit=100`),
-      ])
-      if (!runsRes.ok || !changesRes.ok) {
-        throw new Error(`HTTP ${runsRes.status}/${changesRes.status}`)
-      }
-      setRuns(asArray(await runsRes.json()))
-      setChanges(asArray(await changesRes.json()))
-    } catch {
-      // ignore transient errors while polling
-    }
-  }, [host])
+  const [error, setError] = useState(null)
+  const options = playbooks.map((pb) => pb.name).filter(Boolean)
 
   useEffect(() => {
+    setPlaybook('')
+  }, [org, collection, host])
+
+  useEffect(() => {
+    if (!playbook && options.length > 0) setPlaybook(options[0])
+  }, [options, playbook])
+
+  useEffect(() => {
+    setRuns([])
+    setError(null)
+    if (!org || !collection || !playbook) return undefined
+    let active = true
+    const refresh = async () => {
+      try {
+        const res = await fetch(
+          playbookHostPath(org, collection, playbook, host, `runs?limit=10`),
+        )
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = asArray(await res.json())
+        if (active) {
+          setRuns(data)
+          setError(null)
+        }
+      } catch (err) {
+        if (active) setError(err.message)
+      }
+    }
     refresh()
     const id = setInterval(refresh, POLL_INTERVAL_MS)
-    return () => clearInterval(id)
-  }, [refresh])
+    return () => {
+      active = false
+      clearInterval(id)
+    }
+  }, [org, collection, playbook, host])
 
   const facts = formatFacts(record?.facts)
-
-  const info = (
-    <Group gap="sm" align="center">
-      <Text fw="bold">{host}</Text>
-      {runs[0] && (
-        <>
-          <StatusBadge status={runs[0].status} />
-          <Text size="xs" c="dimmed">last run {fmtAgo(runs[0].started_at)}</Text>
-        </>
-      )}
-    </Group>
-  )
 
   return (
     <Stack gap="md">
       <Card withBorder>
         <Group justify="space-between">
-          {info}
+          <Group gap="sm" align="center">
+            <Text fw="bold">{host}</Text>
+            <Text size="xs" c="dimmed">{org}/{collection}</Text>
+            {runs[0] && (
+              <>
+                <StatusBadge status={runs[0].status} />
+                <Text size="xs" c="dimmed">last run {fmtAgo(runs[0].started_at)}</Text>
+              </>
+            )}
+          </Group>
           <Text size="sm" c="dimmed" onClick={onBack} style={{ cursor: 'pointer' }}>
             ← back to hosts
           </Text>
@@ -640,12 +503,22 @@ function HostDetail({ host, record, onBack }) {
       )}
 
       <Card withBorder>
-        <Title order={4} mb="sm">Last {Math.max(runs.length, 1)} runs</Title>
+        <Group justify="space-between" mb="sm" wrap="wrap">
+          <Title order={4}>Playbook runs</Title>
+          <NativeSelect
+            aria-label="Playbook"
+            label="Playbook"
+            data={options}
+            value={playbook}
+            onChange={(event) => setPlaybook(event.currentTarget.value)}
+            style={{ minWidth: 220 }}
+          />
+        </Group>
+        {error && <Alert color="red" mb="sm" title="Could not load runs">{error}</Alert>}
         <Table>
           <Table.Thead>
             <Table.Tr>
               <Table.Th>Run</Table.Th>
-              <Table.Th>Playbook</Table.Th>
               <Table.Th>Started</Table.Th>
               <Table.Th>Status</Table.Th>
               <Table.Th>ok</Table.Th>
@@ -659,7 +532,6 @@ function HostDetail({ host, record, onBack }) {
             {runs.map((r) => (
               <Table.Tr key={r.run_id}>
                 <Table.Td>#{r.run_id}</Table.Td>
-                <Table.Td>{r.playbook}</Table.Td>
                 <Table.Td>{fmtTime(r.started_at)}</Table.Td>
                 <Table.Td><StatusBadge status={r.status} /></Table.Td>
                 <Table.Td>{r.ok}</Table.Td>
@@ -675,303 +547,92 @@ function HostDetail({ host, record, onBack }) {
             ))}
             {runs.length === 0 && (
               <Table.Tr>
-                <Table.Td colSpan={9}>No runs recorded for this host yet</Table.Td>
+                <Table.Td colSpan={8}>
+                  {options.length === 0
+                    ? 'No playbooks configured for this collection'
+                    : `No runs recorded for this host in ${playbook || 'this playbook'} yet`}
+                </Table.Td>
               </Table.Tr>
             )}
           </Table.Tbody>
         </Table>
       </Card>
-
-      <Card withBorder>
-        <Title order={4} mb="sm">Task changes</Title>
-        <Accordion>
-          {changes.map((c, i) => (
-            <Accordion.Item key={`${c.task}-${i}`} value={String(i)}>
-              <Accordion.Control>
-                <Group justify="space-between" wrap="nowrap" style={{ minWidth: 0 }}>
-                  <Text size="sm" truncate style={{ flex: 1, minWidth: 0 }}>{c.task}</Text>
-                  <Group gap="xs" flexShrink={0}>
-                    <Badge size="xs" color={STATUS_COLORS[c.status] || 'gray'} variant="light">{c.status}</Badge>
-                    <Text size="xs" c="dimmed">{fmtAgo(c.last_run_at)}</Text>
-                  </Group>
-                </Group>
-              </Accordion.Control>
-              <Accordion.Panel>
-                <Stack gap="xs">
-                  <Group gap="sm">
-                    <Text size="xs" c="dimmed">last run:</Text>
-                    <Text size="xs">{fmtTime(c.last_run_at)}</Text>
-                    {c.last_changed_at && (
-                      <>
-                        <Text size="xs" c="dimmed">last changed:</Text>
-                        <Text size="xs">{fmtTime(c.last_changed_at)}</Text>
-                      </>
-                    )}
-                  </Group>
-                  <DiffBlock diff={c.last_diff} error={c.last_error} />
-                </Stack>
-              </Accordion.Panel>
-            </Accordion.Item>
-          ))}
-          {changes.length === 0 && (
-            <Text size="sm" c="dimmed">No task changes recorded for this host yet</Text>
-          )}
-        </Accordion>
-      </Card>
     </Stack>
   )
 }
 
-// RunDetail shows one run's full captured output and its per-task history.
-// Both are deliberately absent from the polling list: they are fetched only
-// when this view is opened. Task history is collection-scoped, so the run's
-// collection is resolved through the org directory first.
-function RunDetail({ onBack }) {
-  const { id } = useParams()
-  const [run, setRun] = useState(null)
-  const [tasks, setTasks] = useState([])
-  const [error, setError] = useState(null)
-  const [org, setOrg] = useState(null)
-  const [canceling, setCanceling] = useState(false)
-  const [actionError, setActionError] = useState(null)
-
-  const reload = useCallback(async () => {
-    const res = await fetch(`/api/runs/${encodeURIComponent(id)}`)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const data = asObject(await res.json())
-    setRun(data)
-    return data
-  }, [id])
-
-  useEffect(() => {
-    let active = true
-    setRun(null)
-    setTasks([])
-    setError(null)
-    setOrg(null)
-    setActionError(null)
-    ;(async () => {
-      try {
-        const data = await reload()
-
-        let foundOrg = null
-        const orgsRes = await fetch(ORGS_PATH).catch(() => null)
-        if (orgsRes?.ok) {
-          for (const candidate of asArray(await orgsRes.json())) {
-            if (asArray(candidate?.collections).some((c) => c?.name === data.target)) {
-              foundOrg = candidate.name
-              break
-            }
-          }
-        }
-        let taskData = []
-        if (foundOrg) {
-          const taskRes = await fetch(collectionAPI(foundOrg, data.target, `runs/${encodeURIComponent(id)}/tasks`))
-          if (taskRes.ok) taskData = asArray(await taskRes.json())
-        }
-        if (active) {
-          setOrg(foundOrg)
-          setTasks(taskData)
-        }
-      } catch (err) {
-        if (active) setError(err.message)
-      }
-    })()
-    return () => { active = false }
-  }, [id, reload])
-
-  const activeRun = run && (run.state === 'queued' || run.state === 'running')
-
-  const cancelRun = async () => {
-    if (!org || !run) return
-    setCanceling(true)
-    setActionError(null)
-    try {
-      const res = await fetch(collectionAPI(org, run.target, `runs/${encodeURIComponent(id)}/cancel`), {
-        method: 'POST',
-      })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
-        throw new Error(body?.error || `HTTP ${res.status}`)
-      }
-      await reload()
-    } catch (err) {
-      setActionError(err.message)
-    } finally {
-      setCanceling(false)
-    }
-  }
-
-  return (
-    <Stack gap="md">
-      <Card withBorder>
-        <Group justify="space-between" wrap="nowrap">
-          <Group gap="sm" align="center">
-            <Text fw="bold">Run #{id}</Text>
-            {run && (
-              <Badge color={activeRun || run.state === 'cancelled' ? 'orange' : run.success ? 'green' : 'red'} variant="light">
-                {activeRun || run.state === 'cancelled'
-                  ? run.state
-                  : run.success ? 'ok' : `exit ${run.exit_code}`}
-              </Badge>
-            )}
-            {run?.check && <Badge color="blue" variant="light">check</Badge>}
-          </Group>
-          <Group gap="sm">
-            {activeRun && org && (
-              <Button color="red" variant="light" size="xs" loading={canceling} onClick={cancelRun}>
-                Cancel run
-              </Button>
-            )}
-            <Text size="sm" c="dimmed" onClick={onBack} style={{ cursor: 'pointer' }}>
-              ← back to dashboard
-            </Text>
-          </Group>
-        </Group>
-        {actionError && <Alert color="red" mt="md" title="Could not cancel the run">{actionError}</Alert>}
-        {run && (
-          <Group gap="lg" mt="md" wrap="wrap">
-            <Text size="sm"><Text component="span" c="dimmed">Collection:</Text> {run.target}</Text>
-            <Text size="sm"><Text component="span" c="dimmed">Playbook:</Text> {run.playbook}</Text>
-            <Text size="sm"><Text component="span" c="dimmed">Started:</Text> {fmtTime(run.started_at)}</Text>
-            <Text size="sm"><Text component="span" c="dimmed">Duration:</Text> {fmtDuration(run.duration_ms)}</Text>
-            <Text size="sm"><Text component="span" c="dimmed">Hosts:</Text> {run.hosts}</Text>
-            <Text size="sm"><Text component="span" c="dimmed">Changed:</Text> {run.changed_hosts}</Text>
-            <Text size="sm"><Text component="span" c="dimmed">Failed:</Text> {run.failed_hosts}</Text>
-          </Group>
-        )}
-      </Card>
-
-      {error && <Alert color="red" title="Could not load the run">{error}</Alert>}
-      {!error && !run && <Center py="xl"><Loader /></Center>}
-      {run && (
-        <Card withBorder>
-          <Title order={4} mb="sm">Captured output</Title>
-          <div style={{ ...CODE_BLOCK_STYLE, maxHeight: 600 }}>
-            <Text component="pre" size="xs" ff="monospace" style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
-              {run.output || 'No output captured for this run.'}
-            </Text>
-          </div>
-        </Card>
-      )}
-      {run && (
-        <Card withBorder>
-          <Title order={4} mb="sm">Task results</Title>
-          <Accordion>
-            {tasks.map((task, i) => (
-              <Accordion.Item key={`${task.host}-${task.task}-${i}`} value={String(i)}>
-                <Accordion.Control>
-                  <Group justify="space-between" wrap="nowrap" style={{ minWidth: 0 }}>
-                    <Text size="sm" truncate style={{ flex: 1, minWidth: 0 }}>
-                      {task.host}: {task.task}
-                    </Text>
-                    <Group gap="xs" flexShrink={0}>
-                      <StatusBadge status={task.status} />
-                      <Text size="xs" c="dimmed">{fmtAgo(task.finished_at)}</Text>
-                    </Group>
-                  </Group>
-                </Accordion.Control>
-                <Accordion.Panel>
-                  <DiffBlock diff={task.diff} error={task.error} />
-                </Accordion.Panel>
-              </Accordion.Item>
-            ))}
-            {tasks.length === 0 && (
-              <Text size="sm" c="dimmed">No per-task results recorded for this run.</Text>
-            )}
-          </Accordion>
-        </Card>
-      )}
-    </Stack>
-  )
-}
-
-// SSHView is the master-level SSH administration screen: keys offered by
-// workers (one SSH scope per target/playbook) and the pool counters of the
-// server process. A decision is sent to the versioned API and the list is
-// reloaded immediately, so a worker can offer the key again if it is rejected.
-function SSHView() {
+// SSHView targets one playbook/host inside one collection. Host keys are read
+// from the playbook/host URL and decisions are PATCH JSON-Patch documents;
+// the old collection-key list and accept/reject POSTs no longer exist.
+function SSHView({ org, collection, hosts, playbooks }) {
+  const [playbook, setPlaybook] = useState('')
+  const [host, setHost] = useState('')
   const [keys, setKeys] = useState([])
-  const [stats, setStats] = useState({})
-  const [orgsByCollection, setOrgsByCollection] = useState({})
   const [error, setError] = useState(null)
   const [actionError, setActionError] = useState(null)
   const [busy, setBusy] = useState(null)
 
-  const refresh = useCallback(async () => {
-    try {
-      const orgsRes = await fetch(ORGS_PATH)
-      if (!orgsRes.ok) throw new Error(`HTTP ${orgsRes.status}`)
-      const byCollection = {}
-      const targets = []
-      for (const org of asArray(await orgsRes.json())) {
-        for (const coll of asArray(org?.collections)) {
-          if (!coll?.name) continue
-          byCollection[coll.name] = org.name
-          targets.push([org.name, coll.name])
-        }
-      }
-      const responses = await Promise.all(
-        targets.flatMap(([org, coll]) => [
-          fetch(collectionAPI(org, coll, 'hostkeys')),
-          fetch(collectionAPI(org, coll, 'ssh/stats')),
-        ]),
-      )
-      const failed = responses.find((r) => !r.ok)
-      if (failed) throw new Error(`HTTP ${failed.status}`)
-
-      const allKeys = []
-      const allStats = {}
-      for (let i = 0; i < targets.length; i++) {
-        allKeys.push(...asArray(await responses[2 * i].json()))
-        Object.assign(allStats, asObject(await responses[2 * i + 1].json()))
-      }
-      setKeys(allKeys)
-      setStats(allStats)
-      setOrgsByCollection(byCollection)
-      setError(null)
-    } catch (err) {
-      setError(err.message)
-    }
-  }, [])
+  const playbookOptions = playbooks.map((pb) => pb.name).filter(Boolean)
+  const hostOptions = [...new Set(hosts.flatMap((h) => [h.ip, h.name]).filter(Boolean))]
 
   useEffect(() => {
+    if (!playbook && playbookOptions.length > 0) setPlaybook(playbookOptions[0])
+    if (!host && hostOptions.length > 0) setHost(hostOptions[0])
+  }, [playbookOptions, host, hostOptions, playbook])
+
+  useEffect(() => {
+    setKeys([])
+    setError(null)
+    if (!org || !collection || !playbook || !host) return undefined
+    let active = true
+    const refresh = async () => {
+      try {
+        const res = await fetch(playbookHostPath(org, collection, playbook, host, 'hostkeys'))
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = asArray(await res.json())
+        if (active) {
+          setKeys(data)
+          setError(null)
+        }
+      } catch (err) {
+        if (active) setError(err.message)
+      }
+    }
     refresh()
     const id = setInterval(refresh, POLL_INTERVAL_MS)
-    return () => clearInterval(id)
-  }, [refresh])
+    return () => {
+      active = false
+      clearInterval(id)
+    }
+  }, [org, collection, playbook, host])
 
-  const decide = async (kind, key) => {
-    const label = `${kind}|${key.target}|${key.host}`
+  const decide = async (status, key) => {
     setActionError(null)
-    setBusy(label)
+    setBusy(`${status}|${key.host}`)
     try {
-      // A key belongs to one collection; decisions must go through that
-      // collection's URL so membership checks and scoping apply.
-      const collection = sshScopeCollection(key.target)
-      const org = orgsByCollection[collection]
-      if (!org) throw new Error(`unknown collection ${collection} for ${key.host}`)
-      const body = kind === 'accept'
-        ? { target: key.target, host: key.host, fingerprint: key.fingerprint }
-        : { target: key.target, host: key.host }
-      const res = await fetch(collectionAPI(org, collection, `hostkeys/${kind}`), {
-        method: 'POST',
+      const patch = [{ op: 'replace', path: '/status', value: status }]
+      if (status === 'approved' && key.fingerprint) {
+        patch.push({ op: 'replace', path: '/fingerprint', value: key.fingerprint })
+      }
+      const res = await fetch(playbookHostPath(org, collection, playbook, host, 'hostkeys'), {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify(patch),
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
         throw new Error(data.error || `HTTP ${res.status}`)
       }
-      await refresh()
+      const updated = asObject(await res.json())
+      setKeys((prev) => prev.map((k) =>
+        k.host === updated.host ? { ...k, status: updated.status } : k,
+      ))
     } catch (err) {
       setActionError(err.message)
     } finally {
       setBusy(null)
     }
   }
-
-  const scopes = Object.entries(stats).sort((a, b) => a[0].localeCompare(b[0]))
 
   return (
     <Stack gap="md">
@@ -981,23 +642,44 @@ function SSHView() {
             <ThemeIcon variant="light" color="orange" size={32}>
               <IconFingerprint size={18} stroke={1.5} />
             </ThemeIcon>
-            <Title order={4}>Pending host keys</Title>
+            <Title order={4}>Host keys</Title>
             {keys.length > 0 && <Badge color="orange" variant="light">{keys.length}</Badge>}
           </Group>
-          <Text size="sm" c="dimmed" onClick={refresh} style={{ cursor: 'pointer' }}>
-            ↻ refresh
+          <Text size="xs" c="dimmed">
+            {org}/{collection}
           </Text>
+        </Group>
+        <Group align="flex-end" gap="md" mt="sm" wrap="wrap">
+          <NativeSelect
+            aria-label="SSH playbook"
+            label="Playbook"
+            data={playbookOptions}
+            value={playbook}
+            onChange={(event) => {
+              setPlaybook(event.currentTarget.value)
+              setHost('')
+            }}
+            style={{ minWidth: 220 }}
+          />
+          <NativeSelect
+            aria-label="SSH host"
+            label="Host"
+            data={hostOptions}
+            value={host}
+            onChange={(event) => setHost(event.currentTarget.value)}
+            style={{ minWidth: 220 }}
+          />
         </Group>
         <Text size="xs" c="dimmed" mt="xs">
           Unknown or changed SSH keys are held here until you approve or reject
-          them. The scope is the target/playbook the connection belongs to.
+          them for this playbook and host.
         </Text>
         {error && <Alert color="red" mt="sm" title="API unavailable">{error}</Alert>}
         {actionError && <Alert color="red" mt="sm" title="Could not update the host key">{actionError}</Alert>}
         <Table mt="sm">
           <Table.Thead>
             <Table.Tr>
-              <Table.Th>Scope</Table.Th>
+              <Table.Th>Playbook</Table.Th>
               <Table.Th>Host</Table.Th>
               <Table.Th>Fingerprint / key</Table.Th>
               <Table.Th>First seen</Table.Th>
@@ -1006,87 +688,53 @@ function SSHView() {
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
-            {keys.map((key) => {
-              const keyId = `${key.target}|${key.host}`
-              return (
-                <Table.Tr key={keyId}>
-                  <Table.Td><Code>{key.target}</Code></Table.Td>
-                  <Table.Td>{key.host}</Table.Td>
-                  <Table.Td>
-                    <Stack gap={2}>
-                      <Text size="xs" ff="monospace">{key.fingerprint}</Text>
-                      {key.public_key && (
-                        <Text size="xs" c="dimmed" ff="monospace" style={{ wordBreak: 'break-all' }}>
-                          {key.public_key.trim()}
-                        </Text>
-                      )}
-                    </Stack>
-                  </Table.Td>
-                  <Table.Td>{fmtTime(key.first_seen)}</Table.Td>
-                  <Table.Td>
-                    <Badge color={key.status === 'rejected' ? 'red' : 'orange'} variant="light">
-                      {key.status || 'pending'}
-                    </Badge>
-                  </Table.Td>
-                  <Table.Td>
-                    <Group gap="xs" wrap="nowrap">
-                      <Button
-                        size="xs"
-                        color="green"
-                        variant="light"
-                        loading={busy === `accept|${keyId}`}
-                        onClick={() => decide('accept', key)}
-                      >
-                        Approve
-                      </Button>
-                      <Button
-                        size="xs"
-                        color="red"
-                        variant="light"
-                        loading={busy === `reject|${keyId}`}
-                        onClick={() => decide('reject', key)}
-                      >
-                        Reject
-                      </Button>
-                    </Group>
-                  </Table.Td>
-                </Table.Tr>
-              )
-            })}
-            {keys.length === 0 && !error && (
-              <Table.Tr>
-                <Table.Td colSpan={6}>No pending host keys.</Table.Td>
-              </Table.Tr>
-            )}
-          </Table.Tbody>
-        </Table>
-      </Card>
-
-      <Card withBorder>
-        <Title order={4} mb="sm">SSH connection pools</Title>
-        <Text size="xs" c="dimmed" mb="sm">
-          Counters of the SSH managers serving this API; the actual playbook
-          connections live in the worker processes.
-        </Text>
-        <Table>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>Scope</Table.Th>
-              <Table.Th>Active connections</Table.Th>
-              <Table.Th>Total dials</Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {scopes.map(([scope, s]) => (
-              <Table.Tr key={scope}>
-                <Table.Td><Code>{scope}</Code></Table.Td>
-                <Table.Td>{s?.active_connections ?? 0}</Table.Td>
-                <Table.Td>{s?.total_dials ?? 0}</Table.Td>
+            {keys.map((key) => (
+              <Table.Tr key={`${key.playbook || playbook}|${key.host}`}>
+                <Table.Td><Code>{key.playbook || playbook}</Code></Table.Td>
+                <Table.Td>{key.host}</Table.Td>
+                <Table.Td>
+                  <Stack gap={2}>
+                    <Text size="xs" ff="monospace">{key.fingerprint}</Text>
+                    {key.public_key && (
+                      <Text size="xs" c="dimmed" ff="monospace" style={{ wordBreak: 'break-all' }}>
+                        {key.public_key.trim()}
+                      </Text>
+                    )}
+                  </Stack>
+                </Table.Td>
+                <Table.Td>{fmtTime(key.first_seen)}</Table.Td>
+                <Table.Td><StatusBadge status={key.status || 'pending'} /></Table.Td>
+                <Table.Td>
+                  <Group gap="xs" wrap="nowrap">
+                    <Button
+                      size="xs"
+                      color="green"
+                      variant="light"
+                      loading={busy === `approved|${key.host}`}
+                      onClick={() => decide('approved', key)}
+                    >
+                      Approve
+                    </Button>
+                    <Button
+                      size="xs"
+                      color="red"
+                      variant="light"
+                      loading={busy === `rejected|${key.host}`}
+                      onClick={() => decide('rejected', key)}
+                    >
+                      Reject
+                    </Button>
+                  </Group>
+                </Table.Td>
               </Table.Tr>
             ))}
-            {scopes.length === 0 && !error && (
+            {keys.length === 0 && !error && (
               <Table.Tr>
-                <Table.Td colSpan={3}>No SSH managers configured.</Table.Td>
+                <Table.Td colSpan={6}>
+                  {playbook && host
+                    ? 'No host keys recorded for this playbook and host.'
+                    : 'Select a playbook and a host to inspect their keys.'}
+                </Table.Td>
               </Table.Tr>
             )}
           </Table.Tbody>
@@ -1096,48 +744,29 @@ function SSHView() {
   )
 }
 
-function ColorSchemeToggle() {
-  const { colorScheme, toggleColorScheme } = useMantineColorScheme()
-  return (
-    <UnstyledButton
-      onClick={toggleColorScheme}
-      title={colorScheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-      aria-label="Toggle dark mode"
-    >
-      {colorScheme === 'dark' ? (
-        <IconSun size={18} stroke={1.5} />
-      ) : (
-        <IconMoonStars size={18} stroke={1.5} />
-      )}
-    </UnstyledButton>
-  )
-}
-
-// Maps a URL path to the (section, selected host) pair the shell renders.
-// Unknown paths fall back to the dashboard so a stale deep link never breaks
-// the app.
-// TokensView is the API-token self-service screen: it lists the signed-in
-// user's bearer tokens and lets them create and revoke new ones. The raw
-// value of a new token is shown exactly once, in a copyable alert.
-function TokensView() {
+// TokensView is collection-scoped: there is no global token list anymore.
+function TokensView({ org, collection }) {
   const [tokens, setTokens] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [name, setName] = useState('')
   const [ttlHours, setTtlHours] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
-  const [created, setCreated] = useState(null) // { raw, token } of the last creation
+  const [created, setCreated] = useState(null)
 
   const refresh = useCallback(async () => {
+    if (!org || !collection) return
     try {
-      setTokens(await fetchTokens())
+      setTokens(asArray(await fetchTokens(org, collection)))
       setLoadError(null)
     } catch (err) {
       setLoadError(err.message)
     }
-  }, [])
+  }, [org, collection])
 
   useEffect(() => {
+    setTokens(null)
+    setCreated(null)
     refresh()
   }, [refresh])
 
@@ -1148,8 +777,7 @@ function TokensView() {
     setBusy(true)
     setError(null)
     try {
-      const res = await createToken(trimmed, Number(ttlHours) || 0)
-      setCreated(res)
+      setCreated(await createToken(org, collection, trimmed, Number(ttlHours) || 0))
       setName('')
       setTtlHours('')
       await refresh()
@@ -1163,12 +791,20 @@ function TokensView() {
   const remove = async (t) => {
     setError(null)
     try {
-      await removeToken(t.name)
+      await removeToken(org, collection, t.name)
       if (created && created.token && created.token.name === t.name) setCreated(null)
       await refresh()
     } catch (err) {
       setError(err.message)
     }
+  }
+
+  if (!org || !collection) {
+    return (
+      <Alert color="gray" title="No collection selected">
+        Select an organization and a collection to manage its API tokens.
+      </Alert>
+    )
   }
 
   if (tokens === null && loadError) {
@@ -1184,14 +820,12 @@ function TokensView() {
       <Card withBorder>
         <Group justify="space-between" mb="xs">
           <Title order={4}>Your API tokens</Title>
-          <Text size="xs" c="dimmed">
-            for CLIs, webhooks and other integrations
-          </Text>
+          <Text size="xs" c="dimmed">{org}/{collection}</Text>
         </Group>
         <Text size="sm" c="dimmed" mb="md">
-          A token authenticates <Code>/api</Code> requests as your account.
-          Send it as <Code>Authorization: Bearer st_…</Code> or as an{' '}
-          <Code>X-Strangle-Token</Code> header.
+          A token authenticates <Code>/api/v1</Code> requests as your account
+          for this collection. Send it as <Code>Authorization: Bearer st_…</Code>
+          {' '}or as an <Code>X-Strangle-Token</Code> header.
         </Text>
         <form onSubmit={create}>
           <Group align="flex-end" gap="sm">
@@ -1272,9 +906,7 @@ function TokensView() {
             {(tokens || []).length === 0 && (
               <Table.Tr>
                 <Table.Td colSpan={6}>
-                  <Text size="sm" c="dimmed">
-                    No tokens yet — create one above.
-                  </Text>
+                  <Text size="sm" c="dimmed">No tokens yet — create one above.</Text>
                 </Table.Td>
               </Table.Tr>
             )}
@@ -1285,6 +917,159 @@ function TokensView() {
   )
 }
 
+// parseWorkerMetrics reads the Prometheus text exposition returned by
+// /metrics. Worker identity comes from the worker/collection labels of the
+// jobs and restarts series; the three workers states come from the summary
+// series. Lines that are not numbers or carry no labels are ignored.
+function parseWorkerMetrics(text) {
+  const summary = { total: 0, alive: 0, dead: 0 }
+  const byWorker = new Map()
+  for (const rawLine of String(text || '').split('\n')) {
+    const line = rawLine.trim()
+    if (!line || line.startsWith('#')) continue
+    const match = line.match(/^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{([^}]*)\})?\s+(\S+)$/)
+    if (!match) continue
+    const [, name, labelText, rawValue] = match
+    const value = Number(rawValue)
+    if (!Number.isFinite(value)) continue
+    const labels = {}
+    if (labelText) {
+      for (const label of labelText.matchAll(/([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*"((?:[^"\\]|\\.)*)"/g)) {
+        labels[label[1]] = label[2]
+      }
+    }
+    if (name === 'strangle_workers' && labels.state in summary) {
+      summary[labels.state] = value
+    } else if (name === 'strangle_worker_jobs' || name === 'strangle_worker_restarts_total') {
+      const id = labels.worker ?? ''
+      const key = `${id}|${labels.collection ?? ''}`
+      const row = byWorker.get(key) || {
+        worker: id,
+        collection: labels.collection ?? '',
+        jobs: 0,
+        restarts: 0,
+      }
+      if (name === 'strangle_worker_jobs') row.jobs = value
+      else row.restarts = value
+      byWorker.set(key, row)
+    }
+  }
+  return { summary, workers: [...byWorker.values()].sort((a, b) => a.worker.localeCompare(b.worker)) }
+}
+
+function Monitor() {
+  const [text, setText] = useState('')
+  const [error, setError] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch('/metrics')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setText(await res.text())
+      setError(null)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    refresh()
+    const id = setInterval(refresh, POLL_INTERVAL_MS)
+    return () => clearInterval(id)
+  }, [refresh])
+
+  const { summary, workers } = parseWorkerMetrics(text)
+  const empty = !loading && !error && summary.total === 0 && workers.length === 0
+
+  return (
+    <Stack gap="md">
+      <Card withBorder>
+        <Group justify="space-between" wrap="wrap">
+          <Group gap="sm">
+            <ThemeIcon variant="light" color="blue" size={32}>
+              <IconActivity size={18} stroke={1.5} />
+            </ThemeIcon>
+            <Title order={4}>Workers</Title>
+          </Group>
+          <Text size="xs" c="dimmed" onClick={refresh} style={{ cursor: 'pointer' }}>
+            ↻ refresh
+          </Text>
+        </Group>
+        <Text size="xs" c="dimmed" mt="xs">
+          Live pool state read from the Prometheus exposition at /metrics.
+        </Text>
+        {error && <Alert color="red" mt="sm" title="Metrics unavailable">{error}</Alert>}
+        {loading && !error && (
+          <Center py="lg"><Loader size="sm" /></Center>
+        )}
+        {!loading && !error && (
+          <SimpleGrid cols={{ base: 3, sm: 3 }} gap="md" mt="sm">
+            <Stat label="Total" value={summary.total} icon={IconServer} />
+            <Stat label="Alive" value={summary.alive} icon={IconActivity} />
+            <Stat label="Dead" value={summary.dead} icon={IconServer} />
+          </SimpleGrid>
+        )}
+      </Card>
+
+      <Card withBorder>
+        <Title order={4} mb="sm">Worker slots</Title>
+        <Table>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Worker</Table.Th>
+              <Table.Th>Collection</Table.Th>
+              <Table.Th>In-flight jobs</Table.Th>
+              <Table.Th>Restarts</Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {workers.map((w) => (
+              <Table.Tr key={`${w.worker}|${w.collection}`}>
+                <Table.Td>{w.worker}</Table.Td>
+                <Table.Td>{w.collection || '—'}</Table.Td>
+                <Table.Td>{w.jobs}</Table.Td>
+                <Table.Td>{w.restarts}</Table.Td>
+              </Table.Tr>
+            ))}
+            {empty && (
+              <Table.Tr>
+                <Table.Td colSpan={4}>No workers are registered.</Table.Td>
+              </Table.Tr>
+            )}
+            {workers.length === 0 && summary.total > 0 && (
+              <Table.Tr>
+                <Table.Td colSpan={4}>No per-worker metrics exported yet.</Table.Td>
+              </Table.Tr>
+            )}
+          </Table.Tbody>
+        </Table>
+      </Card>
+    </Stack>
+  )
+}
+
+function ColorSchemeToggle() {
+  const { colorScheme, toggleColorScheme } = useMantineColorScheme()
+  return (
+    <UnstyledButton
+      onClick={toggleColorScheme}
+      title={colorScheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+      aria-label="Toggle dark mode"
+    >
+      {colorScheme === 'dark' ? (
+        <IconSun size={18} stroke={1.5} />
+      ) : (
+        <IconMoonStars size={18} stroke={1.5} />
+      )}
+    </UnstyledButton>
+  )
+}
+
+// Maps a URL path to the section and (optionally) the selected host. Org and
+// collection are query parameters so every scoped screen is bookmarkable.
 function sectionFromPath(pathname) {
   const safeDecode = (s) => {
     try {
@@ -1297,19 +1082,19 @@ function sectionFromPath(pathname) {
   if (hostMatch) {
     return { section: 'Hosts', selectedHost: safeDecode(hostMatch[1]) }
   }
-  const runMatch = pathname.match(/^\/runs\/(\d+)$/)
-  if (runMatch) return { section: 'Dashboard', selectedRun: runMatch[1] }
   if (pathname === '/hosts') return { section: 'Hosts', selectedHost: null }
   if (pathname === '/playbooks') return { section: 'Playbooks', selectedHost: null }
   if (pathname === '/tokens') return { section: 'Tokens', selectedHost: null }
   if (pathname === '/ssh') return { section: 'SSH', selectedHost: null }
+  if (pathname === '/monitor') return { section: 'Monitor', selectedHost: null }
   return { section: 'Dashboard', selectedHost: null }
 }
 
-// Route element for /hosts/:host — checks the host against the normalized
-// host list so the detail view and the "host not found" state agree.
-function HostDetailRoute({ hosts, onBack }) {
+function HostDetailRoute({ hosts, org, collection, playbooks, loading, onBack }) {
   const { host } = useParams()
+  if (loading) {
+    return <Center py="xl"><Loader /></Center>
+  }
   const record = hosts.find((h) => h.name === host)
   if (!record) {
     return (
@@ -1318,7 +1103,16 @@ function HostDetailRoute({ hosts, onBack }) {
       </Alert>
     )
   }
-  return <HostDetail host={host} record={record} onBack={onBack} />
+  return (
+    <HostDetail
+      host={host}
+      record={record}
+      org={org}
+      collection={collection}
+      playbooks={playbooks}
+      onBack={onBack}
+    />
+  )
 }
 
 export default function App() {
@@ -1369,127 +1163,151 @@ export default function App() {
 }
 
 function AppInner({ user, onLogout }) {
-  const [stats, setStats] = useState(null)
-  const [runs, setRuns] = useState([])
-  const [hosts, setHosts] = useState([])
-  const [playbooks, setPlaybooks] = useState({})
-  const [orgs, setOrgs] = useState([])
+  const [orgs, setOrgs] = useState(null)
+  const [collectionData, setCollectionData] = useState({})
   const [error, setError] = useState(null)
   const [hostFilter, setHostFilter] = useState('all')
-  // Manual runs in flight, keyed by "<target>:<playbook>" with the trigger
-  // time in ms. Runs are only persisted after they finish, so the UI tracks
-  // them until a matching run appears in /api/runs.
-  const [pendingRuns, setPendingRuns] = useState({})
-  const [runError, setRunError] = useState(null)
+  const [tick, setTick] = useState(0)
   const [mobileOpened, { toggle: toggleMobile, close: closeMobile }] =
     useDisclosure(false)
 
-  // The section and the selected host are derived from the URL, so every
-  // screen (dashboard, host list, a single host, playbooks) is bookmarkable.
   const location = useLocation()
   const navigate = useNavigate()
-  const { section, selectedHost, selectedRun } = sectionFromPath(location.pathname)
+  const [params, setParams] = useSearchParams()
+  const { section, selectedHost } = sectionFromPath(location.pathname)
+  const selectedOrg = params.get('org') || ''
+  const selectedCollection = params.get('collection') || ''
+  const scopeKey = `${selectedOrg}/${selectedCollection}`
+  const current = collectionData[scopeKey]
+  const scopeLoaded = Boolean(current)
+  const hosts = current?.hosts || []
+  const playbooks = current?.playbooks || []
 
-  const refresh = useCallback(async () => {
+  // /api/v1/orgs is the single discovery read; it already carries each org's
+  // collections. No stats endpoint and no extra per-org collection listing is
+  // needed to discover the scope.
+  const refreshOrgs = useCallback(async () => {
     try {
-      const [statsRes, runsRes, hostsRes, playbooksRes, orgsRes] = await Promise.all([
-        fetch('/api/stats'),
-        fetch('/api/runs?limit=50'),
-        fetch('/api/hosts'),
-        fetch('/api/playbooks'),
-        fetch(ORGS_PATH),
-      ])
-      if (!statsRes.ok || !runsRes.ok || !hostsRes.ok || !playbooksRes.ok || !orgsRes.ok) {
-        throw new Error(`HTTP ${statsRes.status}/${runsRes.status}/${hostsRes.status}/${playbooksRes.status}/${orgsRes.status}`)
-      }
-      const newRuns = asArray(await runsRes.json())
-      setStats(normalizeStats(await statsRes.json()))
-      setOrgs(asArray(await orgsRes.json()))
-      setRuns(newRuns)
-      setHosts(normalizeHosts(await hostsRes.json()))
-      setPlaybooks(normalizePlaybooks(await playbooksRes.json()))
-      // A manual run is done once any run of the same (target, playbook)
-      // started at or after the trigger has been persisted.
-      setPendingRuns((prev) => {
-        let changed = false
-        const next = { ...prev }
-        for (const [key, triggeredAt] of Object.entries(prev)) {
-          const [target, playbook, mode] = key.split(':')
-          const check = mode === 'check'
-          if (newRuns.some((r) =>
-            r.target === target &&
-            r.playbook === playbook &&
-            Boolean(r.check) === check &&
-            new Date(r.started_at).getTime() >= triggeredAt - 5000
-          )) {
-            delete next[key]
-            changed = true
-          }
-        }
-        return changed ? next : prev
-      })
+      const res = await fetch(`${V1}/orgs`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const raw = asArray(await res.json())
+      setOrgs(raw.map((org) => ({
+        ...org,
+        collections: asArray(org?.collections),
+      })))
       setError(null)
     } catch (err) {
       setError(err.message)
     }
   }, [])
 
-  const triggerRun = useCallback(async (target, playbook, check = false) => {
-    setRunError(null)
-    const org = orgs.find((o) =>
-      asArray(o?.collections).some((c) => c?.name === target))?.name
-    if (!org) {
-      setRunError(`collection "${target}" not found in any organization`)
-      return
-    }
-    try {
-      const res = await fetch(collectionAPI(org, target, 'run'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ target, playbook, check }),
-      })
-      if (res.status === 202) {
-        const key = `${target}:${playbook}${check ? ':check' : ''}`
-        setPendingRuns((p) => ({ ...p, [key]: Date.now() }))
-      } else {
-        const body = await res.json().catch(() => ({}))
-        setRunError(body.error || `HTTP ${res.status}`)
-      }
-    } catch (err) {
-      setRunError(err.message)
-    }
-  }, [orgs])
+  useEffect(() => {
+    refreshOrgs()
+  }, [refreshOrgs, tick])
 
   useEffect(() => {
-    refresh()
-    const id = setInterval(refresh, POLL_INTERVAL_MS)
+    const id = setInterval(() => setTick((n) => n + 1), POLL_INTERVAL_MS)
     return () => clearInterval(id)
-  }, [refresh])
+  }, [])
 
+  // Fill the URL with a valid scope once orgs are known, and repair stale
+  // deep links (an org/collection that no longer exists).
+  useEffect(() => {
+    if (!orgs || orgs.length === 0) return
+    const pick = (current, list) => list.some((x) => x.name === current)
+      ? current
+      : list[0]?.name || ''
+    const org = pick(selectedOrg, orgs)
+    const collections = orgs.find((o) => o.name === org)?.collections || []
+    const collection = pick(selectedCollection, collections)
+    if (org === selectedOrg && collection === selectedCollection) return
+    const next = new URLSearchParams(params)
+    if (org) next.set('org', org)
+    else next.delete('org')
+    if (collection) next.set('collection', collection)
+    else next.delete('collection')
+    setParams(next, { replace: true })
+  }, [orgs, params, selectedOrg, selectedCollection, setParams])
+
+  // Per-collection data: detail, hosts and playbooks. These are also the
+  // source of every dashboard count; there is no stats endpoint at all.
+  useEffect(() => {
+    if (!orgs) return undefined
+    let active = true
+    ;(async () => {
+      try {
+        const pairs = orgs.flatMap((org) =>
+          asArray(org.collections)
+            .filter((coll) => coll?.name)
+            .map((coll) => [org.name, coll.name]),
+        )
+        const entries = await Promise.all(pairs.map(async ([org, collection]) => {
+          const [detailRes, hostsRes, playbooksRes] = await Promise.all([
+            fetch(collectionPath(org, collection)),
+            fetch(collectionPath(org, collection, 'hosts')),
+            fetch(collectionPath(org, collection, 'playbooks')),
+          ])
+          if (!detailRes.ok || !hostsRes.ok || !playbooksRes.ok) {
+            throw new Error(`HTTP ${detailRes.status}/${hostsRes.status}/${playbooksRes.status}`)
+          }
+          return [`${org}/${collection}`, {
+            org,
+            collection,
+            detail: asObject(await detailRes.json()),
+            hosts: normalizeHosts(await hostsRes.json()),
+            playbooks: normalizePlaybooks(await playbooksRes.json()),
+          }]
+        }))
+        if (active) {
+          setCollectionData(Object.fromEntries(entries))
+          setError(null)
+        }
+      } catch (err) {
+        if (active) setError(err.message)
+      }
+    })()
+    return () => { active = false }
+  }, [orgs, tick])
+
+  const setScope = (org, collection) => {
+    const next = new URLSearchParams(params)
+    if (org) next.set('org', org)
+    else next.delete('org')
+    if (collection) next.set('collection', collection)
+    else next.delete('collection')
+    next.delete('playbook')
+    next.delete('host')
+    setParams(next)
+  }
+
+  // Navigation keeps the current scope so switching sections does not lose
+  // the selected collection.
+  const withScope = (path) => `${path}${location.search || ''}`
   const openHost = (name) => {
     closeMobile()
-    navigate(`/hosts/${encodeURIComponent(name)}`)
+    navigate(withScope(`/hosts/${encodeURIComponent(name)}`))
   }
-
-  const openRun = (id) => {
-    closeMobile()
-    navigate(`/runs/${encodeURIComponent(id)}`)
-  }
-
   const goSection = (label) => {
     closeMobile()
-    if (label === 'Hosts') navigate('/hosts')
-    else if (label === 'Playbooks') navigate('/playbooks')
-    else if (label === 'Tokens') navigate('/tokens')
-    else if (label === 'SSH') navigate('/ssh')
-    else navigate('/')
+    if (label === 'Hosts') navigate(withScope('/hosts'))
+    else if (label === 'Playbooks') navigate(withScope('/playbooks'))
+    else if (label === 'Tokens') navigate(withScope('/tokens'))
+    else if (label === 'SSH') navigate(withScope('/ssh'))
+    else if (label === 'Monitor') navigate(withScope('/monitor'))
+    else navigate(withScope('/'))
   }
 
-  const headerTitle = selectedRun
-    ? `Run #${selectedRun}`
-    : section === 'Hosts' && selectedHost
-      ? selectedHost
-      : section
+  if (orgs === null && !error) {
+    return (
+      <Center h="100vh">
+        <Loader />
+      </Center>
+    )
+  }
+
+  const headerTitle = section === 'Hosts' && selectedHost
+    ? selectedHost
+    : section
 
   return (
     <AppShell
@@ -1514,12 +1332,8 @@ function AppInner({ user, onLogout }) {
           <Group gap="sm">
             {user && (
               <>
-                <Text size="sm" c="dimmed">
-                  {user}
-                </Text>
-                <Button size="xs" variant="subtle" onClick={onLogout}>
-                  Log out
-                </Button>
+                <Text size="sm" c="dimmed">{user}</Text>
+                <Button size="xs" variant="subtle" onClick={onLogout}>Log out</Button>
               </>
             )}
             <ColorSchemeToggle />
@@ -1540,60 +1354,99 @@ function AppInner({ user, onLogout }) {
       <AppShell.Main>
         <Stack gap="lg" p="lg">
           {error && (
-            <Alert color="red" title="API unavailable">
-              {error}
-            </Alert>
+            <Alert color="red" title="API unavailable">{error}</Alert>
           )}
 
-          {stats === null && !error && (
-            <Center py="xl">
-              <Loader />
-            </Center>
-          )}
-
-          {stats && (
-            <Routes>
-              <Route
-                path="/"
-                element={<Dashboard stats={stats} runs={runs} hosts={hosts} onHost={openHost} onRun={openRun} />}
-              />
-              <Route
-                path="/hosts"
-                element={
+          <Routes>
+            <Route path="/" element={<Dashboard data={Object.values(collectionData)} />} />
+            <Route
+              path="/hosts"
+              element={
+                <Stack gap="md">
+                  <ScopePicker
+                    orgs={orgs || []}
+                    org={selectedOrg}
+                    collection={selectedCollection}
+                    onChange={setScope}
+                    loading={!scopeLoaded}
+                  />
                   <HostsTable
                     hosts={hosts}
                     onHost={openHost}
                     filter={hostFilter}
                     setFilter={setHostFilter}
+                    loading={!scopeLoaded}
                   />
-                }
-              />
-              <Route
-                path="/hosts/:host"
-                element={
-                  <HostDetailRoute hosts={hosts} onBack={() => navigate('/hosts')} />
-                }
-              />
-              <Route
-                path="/playbooks"
-                element={
-                  <PlaybooksView
+                </Stack>
+              }
+            />
+            <Route
+              path="/hosts/:host"
+              element={
+                <HostDetailRoute
+                  hosts={hosts}
+                  org={selectedOrg}
+                  collection={selectedCollection}
+                  playbooks={playbooks}
+                  loading={!scopeLoaded}
+                  onBack={() => navigate(withScope('/hosts'))}
+                />
+              }
+            />
+            <Route
+              path="/playbooks"
+              element={
+                <Stack gap="md">
+                  <ScopePicker
+                    orgs={orgs || []}
+                    org={selectedOrg}
+                    collection={selectedCollection}
+                    onChange={setScope}
+                    loading={!scopeLoaded}
+                  />
+                  <PlaybooksView playbooks={playbooks} loading={!scopeLoaded} />
+                </Stack>
+              }
+            />
+            <Route
+              path="/ssh"
+              element={
+                <Stack gap="md">
+                  <ScopePicker
+                    orgs={orgs || []}
+                    org={selectedOrg}
+                    collection={selectedCollection}
+                    onChange={setScope}
+                    loading={!scopeLoaded}
+                  />
+                  <SSHView
+                    key={scopeKey}
+                    org={selectedOrg}
+                    collection={selectedCollection}
+                    hosts={hosts}
                     playbooks={playbooks}
-                    onRun={triggerRun}
-                    pendingRuns={pendingRuns}
-                    runError={runError}
                   />
-                }
-              />
-              <Route path="/tokens" element={<TokensView />} />
-              <Route path="/ssh" element={<SSHView />} />
-              <Route
-                path="/runs/:id"
-                element={<RunDetail onBack={() => navigate('/')} />}
-              />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          )}
+                </Stack>
+              }
+            />
+            <Route
+              path="/tokens"
+              element={
+                <Stack gap="md">
+                  <ScopePicker
+                    orgs={orgs || []}
+                    org={selectedOrg}
+                    collection={selectedCollection}
+                    onChange={setScope}
+                    loading={!scopeLoaded}
+                  />
+                  <TokensView org={selectedOrg} collection={selectedCollection} />
+                </Stack>
+              }
+            />
+            <Route path="/monitor" element={<Monitor />} />
+            <Route path="*" element={<Navigate to={withScope('/')} replace />} />
+          </Routes>
         </Stack>
       </AppShell.Main>
     </AppShell>

@@ -3,12 +3,7 @@ package server_test
 import (
 	"context"
 	"encoding/json"
-	"github.com/kakwa/strangle/internal/server"
-	"github.com/kakwa/strangle/internal/testutil"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,37 +11,42 @@ import (
 	"github.com/kakwa/strangle/internal/applier"
 	"github.com/kakwa/strangle/internal/cfg"
 	"github.com/kakwa/strangle/internal/db"
+	"github.com/kakwa/strangle/internal/server"
+	"github.com/kakwa/strangle/internal/testutil"
 	"go.uber.org/zap"
 )
 
-// newOrgTestServer builds a server with two orgs: the default one holding
-// "home", and "lab" holding "edge".
-func newOrgTestServer(enq server.RunEnqueuer, st db.Store) *server.Server {
-	targets := []cfg.TargetConfig{
-		{
-			Name: "home",
-			Playbooks: []cfg.PlaybookConfig{
-				{Name: "site", Playbook: "site.yml", Inventory: "inventory.ini"},
-			},
+// orgTargets has two configured collections: "home" in the default org and
+// "edge" in "lab". Several tests check that they cannot leak into each other.
+var orgTargets = []cfg.TargetConfig{
+	{
+		Name: "home",
+		Playbooks: []cfg.PlaybookConfig{
+			{Name: "site", Playbook: "site.yml", Inventory: "inventory.ini"},
+			{Name: "other", Playbook: "other.yml", Inventory: "inventory.ini"},
 		},
-		{
-			Name: "edge",
-			Org:  "lab",
-			Playbooks: []cfg.PlaybookConfig{
-				{Name: "site", Playbook: "site.yml", Inventory: "inventory.ini"},
-			},
+	},
+	{
+		Name: "edge",
+		Org:  "lab",
+		Playbooks: []cfg.PlaybookConfig{
+			{Name: "site", Playbook: "site.yml", Inventory: "inventory.ini"},
 		},
-	}
-	apr := applier.NewAnsible(targets, stubExecutor{}, st, zap.NewNop())
-	return server.New("test", apr, st, nil, enq, nil, nil, nil, nil, "", zap.NewNop())
+	},
 }
 
+func newOrgServer(st db.Store, opts ...server.Option) *server.Server {
+	apr := applier.NewAnsible(orgTargets, stubExecutor{}, st, zap.NewNop())
+	return server.New("test", apr, st, nil, nil, nil, nil, nil, nil, "", zap.NewNop(), opts...)
+}
+
+// seedRunAt persists one successful run for a collection/playbook/host triple.
 func seedRunAt(t *testing.T, st db.Store, target, playbook, host string, started time.Time) {
 	t.Helper()
 	if err := st.SaveRun(context.Background(), db.RunInput{
 		Run: db.RunRecord{
-			Target: target, Playbook: playbook, StartedAt: started, FinishedAt: started.Add(time.Second),
-			Success: true, Hosts: 1,
+			Target: target, Playbook: playbook, StartedAt: started,
+			FinishedAt: started.Add(time.Second), Success: true, Hosts: 1,
 		},
 		Hosts: []db.HostRunRecord{{Host: host, Status: "ok", Ok: 1}},
 	}); err != nil {
@@ -54,47 +54,88 @@ func seedRunAt(t *testing.T, st db.Store, target, playbook, host string, started
 	}
 }
 
-func seedTargetRun(t *testing.T, st db.Store, target string) {
-	t.Helper()
-	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
-	if err := st.SaveRun(context.Background(), db.RunInput{
-		Run: db.RunRecord{
-			Target: target, Playbook: "site", StartedAt: now, FinishedAt: now,
-			Success: true, Hosts: 1,
-			Output: "PLAY [all] ***\nfull output for " + target + "\n",
-		},
-		Hosts: []db.HostRunRecord{{Host: "web1", Status: "ok", Ok: 1}},
-		Tasks: []db.TaskStateRecord{{Host: "web1", Task: "Install nginx", Status: "changed", LastDiff: "-old\n+new"}},
-	}); err != nil {
-		t.Fatalf("SaveRun() error: %v", err)
+func TestVersionedRoutesAndFlatAliases(t *testing.T) {
+	// This test needs no database: it only exercises routing and public docs.
+	s := server.New("test", nil, nil, nil, nil, nil, nil, nil, nil, "", zap.NewNop())
+
+	rec := doGet(t, s, "/api/v1/health")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/health: status = %d, body %s", rec.Code, rec.Body.String())
 	}
+	var health map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &health); err != nil || health["status"] != "ok" {
+		t.Fatalf("health = %q (%v), want status ok", rec.Body.String(), err)
+	}
+
+	rec = doGet(t, s, "/api/v1/openapi.json")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/v1/openapi.json: status = %d, body %s", rec.Code, rec.Body.String())
+	}
+
+	// Every flat alias of a versioned endpoint, and every removed endpoint,
+	// must fall through to the SPA instead of answering as an API route.
+	for _, path := range []string{
+		"/api/health", "/api/me", "/api/login", "/api/logout",
+		"/api/runs", "/api/v1/runs", "/api/run", "/api/v1/run",
+		"/api/stats", "/api/v1/stats", "/api/hosts", "/api/v1/hosts",
+		"/api/playbooks", "/api/workers", "/api/sync", "/api/v1/sync",
+		"/api/hostkeys", "/api/v1/hostkeys", "/api/ssh/stats", "/api/hostkeys/accept",
+		"/api/v1/orgs/default/collections/home/runs",
+		"/api/v1/orgs/default/collections/home/stats",
+		"/api/v1/orgs/default/collections/home/hostkeys",
+		"/api/v1/orgs/default/collections/home/ssh/stats",
+	} {
+		assertAPIGone(t, doGet(t, s, path), "GET "+path)
+	}
+	for _, path := range []string{
+		"/api/run", "/api/v1/run", "/api/sync", "/api/v1/sync",
+		"/api/v1/orgs/default/collections/home/run",
+		"/api/v1/orgs/default/collections/home/sync",
+		"/api/v1/orgs/default/collections/home/hostkeys/accept",
+		"/api/v1/orgs/default/collections/home/hostkeys/reject",
+	} {
+		assertAPIGone(t, postJSON(t, s, path, `{}`, nil), "POST "+path)
+	}
+	assertAPIGone(t, deleteWith(t, s, "/api/tokens/ci", nil), "DELETE /api/tokens/ci")
 }
 
-func TestVersionedRoutesAndFlatAliases(t *testing.T) {
-	st := testutil.OpenDB(t, "server")
-	seedTargetRun(t, st, "home")
-	s := newOrgTestServer(&recEnqueuer{status: "queued"}, st)
-
-	for _, path := range []string{"/api/health", "/api/v1/health", "/api/runs", "/api/v1/runs"} {
-		if rec := doGet(t, s, path); rec.Code != http.StatusOK {
-			t.Errorf("GET %s: status = %d, want 200 (body %s)", path, rec.Code, rec.Body.String())
+func TestOpenAPISpecIsVersionedOnly(t *testing.T) {
+	s := server.New("test", nil, nil, nil, nil, nil, nil, nil, nil, "", zap.NewNop())
+	rec := doGet(t, s, "/api/v1/openapi.json")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("content type = %q, want application/json", ct)
+	}
+	var doc struct {
+		OpenAPI string                     `json:"openapi"`
+		Paths   map[string]json.RawMessage `json:"paths"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("decode spec: %v", err)
+	}
+	if !strings.HasPrefix(doc.OpenAPI, "3.") {
+		t.Errorf("openapi = %q, want an OpenAPI 3 document", doc.OpenAPI)
+	}
+	for _, path := range []string{
+		"/api/v1/health", "/api/v1/login", "/api/v1/orgs",
+		"/api/v1/orgs/{org}/collections/{collection}/hook",
+	} {
+		if _, ok := doc.Paths[path]; !ok {
+			t.Errorf("spec is missing %s", path)
 		}
 	}
-
-	var flat, versioned []db.RunRecord
-	if rec := doGet(t, s, "/api/runs"); rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &flat) != nil {
-		t.Fatal("cannot decode flat runs")
-	}
-	if rec := doGet(t, s, "/api/v1/runs"); rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &versioned) != nil {
-		t.Fatal("cannot decode versioned runs")
-	}
-	if len(flat) != 1 || len(versioned) != 1 || flat[0].ID != versioned[0].ID {
-		t.Errorf("flat runs = %+v, versioned runs = %+v; want the same single run", flat, versioned)
+	for _, path := range []string{"/api/health", "/api/runs", "/api/stats"} {
+		if _, ok := doc.Paths[path]; ok {
+			t.Errorf("spec still advertises removed path %s", path)
+		}
 	}
 }
 
 func TestOrgAndCollectionResources(t *testing.T) {
-	s := newOrgTestServer(&recEnqueuer{status: "queued"}, testutil.OpenDB(t, "server"))
+	st := testutil.OpenDB(t, "server")
+	s := newOrgServer(st)
 
 	rec := doGet(t, s, "/api/v1/orgs")
 	if rec.Code != http.StatusOK {
@@ -107,8 +148,42 @@ func TestOrgAndCollectionResources(t *testing.T) {
 	if len(orgs) != 2 || orgs[0].Name != cfg.DefaultOrg || orgs[1].Name != "lab" {
 		t.Fatalf("orgs = %+v, want default and lab in order", orgs)
 	}
+	if len(orgs[0].Collections) != 1 || orgs[0].Collections[0].Name != "home" {
+		t.Errorf("default collections = %+v, want home", orgs[0].Collections)
+	}
 	if len(orgs[1].Collections) != 1 || orgs[1].Collections[0].Name != "edge" {
 		t.Errorf("lab collections = %+v, want edge", orgs[1].Collections)
+	}
+
+	// Creating an org is idempotent-safe: the second request conflicts.
+	rec = postJSON(t, s, "/api/v1/orgs", `{"name":"newco"}`, nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST org: status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var created orgInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil || created.Name != "newco" || len(created.Collections) != 0 {
+		t.Fatalf("created org = %+v (%v), want newco with no collections", created, err)
+	}
+	if rec = postJSON(t, s, "/api/v1/orgs", `{"name":"newco"}`, nil); rec.Code != http.StatusConflict {
+		t.Errorf("duplicate POST org: status = %d, want %d", rec.Code, http.StatusConflict)
+	}
+	for _, body := range []string{`{"name":"bad name"}`, `{}`, `not json`} {
+		if rec = postJSON(t, s, "/api/v1/orgs", body, nil); rec.Code != http.StatusBadRequest {
+			t.Errorf("POST org %s: status = %d, want %d", body, rec.Code, http.StatusBadRequest)
+		}
+	}
+
+	rec = doGet(t, s, "/api/v1/orgs/newco")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET new org: status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	rec = doGet(t, s, "/api/v1/orgs/newco/collections")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET new org collections: status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var colls []collectionInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &colls); err != nil || len(colls) != 0 {
+		t.Fatalf("new org collections = %s (%v), want empty", rec.Body.String(), err)
 	}
 
 	rec = doGet(t, s, "/api/v1/orgs/lab/collections/edge")
@@ -127,8 +202,19 @@ func TestOrgAndCollectionResources(t *testing.T) {
 	if coll.Name != "edge" || coll.Org != "lab" || len(coll.Playbooks) != 1 {
 		t.Errorf("collection = %+v, want edge in lab with one playbook", coll)
 	}
-	if coll.Links["runs"] != "/api/v1/orgs/lab/collections/edge/runs" {
-		t.Errorf("runs link = %q", coll.Links["runs"])
+	wantLinks := map[string]string{
+		"hosts":     "/api/v1/orgs/lab/collections/edge/hosts",
+		"playbooks": "/api/v1/orgs/lab/collections/edge/playbooks",
+		"tokens":    "/api/v1/orgs/lab/collections/edge/tokens",
+		"hook":      "/api/v1/orgs/lab/collections/edge/hook",
+	}
+	if len(coll.Links) != len(wantLinks) {
+		t.Fatalf("links = %+v, want exactly %+v", coll.Links, wantLinks)
+	}
+	for name, want := range wantLinks {
+		if coll.Links[name] != want {
+			t.Errorf("link %q = %q, want %q", name, coll.Links[name], want)
+		}
 	}
 
 	for _, path := range []string{
@@ -136,215 +222,121 @@ func TestOrgAndCollectionResources(t *testing.T) {
 		"/api/v1/orgs/nope/collections",
 		"/api/v1/orgs/nope/collections/edge",
 		"/api/v1/orgs/default/collections/edge",
-		"/api/v1/orgs/lab/collections/nope/runs",
+		"/api/v1/orgs/lab/collections/nope",
 	} {
 		if rec := doGet(t, s, path); rec.Code != http.StatusNotFound {
-			t.Errorf("GET %s: status = %d, want 404", path, rec.Code)
+			t.Errorf("GET %s: status = %d, want 404 (body %s)", path, rec.Code, rec.Body.String())
 		}
 	}
 }
 
-func TestCollectionScopedRunsAndRun(t *testing.T) {
+func TestCollectionScopedResources(t *testing.T) {
 	st := testutil.OpenDB(t, "server")
-	seedTargetRun(t, st, "home")
-	seedTargetRun(t, st, "edge")
-	enq := &recEnqueuer{status: "queued"}
-	s := newOrgTestServer(enq, st)
+	base := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+	seedRunAt(t, st, "edge", "site", "web1", base)
+	seedRunAt(t, st, "home", "site", "web1", base.Add(time.Hour))
+	seedRunAt(t, st, "home", "site", "web1", base.Add(2*time.Hour))
+	seedRunAt(t, st, "home", "other", "db1", base.Add(3*time.Hour))
+	// A newer run in a different collection must not consume the scoped
+	// endpoint's limit.
+	seedRunAt(t, st, "edge", "site", "web1", base.Add(4*time.Hour))
+	s := newOrgServer(st)
 
-	rec := doGet(t, s, "/api/v1/orgs/lab/collections/edge/runs")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET collection runs: status = %d, body %s", rec.Code, rec.Body.String())
-	}
-	var runs []db.RunRecord
-	if err := json.Unmarshal(rec.Body.Bytes(), &runs); err != nil {
-		t.Fatalf("decode runs: %v", err)
-	}
-	if len(runs) != 1 || runs[0].Target != "edge" {
-		t.Errorf("collection runs = %+v, want only the edge run", runs)
-	}
-
-	rec = doGet(t, s, "/api/v1/orgs/lab/collections/edge/stats")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET collection stats: status = %d, body %s", rec.Code, rec.Body.String())
-	}
-	var stats db.Stats
-	if err := json.Unmarshal(rec.Body.Bytes(), &stats); err != nil {
-		t.Fatalf("decode stats: %v", err)
-	}
-	if stats.Runs.Total != 1 || stats.Hosts.Total != 1 {
-		t.Errorf("collection stats = %+v, want one run and one host", stats)
-	}
-
-	// On a collection route the target comes from the URL, not the body.
-	post := func(path, body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		out := httptest.NewRecorder()
-		s.Routes().ServeHTTP(out, req)
-		return out
-	}
-
-	rec = post("/api/v1/orgs/lab/collections/edge/run", `{"playbook":"site"}`)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("POST collection run: status = %d, body %s", rec.Code, rec.Body.String())
-	}
-	if enq.last() != "edge/site" {
-		t.Errorf("enqueued %q, want edge/site", enq.last())
-	}
-
-	rec = post("/api/v1/orgs/default/collections/edge/run", `{"playbook":"site"}`)
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("POST run with wrong org: status = %d, want 404", rec.Code)
-	}
-}
-
-func TestRunDetailAndListingWithoutOutput(t *testing.T) {
-	st := testutil.OpenDB(t, "server")
-	seedTargetRun(t, st, "home")
-	enq := &recEnqueuer{status: "queued"}
-	s := newOrgTestServer(enq, st)
-
-	all, err := st.ListRuns(context.Background(), 10)
-	if err != nil || len(all) != 1 {
-		t.Fatalf("ListRuns() = %v, %v", all, err)
-	}
-	id := strconv.FormatUint(all[0].ID, 10)
-	wantOutput := "PLAY [all] ***\nfull output for home\n"
-
-	// The polling listing must not ship the full log 50 times over.
-	rec := doGet(t, s, "/api/runs")
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET runs: status = %d, body %s", rec.Code, rec.Body.String())
-	}
-	var listed []db.RunRecord
-	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
-		t.Fatalf("decode runs: %v", err)
-	}
-	if len(listed) != 1 || listed[0].Output != "" {
-		t.Fatalf("listed runs = %+v, want one run without output", listed)
-	}
-
-	for _, path := range []string{
-		"/api/runs/" + id,
-		"/api/v1/runs/" + id,
-		"/api/v1/orgs/default/collections/home/runs/" + id,
-	} {
-		rec = doGet(t, s, path)
+	hostNames := func(path string) []string {
+		t.Helper()
+		rec := doGet(t, s, path)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("GET %s: status = %d, body %s", path, rec.Code, rec.Body.String())
 		}
-		var detail db.RunRecord
-		if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
-			t.Fatalf("decode %s: %v", path, err)
+		var hosts []db.HostRecord
+		if err := json.Unmarshal(rec.Body.Bytes(), &hosts); err != nil {
+			t.Fatalf("decode hosts: %v", err)
 		}
-		if detail.Output != wantOutput {
-			t.Errorf("GET %s output = %q, want %q", path, detail.Output, wantOutput)
-		}
-	}
-
-	// A run from another collection is not reachable through this path, and
-	// bad or unknown IDs get their usual 400/404.
-	for _, tc := range []struct {
-		path string
-		code int
-	}{
-		{"/api/v1/orgs/lab/collections/edge/runs/" + id, http.StatusNotFound},
-		{"/api/runs/999999", http.StatusNotFound},
-		{"/api/runs/nope", http.StatusBadRequest},
-	} {
-		if rec = doGet(t, s, tc.path); rec.Code != tc.code {
-			t.Errorf("GET %s: status = %d, want %d (body %s)", tc.path, rec.Code, tc.code, rec.Body.String())
-		}
-	}
-
-	// Per-run task history is collection-scoped only.
-	tasksPath := "/api/v1/orgs/default/collections/home/runs/" + id + "/tasks"
-	rec = doGet(t, s, tasksPath)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET %s: status = %d, body %s", tasksPath, rec.Code, rec.Body.String())
-	}
-	var tasks []db.TaskRunRecord
-	if err := json.Unmarshal(rec.Body.Bytes(), &tasks); err != nil {
-		t.Fatalf("decode tasks: %v", err)
-	}
-	if len(tasks) != 1 || tasks[0].Task != "Install nginx" || tasks[0].RunID != all[0].ID {
-		t.Errorf("run tasks = %+v, want the seeded task result", tasks)
-	}
-	if rec = doGet(t, s, "/api/runs/"+id+"/tasks"); strings.Contains(rec.Body.String(), "Install nginx") {
-		t.Errorf("flat run tasks path exposes task history: %s", rec.Body.String())
-	}
-	if rec = doGet(t, s, "/api/v1/orgs/lab/collections/edge/runs/"+id+"/tasks"); rec.Code != http.StatusNotFound {
-		t.Errorf("sibling collection run tasks: status = %d, want 404", rec.Code)
-	}
-}
-
-func TestCollectionRunFiltersAndPagination(t *testing.T) {
-	st := testutil.OpenDB(t, "server")
-	base := time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
-	seedRunAt(t, st, "edge", "site", "web1", base)
-	seedRunAt(t, st, "edge", "site", "db1", base.Add(time.Hour))
-	seedRunAt(t, st, "edge", "deploy", "web1", base.Add(2*time.Hour))
-	seedRunAt(t, st, "home", "site", "web1", base.Add(3*time.Hour))
-	s := newOrgTestServer(&recEnqueuer{status: "queued"}, st)
-	collectionPath := "/api/v1/orgs/lab/collections/edge/runs"
-
-	ids := func(query string) ([]uint64, int) {
-		t.Helper()
-		rec := doGet(t, s, collectionPath+query)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("GET %s%s: status = %d, body %s", collectionPath, query, rec.Code, rec.Body.String())
-		}
-		var runs []db.RunRecord
-		if err := json.Unmarshal(rec.Body.Bytes(), &runs); err != nil {
-			t.Fatalf("decode runs: %v", err)
-		}
-		total, err := strconv.Atoi(rec.Header().Get("X-Total-Count"))
-		if err != nil {
-			t.Fatalf("X-Total-Count = %q: %v", rec.Header().Get("X-Total-Count"), err)
-		}
-		out := make([]uint64, 0, len(runs))
-		for _, run := range runs {
-			if run.Target != "edge" {
-				t.Errorf("run %+v leaked from another collection", run)
+		names := make([]string, 0, len(hosts))
+		for _, h := range hosts {
+			if h.Target != "home" && h.Target != "edge" {
+				t.Errorf("host %+v has an unexpected target", h)
 			}
-			out = append(out, run.ID)
+			names = append(names, h.Target+"/"+h.Name)
 		}
-		return out, total
+		return names
 	}
 
-	if got, total := ids(""); len(got) != 3 || total != 3 {
-		t.Errorf("unfiltered = %v (total %d), want 3 edge runs", got, total)
+	homeHosts := hostNames("/api/v1/orgs/default/collections/home/hosts")
+	if len(homeHosts) != 2 {
+		t.Errorf("home hosts = %v, want web1 and db1", homeHosts)
 	}
-	if got, total := ids("?playbook=site"); len(got) != 2 || total != 2 {
-		t.Errorf("playbook=site = %v (total %d), want 2 runs", got, total)
-	}
-	if got, total := ids("?host=web1"); len(got) != 2 || total != 2 {
-		t.Errorf("host=web1 = %v (total %d), want 2 runs", got, total)
-	}
-	if got, total := ids("?playbook=site&host=web1"); len(got) != 1 || total != 1 {
-		t.Errorf("site/web1 = %v (total %d), want 1 run", got, total)
+	edgeHosts := hostNames("/api/v1/orgs/lab/collections/edge/hosts")
+	if len(edgeHosts) != 1 || edgeHosts[0] != "edge/web1" {
+		t.Errorf("edge hosts = %v, want only edge/web1", edgeHosts)
 	}
 
-	from := url.QueryEscape(base.Add(time.Hour).Format(time.RFC3339))
-	to := url.QueryEscape(base.Add(2 * time.Hour).Format(time.RFC3339))
-	if got, total := ids("?from=" + from + "&to=" + to); len(got) != 1 || total != 1 {
-		t.Errorf("time window = %v (total %d), want the 11:00 run only", got, total)
+	rec := doGet(t, s, "/api/v1/orgs/default/collections/home/playbooks")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET playbooks: status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	var pbs map[string][]playbookInfo
+	if err := json.Unmarshal(rec.Body.Bytes(), &pbs); err != nil {
+		t.Fatalf("decode playbooks: %v", err)
+	}
+	if len(pbs) != 1 || len(pbs["home"]) != 2 {
+		t.Fatalf("playbooks = %+v, want two home playbooks and no other collection", pbs)
+	}
+	byName := map[string]playbookInfo{}
+	for _, pb := range pbs["home"] {
+		byName[pb.Name] = pb
+	}
+	if byName["site"].LastStatus != "ok" || byName["site"].LastRunAt == nil {
+		t.Errorf("site playbook = %+v, want last_status ok with a run time", byName["site"])
+	}
+	if byName["other"].LastStatus != "ok" {
+		t.Errorf("other playbook = %+v, want last_status ok", byName["other"])
 	}
 
-	if got, total := ids("?limit=1&offset=1"); len(got) != 1 || total != 3 {
-		t.Errorf("limit/offset = %v (total %d), want one run out of 3", got, total)
+	hostRuns := func(path string) []db.HostRunRecord {
+		t.Helper()
+		rec := doGet(t, s, path)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s: status = %d, body %s", path, rec.Code, rec.Body.String())
+		}
+		var runs []db.HostRunRecord
+		if err := json.Unmarshal(rec.Body.Bytes(), &runs); err != nil {
+			t.Fatalf("decode host runs: %v", err)
+		}
+		return runs
 	}
-	if got, _ := ids("?offset=99"); len(got) != 0 {
-		t.Errorf("offset past the end = %v, want no runs", got)
+	homeRuns := hostRuns("/api/v1/orgs/default/collections/home/playbooks/site/hosts/web1/runs")
+	if len(homeRuns) != 2 {
+		t.Fatalf("home site/web1 runs = %+v, want two", homeRuns)
+	}
+	for _, run := range homeRuns {
+		if run.Target != "home" || run.Playbook != "site" || run.Host != "web1" {
+			t.Errorf("host run = %+v, want home/site/web1", run)
+		}
+	}
+	if got := hostRuns("/api/v1/orgs/default/collections/home/playbooks/site/hosts/web1/runs?limit=1"); len(got) != 1 {
+		t.Errorf("limit=1: got %d runs, want 1", len(got))
+	}
+	if got := hostRuns("/api/v1/orgs/default/collections/home/playbooks/site/hosts/db1/runs"); len(got) != 0 {
+		t.Errorf("db1 under site = %+v, want no runs", got)
+	}
+	edgeRuns := hostRuns("/api/v1/orgs/lab/collections/edge/playbooks/site/hosts/web1/runs")
+	if len(edgeRuns) != 2 {
+		t.Fatalf("edge site/web1 runs = %+v, want two", edgeRuns)
+	}
+	for _, run := range edgeRuns {
+		if run.Target != "edge" || run.Playbook != "site" || run.Host != "web1" {
+			t.Errorf("edge host run = %+v, want edge/site/web1", run)
+		}
 	}
 
-	for _, query := range []string{
-		"?from=not-a-time",
-		"?to=not-a-time",
-		"?from=2026-11-24T12:00:00Z&to=2026-11-24T11:00:00Z",
+	for _, path := range []string{
+		"/api/v1/orgs/default/collections/home/playbooks/nope/hosts/web1/runs",
+		"/api/v1/orgs/default/collections/nope/playbooks/site/hosts/web1/runs",
+		"/api/v1/orgs/lab/collections/home/playbooks/site/hosts/web1/runs",
 	} {
-		if rec := doGet(t, s, collectionPath+query); rec.Code != http.StatusBadRequest {
-			t.Errorf("GET %s%s: status = %d, want 400", collectionPath, query, rec.Code)
+		if rec := doGet(t, s, path); rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s: status = %d, want 404 (body %s)", path, rec.Code, rec.Body.String())
 		}
 	}
 }

@@ -137,8 +137,8 @@ type SandboxConfig struct {
 
 // AuthConfig holds the two independent credentials read from server.yml.
 type AuthConfig struct {
-	// Token is the static sync token. It is accepted only by POST /api/sync
-	// and is never treated as a user identity.
+	// Token is the static machine token. It is accepted only by collection
+	// hook endpoints and is never treated as a user identity.
 	Token string `yaml:"token,omitempty"`
 	// CLIToken is a user API token (st_...) used by strangle-cli commands.
 	// The server ignores it: it is a client-side setting only.

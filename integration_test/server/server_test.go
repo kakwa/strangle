@@ -3,182 +3,80 @@ package server_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"github.com/kakwa/strangle/internal/server"
-	"github.com/kakwa/strangle/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/kakwa/strangle/internal/applier"
-	"github.com/kakwa/strangle/internal/cfg"
+	"github.com/kakwa/strangle/internal/server"
+	"github.com/kakwa/strangle/internal/testutil"
 	"go.uber.org/zap"
 )
 
-// stubExecutor satisfies applier.Executor; the /api/run tests never execute
-// a playbook, they only check that the handler routes to the enqueuer.
+// stubExecutor satisfies applier.Executor. The HTTP server does not execute
+// playbooks; it only records their results in the store.
 type stubExecutor struct{}
 
 func (stubExecutor) RunPlaybook(context.Context, string, string, string, ...string) (int, string, map[string]json.RawMessage, error) {
 	return 0, "", nil, nil
 }
 
-// recEnqueuer records every EnqueueRun call and returns a canned response.
-type recEnqueuer struct {
-	mu      sync.Mutex
-	calls   []string
-	cancels []string
-	checks  []bool
-	status  string
-	err     error
-}
-
-func (r *recEnqueuer) EnqueueRun(_ context.Context, target, playbook string, _ uint64, check bool) (string, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.calls = append(r.calls, target+"/"+playbook)
-	r.checks = append(r.checks, check)
-	return r.status, r.err
-}
-
-// CancelRun records cancellation requests for the cancel-route tests.
-func (r *recEnqueuer) CancelRun(_ context.Context, jobID string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.cancels = append(r.cancels, jobID)
-	return r.err
-}
-
-func (r *recEnqueuer) canceled() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return append([]string(nil), r.cancels...)
-}
-
-func (r *recEnqueuer) called() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.calls)
-}
-
-func (r *recEnqueuer) last() string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if len(r.calls) == 0 {
-		return ""
-	}
-	return r.calls[len(r.calls)-1]
-}
-
-// newTestServer builds a Server with one configured target and playbook.
-func newTestServer(t *testing.T, enq server.RunEnqueuer) *server.Server {
+// newTestServer builds a server with the package's standard test targets over
+// a fresh test database.
+func newTestServer(t *testing.T, opts ...server.Option) *server.Server {
 	t.Helper()
-	targets := []cfg.TargetConfig{{
-		Name: "home",
-		Playbooks: []cfg.PlaybookConfig{
-			{Name: "site", Playbook: "site.yml", Inventory: "inventory.ini"},
-		},
-	}}
 	st := testutil.OpenDB(t, "server")
-	apr := applier.NewAnsible(targets, stubExecutor{}, st, zap.NewNop())
-	return server.New("test", apr, st, nil, enq, nil, nil, nil, nil, "", zap.NewNop())
+	apr := applier.NewAnsible(testTargets, stubExecutor{}, st, zap.NewNop())
+	return server.New("test", apr, st, nil, nil, nil, nil, nil, nil, "", zap.NewNop(), opts...)
 }
 
-func postRun(t *testing.T, s *server.Server, body string) *httptest.ResponseRecorder {
+// request serves one request through the full route table.
+func request(t *testing.T, s *server.Server, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/api/run", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
 	rec := httptest.NewRecorder()
 	s.Routes().ServeHTTP(rec, req)
 	return rec
 }
 
-func TestPostRunEnqueues(t *testing.T) {
-	enq := &recEnqueuer{status: "queued"}
-	s := newTestServer(t, enq)
-
-	rec := postRun(t, s, `{"target":"home","playbook":"site"}`)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusAccepted, rec.Body.String())
-	}
-	if enq.called() != 1 || enq.last() != "home/site" {
-		t.Fatalf("enqueuer calls = %v, want one call home/site", enq.calls)
-	}
-
-	var out struct {
-		Status   string `json:"status"`
-		Target   string `json:"target"`
-		Playbook string `json:"playbook"`
-	}
-	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if out.Status != "queued" || out.Target != "home" || out.Playbook != "site" {
-		t.Errorf("response = %+v, want queued home/site", out)
-	}
+func doGet(t *testing.T, s *server.Server, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	return request(t, s, http.MethodGet, path, "", nil)
 }
 
-func TestPostRunCheckMode(t *testing.T) {
-	enq := &recEnqueuer{status: "queued"}
-	s := newTestServer(t, enq)
-
-	rec := postRun(t, s, `{"target":"home","playbook":"site","check":true}`)
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusAccepted, rec.Body.String())
-	}
-	if len(enq.checks) != 1 || !enq.checks[0] {
-		t.Fatalf("enqueuer checks = %v, want [true]", enq.checks)
-	}
-	var out struct {
-		Check bool `json:"check"`
-	}
-	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if !out.Check {
-		t.Error("response check = false, want true")
-	}
+func getWith(t *testing.T, s *server.Server, path string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	return request(t, s, http.MethodGet, path, "", headers)
 }
 
-func TestPostRunEnqueueError(t *testing.T) {
-	enq := &recEnqueuer{err: errors.New("db down")}
-	s := newTestServer(t, enq)
-
-	rec := postRun(t, s, `{"target":"home","playbook":"site"}`)
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
-	}
-	if !strings.Contains(rec.Body.String(), "db down") {
-		t.Errorf("body = %s, want it to contain the enqueue error", rec.Body.String())
-	}
+func postJSON(t *testing.T, s *server.Server, path, body string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	return request(t, s, http.MethodPost, path, body, headers)
 }
 
-func TestPostRunUnknownPlaybook(t *testing.T) {
-	enq := &recEnqueuer{status: "queued"}
-	s := newTestServer(t, enq)
-
-	rec := postRun(t, s, `{"target":"home","playbook":"nope"}`)
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
-	}
-	if enq.called() != 0 {
-		t.Fatal("enqueuer must not be called for an unknown playbook")
-	}
+func patchJSON(t *testing.T, s *server.Server, path, body string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	return request(t, s, http.MethodPatch, path, body, headers)
 }
 
-func TestPostRunMissingFields(t *testing.T) {
-	enq := &recEnqueuer{status: "queued"}
-	s := newTestServer(t, enq)
+func deleteWith(t *testing.T, s *server.Server, path string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	return request(t, s, http.MethodDelete, path, "", headers)
+}
 
-	for _, body := range []string{`{}`, `{"target":"home"}`, `{"playbook":"site"}`, `not json`} {
-		rec := postRun(t, s, body)
-		if rec.Code != http.StatusBadRequest {
-			t.Errorf("body %s: status = %d, want %d", body, rec.Code, http.StatusBadRequest)
-		}
+// assertAPIGone checks that a path formerly served by a flat API alias is no
+// longer an API route: unmatched paths fall through to the SPA handler (which
+// serves index.html) or are rejected by the router itself.
+func assertAPIGone(t *testing.T, rec *httptest.ResponseRecorder, label string) {
+	t.Helper()
+	ct := rec.Header().Get("Content-Type")
+	if rec.Code == http.StatusNotFound || strings.Contains(ct, "text/html") {
+		return
 	}
-	if enq.called() != 0 {
-		t.Fatal("enqueuer must not be called for invalid requests")
-	}
+	t.Errorf("%s: status = %d, content type = %q; want a 404 or the SPA fallback, not an API response (body %s)",
+		label, rec.Code, ct, rec.Body.String())
 }

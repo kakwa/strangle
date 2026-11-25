@@ -55,3 +55,6 @@ hostkeys.pending.json
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# swagger stuff
+docs/docs.go

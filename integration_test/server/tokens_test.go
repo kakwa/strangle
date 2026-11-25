@@ -3,35 +3,24 @@ package server_test
 import (
 	"context"
 	"encoding/json"
-	"github.com/kakwa/strangle/internal/server"
-	"github.com/kakwa/strangle/internal/testutil"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kakwa/strangle/internal/applier"
 	"github.com/kakwa/strangle/internal/auth"
 	"github.com/kakwa/strangle/internal/db"
+	"github.com/kakwa/strangle/internal/server"
+	"github.com/kakwa/strangle/internal/testutil"
 	"go.uber.org/zap"
 )
 
-// newTokenTestServer builds a Server with DB-backed user and token stores.
+// newTokenTestServer builds a server with DB-backed user and token stores.
 func newTokenTestServer(t *testing.T, d *db.DB) *server.Server {
 	t.Helper()
-	apr := applier.NewAnsible(testTargets, stubExecutor{}, d, zap.NewNop())
-	return server.New("test", apr, d, nil, &recEnqueuer{status: "queued"}, nil, nil, d.Users(), d.Tokens(), "", zap.NewNop())
-}
-
-func deleteAuth(t *testing.T, s *server.Server, path string, headers map[string]string) *httptest.ResponseRecorder {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodDelete, path, nil)
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	rec := httptest.NewRecorder()
-	s.Routes().ServeHTTP(rec, req)
-	return rec
+	apr := applier.NewAnsible(orgTargets, stubExecutor{}, d, zap.NewNop())
+	return server.New("test", apr, d, nil, nil, nil, nil, d.Users(), d.Tokens(), "", zap.NewNop())
 }
 
 func TestTokensCRUDWithSession(t *testing.T) {
@@ -42,11 +31,12 @@ func TestTokensCRUDWithSession(t *testing.T) {
 
 	c := loginCookie(t, s, "alice", "s3cret")
 	h := map[string]string{"Cookie": c.String()}
+	base := "/api/v1/orgs/default/collections/home/tokens"
 
 	// Empty at first.
-	rec := getAuthWith(t, s, "/api/tokens", h)
+	rec := getWith(t, s, base, h)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /api/tokens = %d, want %d", rec.Code, http.StatusOK)
+		t.Fatalf("GET %s = %d, want %d (body %s)", base, rec.Code, http.StatusOK, rec.Body.String())
 	}
 	var list []*auth.Token
 	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
@@ -56,10 +46,10 @@ func TestTokensCRUDWithSession(t *testing.T) {
 		t.Errorf("initial list = %v, want empty", list)
 	}
 
-	// Create returns the raw value exactly once.
-	rec = postAuthJSON(t, s, "/api/tokens", `{"name":"ci"}`, h)
+	// Create returns the raw value exactly once, scoped to the URL.
+	rec = postJSON(t, s, base, `{"name":"ci"}`, h)
 	if rec.Code != http.StatusCreated {
-		t.Fatalf("POST /api/tokens = %d, want %d, body %s", rec.Code, http.StatusCreated, rec.Body.String())
+		t.Fatalf("POST %s = %d, want %d, body %s", base, rec.Code, http.StatusCreated, rec.Body.String())
 	}
 	var created struct {
 		Raw   string      `json:"raw"`
@@ -71,128 +61,169 @@ func TestTokensCRUDWithSession(t *testing.T) {
 	if !strings.HasPrefix(created.Raw, auth.TokenPrefix) {
 		t.Errorf("raw = %q, want %q prefix", created.Raw, auth.TokenPrefix)
 	}
-	if created.Token == nil || created.Token.Name != "ci" {
-		t.Errorf("token record = %+v, want name ci", created.Token)
+	if created.Token == nil || created.Token.Name != "ci" ||
+		created.Token.Org != "default" || created.Token.Collection != "home" {
+		t.Errorf("token record = %+v, want ci scoped to default/home", created.Token)
 	}
 
-	// A duplicate name fails with 409.
-	rec = postAuthJSON(t, s, "/api/tokens", `{"name":"ci"}`, h)
+	// Duplicate names conflict within the same scope.
+	rec = postJSON(t, s, base, `{"name":"ci"}`, h)
 	if rec.Code != http.StatusConflict {
 		t.Errorf("duplicate POST = %d, want %d", rec.Code, http.StatusConflict)
 	}
 
-	// The listing shows the prefix, never the raw value.
-	rec = getAuthWith(t, s, "/api/tokens", h)
+	// The listing shows the stored record, never the raw value.
+	rec = getWith(t, s, base, h)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET after create = %d", rec.Code)
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(list) != 1 || list[0].Name != "ci" {
-		t.Fatalf("list = %+v, want one token named ci", list)
+	if len(list) != 1 || list[0].Name != "ci" || list[0].Org != "default" || list[0].Collection != "home" {
+		t.Fatalf("list = %+v, want one scoped token named ci", list)
 	}
 	if strings.Contains(rec.Body.String(), created.Raw) {
-		t.Errorf("listing leaked the raw token value")
+		t.Error("listing leaked the raw token value")
 	}
 
-	// Revoke it.
-	rec = deleteAuth(t, s, "/api/tokens/ci", h)
-	if rec.Code != http.StatusNoContent {
+	// A token with the same name in another collection is a different scope.
+	other := "/api/v1/orgs/lab/collections/edge/tokens"
+	rec = postJSON(t, s, other, `{"name":"ci"}`, h)
+	if rec.Code != http.StatusCreated {
+		t.Errorf("POST %s = %d, want %d (body %s)", other, rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	rec = getWith(t, s, other, h)
+	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil || len(list) != 1 || list[0].Collection != "edge" {
+		t.Errorf("edge tokens = %+v (%v), want only the edge token", list, err)
+	}
+
+	// Revoke both scoped tokens.
+	if rec := deleteWith(t, s, base+"/ci", h); rec.Code != http.StatusNoContent {
 		t.Fatalf("DELETE = %d, want %d", rec.Code, http.StatusNoContent)
 	}
-	rec = deleteAuth(t, s, "/api/tokens/ci", h)
-	if rec.Code != http.StatusNotFound {
+	if rec := deleteWith(t, s, base+"/ci", h); rec.Code != http.StatusNotFound {
 		t.Errorf("DELETE again = %d, want %d", rec.Code, http.StatusNotFound)
 	}
-	rec = getAuthWith(t, s, "/api/tokens", h)
-	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
-		t.Fatalf("decode: %v", err)
+	if rec := deleteWith(t, s, other+"/ci", h); rec.Code != http.StatusNoContent {
+		t.Errorf("DELETE edge token = %d, want %d", rec.Code, http.StatusNoContent)
 	}
-	if len(list) != 0 {
-		t.Errorf("list after remove = %+v, want empty", list)
+	rec = getWith(t, s, base, h)
+	if err := json.NewDecoder(rec.Body).Decode(&list); err != nil || len(list) != 0 {
+		t.Errorf("list after remove = %+v (%v), want empty", list, err)
 	}
 
-	// A bad body is a 400, not a panic.
-	if rec := postAuthJSON(t, s, "/api/tokens", `{not json`, h); rec.Code != http.StatusBadRequest {
+	// Bad input and unknown collections are rejected.
+	if rec := postJSON(t, s, base, `{not json`, h); rec.Code != http.StatusBadRequest {
 		t.Errorf("bad body = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if rec := getWith(t, s, "/api/v1/orgs/nope/collections/home/tokens", h); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown collection = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 
 func TestTokensRequireUser(t *testing.T) {
 	d := testutil.OpenDB(t, "server")
 	defer d.Close()
+	path := "/api/v1/orgs/default/collections/home/tokens"
+
+	// With users configured, unauthenticated requests are rejected by the
+	// auth middleware before the handler runs.
 	seedUser(t, d.Users(), "alice", "s3cret")
 	s := newTokenTestServer(t, d)
-
-	// No identity at all: the API is gated before the handler runs.
-	if rec := getAuthNoHeader(t, s, "/api/tokens"); rec.Code != http.StatusUnauthorized {
-		t.Errorf("GET /api/tokens anonymous = %d, want %d", rec.Code, http.StatusUnauthorized)
+	if rec := getWith(t, s, path, nil); rec.Code != http.StatusUnauthorized {
+		t.Errorf("GET tokens anonymous = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
-
-	// A valid session can manage tokens.
 	c := loginCookie(t, s, "alice", "s3cret")
-	if rec := getAuthWith(t, s, "/api/tokens", map[string]string{"Cookie": c.String()}); rec.Code != http.StatusOK {
-		t.Errorf("GET /api/tokens with session = %d, want %d", rec.Code, http.StatusOK)
+	if rec := getWith(t, s, path, map[string]string{"Cookie": c.String()}); rec.Code != http.StatusOK {
+		t.Errorf("GET tokens with session = %d, want %d", rec.Code, http.StatusOK)
 	}
 }
 
-func getAuthNoHeader(t *testing.T, s *server.Server, path string) *httptest.ResponseRecorder {
-	t.Helper()
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, path, nil)
-	s.Routes().ServeHTTP(rec, req)
-	return rec
-}
-
-func TestTokenBearerAuthenticates(t *testing.T) {
+func TestTokenBearerIsScopedToItsCollection(t *testing.T) {
 	d := testutil.OpenDB(t, "server")
 	defer d.Close()
 	seedUser(t, d.Users(), "alice", "s3cret")
+	seedRunAt(t, d, "home", "site", "web1", time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC))
 	s := newTokenTestServer(t, d)
 
-	raw, _, err := d.Tokens().Create(context.Background(), "alice", "cli", 0)
+	raw, tok, err := d.Tokens().Create(context.Background(), "alice", "default", "home", "cli", 0)
 	if err != nil {
 		t.Fatalf("Create() error: %v", err)
 	}
-
-	// The bearer token unlocks gated endpoints, via both header styles.
-	if rec := getAuthWith(t, s, "/api/stats", map[string]string{"Authorization": "Bearer " + raw}); rec.Code != http.StatusOK {
-		t.Errorf("/api/stats with bearer = %d, want %d", rec.Code, http.StatusOK)
-	}
-	if rec := getAuthWith(t, s, "/api/stats", map[string]string{"X-Strangle-Token": raw}); rec.Code != http.StatusOK {
-		t.Errorf("/api/stats with X-Strangle-Token = %d, want %d", rec.Code, http.StatusOK)
+	if tok.Org != "default" || tok.Collection != "home" {
+		t.Fatalf("stored token = %+v, want default/home scope", tok)
 	}
 
-	// A wrong or stale value does not.
-	if rec := getAuthWith(t, s, "/api/stats", map[string]string{"Authorization": "Bearer wrong"}); rec.Code != http.StatusUnauthorized {
-		t.Errorf("/api/stats with wrong bearer = %d, want %d", rec.Code, http.StatusUnauthorized)
+	// The user token authenticates and the scope limits what can be read.
+	h := map[string]string{"Authorization": "Bearer " + raw}
+	if rec := getWith(t, s, "/api/v1/orgs/default/collections/home/hosts", h); rec.Code != http.StatusOK {
+		t.Errorf("GET home hosts with bearer = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if rec := getWith(t, s, "/api/v1/orgs/default/collections/home/tokens", h); rec.Code != http.StatusOK {
+		t.Errorf("GET home tokens with bearer = %d, want %d", rec.Code, http.StatusOK)
+	}
+	rec := getWith(t, s, "/api/v1/orgs", h)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET orgs with bearer = %d, want %d (body %s)", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var orgs []orgInfo
+	if err := json.NewDecoder(rec.Body).Decode(&orgs); err != nil {
+		t.Fatalf("decode orgs: %v", err)
+	}
+	if len(orgs) != 1 || orgs[0].Name != "default" || len(orgs[0].Collections) != 1 || orgs[0].Collections[0].Name != "home" {
+		t.Errorf("visible orgs = %+v, want only default/home", orgs)
+	}
+	for _, path := range []string{
+		"/api/v1/orgs/lab/collections/edge/hosts",
+		"/api/v1/orgs/lab/collections/edge/tokens",
+		"/api/v1/orgs/lab/collections/edge",
+	} {
+		if rec := getWith(t, s, path, h); rec.Code != http.StatusForbidden {
+			t.Errorf("GET %s with scoped bearer = %d, want %d", path, rec.Code, http.StatusForbidden)
+		}
 	}
 
-	// A revoked token stops working.
-	if err := d.Tokens().Remove(context.Background(), "alice", "cli"); err != nil {
+	// The webhook-style header also carries user tokens.
+	if rec := getWith(t, s, "/api/v1/orgs/default/collections/home/hosts", map[string]string{"X-Strangle-Token": raw}); rec.Code != http.StatusOK {
+		t.Errorf("GET home hosts with X-Strangle-Token = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	// /me remains session-only: a bearer token is not a UI login.
+	if rec := getWith(t, s, "/api/v1/me", h); rec.Code != http.StatusUnauthorized {
+		t.Errorf("GET /me with bearer = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+
+	// Wrong and revoked values do not authenticate.
+	if rec := getWith(t, s, "/api/v1/orgs", map[string]string{"Authorization": "Bearer wrong"}); rec.Code != http.StatusUnauthorized {
+		t.Errorf("GET orgs with wrong bearer = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+	if err := d.Tokens().Remove(context.Background(), "alice", "default", "home", "cli"); err != nil {
 		t.Fatalf("Remove() error: %v", err)
 	}
-	if rec := getAuthWith(t, s, "/api/stats", map[string]string{"Authorization": "Bearer " + raw}); rec.Code != http.StatusUnauthorized {
-		t.Errorf("/api/stats with revoked bearer = %d, want %d", rec.Code, http.StatusUnauthorized)
+	if rec := getWith(t, s, "/api/v1/orgs/default/collections/home/hosts", h); rec.Code != http.StatusUnauthorized {
+		t.Errorf("GET home hosts with revoked bearer = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
 
-func TestStaticTokenIsNotAUser(t *testing.T) {
-	st := testutil.OpenDB(t, "server")
-	defer st.Close()
-	seedUser(t, st.Users(), "alice", "s3cret")
-	apr := applier.NewAnsible(testTargets, stubExecutor{}, st, zap.NewNop())
-	s := server.New("test", apr, st, nil, &recEnqueuer{status: "queued"}, nil, nil, st.Users(), st.Tokens(), "sekrit", zap.NewNop())
+func TestStaticTokenCannotManageTokens(t *testing.T) {
+	d := testutil.OpenDB(t, "server")
+	defer d.Close()
+	seedUser(t, d.Users(), "alice", "s3cret")
+	apr := applier.NewAnsible(testTargets, stubExecutor{}, d, zap.NewNop())
+	s := server.New("test", apr, d, nil, nil, nil, nil, d.Users(), d.Tokens(), "sekrit", zap.NewNop())
 
-	// The static sync token is not a user: it cannot pass the auth gate.
-	rec := getAuthWith(t, s, "/api/tokens", map[string]string{"X-Strangle-Token": "sekrit"})
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("GET /api/tokens with static token = %d, want %d", rec.Code, http.StatusUnauthorized)
-	}
-	rec = postAuthJSON(t, s, "/api/tokens", `{"name":"x"}`, map[string]string{"X-Strangle-Token": "sekrit"})
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("POST /api/tokens with static token = %d, want %d", rec.Code, http.StatusUnauthorized)
+	path := "/api/v1/orgs/default/collections/home/tokens"
+	for _, h := range []map[string]string{
+		{"X-Strangle-Token": "sekrit"},
+		{"Authorization": "Bearer sekrit"},
+	} {
+		if rec := getWith(t, s, path, h); rec.Code != http.StatusUnauthorized {
+			t.Errorf("GET tokens with static token = %d, want %d", rec.Code, http.StatusUnauthorized)
+		}
+		if rec := postJSON(t, s, path, `{"name":"x"}`, h); rec.Code != http.StatusUnauthorized {
+			t.Errorf("POST tokens with static token = %d, want %d", rec.Code, http.StatusUnauthorized)
+		}
 	}
 }
 
@@ -202,30 +233,32 @@ func TestTokensNoUserIdentity(t *testing.T) {
 	d := testutil.OpenDB(t, "server")
 	defer d.Close()
 	s := newTokenTestServer(t, d)
+	path := "/api/v1/orgs/default/collections/home/tokens"
 
-	if rec := getAuthNoHeader(t, s, "/api/tokens"); rec.Code != http.StatusForbidden {
-		t.Errorf("GET /api/tokens anonymous = %d, want %d", rec.Code, http.StatusForbidden)
+	if rec := getWith(t, s, path, nil); rec.Code != http.StatusForbidden {
+		t.Errorf("GET tokens anonymous = %d, want %d", rec.Code, http.StatusForbidden)
 	}
-	if rec := postAuthJSON(t, s, "/api/tokens", `{"name":"x"}`, nil); rec.Code != http.StatusForbidden {
-		t.Errorf("POST /api/tokens anonymous = %d, want %d", rec.Code, http.StatusForbidden)
+	if rec := postJSON(t, s, path, `{"name":"x"}`, nil); rec.Code != http.StatusForbidden {
+		t.Errorf("POST tokens anonymous = %d, want %d", rec.Code, http.StatusForbidden)
 	}
-	if rec := deleteAuth(t, s, "/api/tokens/x", nil); rec.Code != http.StatusForbidden {
-		t.Errorf("DELETE /api/tokens anonymous = %d, want %d", rec.Code, http.StatusForbidden)
+	if rec := deleteWith(t, s, path+"/x", nil); rec.Code != http.StatusForbidden {
+		t.Errorf("DELETE token anonymous = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 }
 
 func TestTokensWithoutStore(t *testing.T) {
 	// No users, no tokens: auth is off, the endpoints report that token
 	// storage is unavailable instead of panicking.
-	s := newTestServer(t, &recEnqueuer{status: "queued"})
+	s := newTestServer(t)
+	path := "/api/v1/orgs/default/collections/home/tokens"
 
-	if rec := getAuthNoHeader(t, s, "/api/tokens"); rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("GET /api/tokens without store = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	if rec := getWith(t, s, path, nil); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("GET tokens without store = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
-	if rec := postAuthJSON(t, s, "/api/tokens", `{"name":"x"}`, nil); rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("POST /api/tokens without store = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	if rec := postJSON(t, s, path, `{"name":"x"}`, nil); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("POST tokens without store = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
-	if rec := deleteAuth(t, s, "/api/tokens/x", nil); rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("DELETE /api/tokens without store = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	if rec := deleteWith(t, s, path+"/x", nil); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("DELETE token without store = %d, want %d", rec.Code, http.StatusServiceUnavailable)
 	}
 }

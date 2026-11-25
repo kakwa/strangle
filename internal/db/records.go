@@ -113,39 +113,6 @@ type TaskRunRecord struct {
 	FinishedAt time.Time `json:"finished_at"`
 }
 
-// PlaybookStats is the per-(target, playbook) run breakdown in Stats.
-type PlaybookStats struct {
-	Target    string    `json:"target"`
-	Playbook  string    `json:"playbook"`
-	Total     int       `json:"total"`
-	Failed    int       `json:"failed"`
-	LastRunAt time.Time `json:"last_run_at"`
-}
-
-// HostsStats is the host breakdown in Stats.
-type HostsStats struct {
-	Total       int `json:"total"`
-	InInventory int `json:"in_inventory"`
-	Active      int `json:"active"`
-	Disappeared int `json:"disappeared"`
-}
-
-// RunsStats is the run breakdown in Stats.
-type RunsStats struct {
-	Total         int       `json:"total"`
-	Succeeded     int       `json:"succeeded"`
-	Failed        int       `json:"failed"`
-	AvgDurationMS int64     `json:"avg_duration_ms"`
-	LastRunAt     time.Time `json:"last_run_at"`
-}
-
-// Stats is the aggregate view returned by Store.Stats.
-type Stats struct {
-	Hosts       HostsStats      `json:"hosts"`
-	Runs        RunsStats       `json:"runs"`
-	PerPlaybook []PlaybookStats `json:"per_playbook"`
-}
-
 // RunInput is everything a Store needs to persist one playbook run.
 type RunInput struct {
 	// Run is the run to insert.
@@ -231,8 +198,10 @@ type Store interface {
 	// inventory and have not been seen for delay. It returns the number of
 	// hosts removed and deletes their per-host history rows with them.
 	PruneHosts(ctx context.Context, target string, delay time.Duration) (int64, error)
-	// Stats returns aggregate statistics.
-	Stats(ctx context.Context) (*Stats, error)
+	// CreateOrg inserts a new organization; it fails when the name exists.
+	CreateOrg(ctx context.Context, name string) (OrgRecord, error)
+	// ListOrgs returns every stored organization in name order.
+	ListOrgs(ctx context.Context) ([]OrgRecord, error)
 	// Close releases underlying resources.
 	Close() error
 }

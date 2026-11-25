@@ -30,35 +30,39 @@ At startup the master syncs every git-backed target (`InitialSync`): it
 clones the repository (or fetches and updates an existing checkout) to its
 tracked ref, then loads the target's `strangle.yml` from the checkout. A
 failure on one target does not stop the others and is reported, not fatal —
-the target can be synced later through `POST /api/sync`.
+the target can be synced later through its collection `hook` endpoint.
 
-## The sync webhook
+## The hook webhook
 
-`POST /api/sync` moves one target's checkout to its tracked ref — or to the
-branch named in the request, which **becomes the new tracked ref** — and
-reloads its `strangle.yml` from the fresh checkout:
+`POST /api/v1/orgs/{org}/collections/{collection}/hook` moves that
+collection's checkout to its tracked ref — or to the branch named in the
+request, which **becomes the new tracked ref** — and reloads its
+`strangle.yml` from the fresh checkout. The collection comes from the URL;
+the body has only an optional `branch` field:
 
 ```sh
 # sync to the tracked ref
-curl -X POST localhost:8080/api/sync -H "X-Strangle-Token: <token>" \
-  -d '{"target": "site"}'
+curl -X POST localhost:8080/api/v1/orgs/default/collections/site/hook \
+  -H "X-Strangle-Token: <token>" -d '{}'
 
 # switch the tracked branch and sync
-curl -X POST localhost:8080/api/sync -H "X-Strangle-Token: <token>" \
-  -d '{"target": "site", "branch": "release-1.4"}'
+curl -X POST localhost:8080/api/v1/orgs/default/collections/site/hook \
+  -H "X-Strangle-Token: <token>" -d '{"branch": "release-1.4"}'
 ```
 
 ```json
 {"target": "site", "rev": "9f2c1ab...", "changed": true}
 ```
 
-When `auth.token` is set in `server.yml`, the token is required
-(`Authorization: Bearer <token>` or `X-Strangle-Token: <token>`); see
-[api.md](api.md).
+A UI session or a user token scoped to this collection also works. When
+`auth.token` is set in `server.yml`, the static token is accepted here (and
+nowhere else) via `Authorization: Bearer <token>` or
+`X-Strangle-Token: <token>`; see [api.md](api.md).
 
-Errors: `404` unknown target or no git-backed target configured, `400` target
-without a git upstream, `502` a git failure (network, auth, or a broken
-`strangle.yml` in the new checkout).
+Errors: `401` missing/invalid credentials, `403` access denied for another
+collection, `404` unknown collection or no git-backed target configured,
+`400` collection without a git upstream, `502` a git failure (network, auth,
+or a broken `strangle.yml` in the new checkout).
 
 A bad push is visible but cannot freeze the target: when the reloaded
 `strangle.yml` fails to load, the old playbook list is kept and the error is

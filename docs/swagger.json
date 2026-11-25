@@ -3,6 +3,9 @@
         "schemas": {
             "github_com_kakwa_strangle_internal_auth.Token": {
                 "properties": {
+                    "collection": {
+                        "type": "string"
+                    },
                     "created_at": {
                         "type": "string"
                     },
@@ -13,6 +16,9 @@
                         "type": "string"
                     },
                     "name": {
+                        "type": "string"
+                    },
+                    "org": {
                         "type": "string"
                     },
                     "prefix": {
@@ -132,205 +138,6 @@
                 },
                 "type": "object"
             },
-            "github_com_kakwa_strangle_internal_db.HostsStats": {
-                "properties": {
-                    "active": {
-                        "type": "integer"
-                    },
-                    "disappeared": {
-                        "type": "integer"
-                    },
-                    "in_inventory": {
-                        "type": "integer"
-                    },
-                    "total": {
-                        "type": "integer"
-                    }
-                },
-                "type": "object"
-            },
-            "github_com_kakwa_strangle_internal_db.PlaybookStats": {
-                "properties": {
-                    "failed": {
-                        "type": "integer"
-                    },
-                    "last_run_at": {
-                        "type": "string"
-                    },
-                    "playbook": {
-                        "type": "string"
-                    },
-                    "target": {
-                        "type": "string"
-                    },
-                    "total": {
-                        "type": "integer"
-                    }
-                },
-                "type": "object"
-            },
-            "github_com_kakwa_strangle_internal_db.RunRecord": {
-                "properties": {
-                    "canceled": {
-                        "description": "Canceled records when cancellation was requested for the run.",
-                        "type": "boolean"
-                    },
-                    "changed_hosts": {
-                        "type": "integer"
-                    },
-                    "check": {
-                        "description": "Check records a dry run triggered with --check.",
-                        "type": "boolean"
-                    },
-                    "duration_ms": {
-                        "type": "integer"
-                    },
-                    "exit_code": {
-                        "type": "integer"
-                    },
-                    "failed_hosts": {
-                        "type": "integer"
-                    },
-                    "finished_at": {
-                        "type": "string"
-                    },
-                    "hosts": {
-                        "type": "integer"
-                    },
-                    "id": {
-                        "type": "integer"
-                    },
-                    "inventory": {
-                        "description": "Inventory is the inventory file/path used by this run. Together with\nTarget and Playbook it identifies a host's context.",
-                        "type": "string"
-                    },
-                    "job_id": {
-                        "description": "JobID is the queue job that executes this run, when available.",
-                        "type": "string"
-                    },
-                    "output": {
-                        "type": "string"
-                    },
-                    "playbook": {
-                        "type": "string"
-                    },
-                    "started_at": {
-                        "type": "string"
-                    },
-                    "state": {
-                        "type": "string"
-                    },
-                    "success": {
-                        "type": "boolean"
-                    },
-                    "target": {
-                        "type": "string"
-                    }
-                },
-                "type": "object"
-            },
-            "github_com_kakwa_strangle_internal_db.RunsStats": {
-                "properties": {
-                    "avg_duration_ms": {
-                        "type": "integer"
-                    },
-                    "failed": {
-                        "type": "integer"
-                    },
-                    "last_run_at": {
-                        "type": "string"
-                    },
-                    "succeeded": {
-                        "type": "integer"
-                    },
-                    "total": {
-                        "type": "integer"
-                    }
-                },
-                "type": "object"
-            },
-            "github_com_kakwa_strangle_internal_db.Stats": {
-                "properties": {
-                    "hosts": {
-                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.HostsStats"
-                    },
-                    "per_playbook": {
-                        "items": {
-                            "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.PlaybookStats"
-                        },
-                        "type": "array",
-                        "uniqueItems": false
-                    },
-                    "runs": {
-                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.RunsStats"
-                    }
-                },
-                "type": "object"
-            },
-            "github_com_kakwa_strangle_internal_db.TaskRunRecord": {
-                "properties": {
-                    "diff": {
-                        "type": "string"
-                    },
-                    "error": {
-                        "type": "string"
-                    },
-                    "finished_at": {
-                        "type": "string"
-                    },
-                    "host": {
-                        "type": "string"
-                    },
-                    "id": {
-                        "type": "integer"
-                    },
-                    "run_id": {
-                        "type": "integer"
-                    },
-                    "status": {
-                        "type": "string"
-                    },
-                    "target": {
-                        "type": "string"
-                    },
-                    "task": {
-                        "type": "string"
-                    }
-                },
-                "type": "object"
-            },
-            "github_com_kakwa_strangle_internal_db.TaskStateRecord": {
-                "properties": {
-                    "host": {
-                        "type": "string"
-                    },
-                    "last_changed_at": {
-                        "type": "string"
-                    },
-                    "last_diff": {
-                        "type": "string"
-                    },
-                    "last_error": {
-                        "type": "string"
-                    },
-                    "last_run_at": {
-                        "type": "string"
-                    },
-                    "last_run_id": {
-                        "type": "integer"
-                    },
-                    "status": {
-                        "type": "string"
-                    },
-                    "target": {
-                        "type": "string"
-                    },
-                    "task": {
-                        "type": "string"
-                    }
-                },
-                "type": "object"
-            },
             "github_com_kakwa_strangle_internal_sshpool.HostKey": {
                 "properties": {
                     "fingerprint": {
@@ -355,44 +162,7 @@
                 },
                 "type": "object"
             },
-            "github_com_kakwa_strangle_internal_sshpool.Stats": {
-                "properties": {
-                    "active_connections": {
-                        "type": "integer"
-                    },
-                    "total_dials": {
-                        "type": "integer"
-                    }
-                },
-                "type": "object"
-            },
-            "github_com_kakwa_strangle_internal_worker.WorkerStatus": {
-                "properties": {
-                    "alive": {
-                        "type": "boolean"
-                    },
-                    "collection": {
-                        "type": "string"
-                    },
-                    "id": {
-                        "type": "integer"
-                    },
-                    "jobs": {
-                        "type": "integer"
-                    },
-                    "pid": {
-                        "type": "integer"
-                    },
-                    "restarts": {
-                        "type": "integer"
-                    },
-                    "socket": {
-                        "type": "string"
-                    }
-                },
-                "type": "object"
-            },
-            "internal_server.apiErrorDoc": {
+            "internal_server_handlers.apiErrorDoc": {
                 "properties": {
                     "error": {
                         "type": "string"
@@ -400,18 +170,7 @@
                 },
                 "type": "object"
             },
-            "internal_server.cancelRunResponseDoc": {
-                "properties": {
-                    "id": {
-                        "type": "integer"
-                    },
-                    "state": {
-                        "type": "string"
-                    }
-                },
-                "type": "object"
-            },
-            "internal_server.collectionDetailResponseDoc": {
+            "internal_server_handlers.collectionDetailResponseDoc": {
                 "properties": {
                     "links": {
                         "additionalProperties": {
@@ -427,7 +186,7 @@
                     },
                     "playbooks": {
                         "items": {
-                            "$ref": "#/components/schemas/internal_server.playbookInfo"
+                            "$ref": "#/components/schemas/internal_server_handlers.playbookInfo"
                         },
                         "type": "array",
                         "uniqueItems": false
@@ -435,7 +194,7 @@
                 },
                 "type": "object"
             },
-            "internal_server.collectionInfo": {
+            "internal_server_handlers.collectionInfo": {
                 "properties": {
                     "name": {
                         "type": "string"
@@ -445,7 +204,7 @@
                     },
                     "playbooks": {
                         "items": {
-                            "$ref": "#/components/schemas/internal_server.playbookInfo"
+                            "$ref": "#/components/schemas/internal_server_handlers.playbookInfo"
                         },
                         "type": "array",
                         "uniqueItems": false
@@ -453,21 +212,7 @@
                 },
                 "type": "object"
             },
-            "internal_server.hostKeyDecisionRequestDoc": {
-                "properties": {
-                    "fingerprint": {
-                        "type": "string"
-                    },
-                    "host": {
-                        "type": "string"
-                    },
-                    "target": {
-                        "type": "string"
-                    }
-                },
-                "type": "object"
-            },
-            "internal_server.hostKeyDecisionResponseDoc": {
+            "internal_server_handlers.hostStatusResponseDoc": {
                 "properties": {
                     "host": {
                         "type": "string"
@@ -478,7 +223,21 @@
                 },
                 "type": "object"
             },
-            "internal_server.loginRequestDoc": {
+            "internal_server_handlers.jsonPatchOperationDoc": {
+                "properties": {
+                    "op": {
+                        "type": "string"
+                    },
+                    "path": {
+                        "type": "string"
+                    },
+                    "value": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "internal_server_handlers.loginRequestDoc": {
                 "properties": {
                     "password": {
                         "type": "string"
@@ -489,7 +248,7 @@
                 },
                 "type": "object"
             },
-            "internal_server.meResponseDoc": {
+            "internal_server_handlers.meResponseDoc": {
                 "properties": {
                     "authenticated": {
                         "type": "boolean"
@@ -500,7 +259,7 @@
                 },
                 "type": "object"
             },
-            "internal_server.messageResponseDoc": {
+            "internal_server_handlers.messageResponseDoc": {
                 "properties": {
                     "status": {
                         "type": "string"
@@ -508,11 +267,19 @@
                 },
                 "type": "object"
             },
-            "internal_server.orgInfo": {
+            "internal_server_handlers.orgCreateRequestDoc": {
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "internal_server_handlers.orgCreateResponseDoc": {
                 "properties": {
                     "collections": {
                         "items": {
-                            "$ref": "#/components/schemas/internal_server.collectionInfo"
+                            "$ref": "#/components/schemas/internal_server_handlers.collectionInfo"
                         },
                         "type": "array",
                         "uniqueItems": false
@@ -523,7 +290,22 @@
                 },
                 "type": "object"
             },
-            "internal_server.playbookInfo": {
+            "internal_server_handlers.orgInfo": {
+                "properties": {
+                    "collections": {
+                        "items": {
+                            "$ref": "#/components/schemas/internal_server_handlers.collectionInfo"
+                        },
+                        "type": "array",
+                        "uniqueItems": false
+                    },
+                    "name": {
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "internal_server_handlers.playbookInfo": {
                 "properties": {
                     "inventory": {
                         "type": "string"
@@ -532,7 +314,6 @@
                         "type": "string"
                     },
                     "last_status": {
-                        "description": "ok | failed | \"\"",
                         "type": "string"
                     },
                     "name": {
@@ -544,52 +325,15 @@
                 },
                 "type": "object"
             },
-            "internal_server.runAcceptedResponseDoc": {
-                "properties": {
-                    "check": {
-                        "type": "boolean"
-                    },
-                    "playbook": {
-                        "type": "string"
-                    },
-                    "run_id": {
-                        "type": "integer"
-                    },
-                    "status": {
-                        "type": "string"
-                    },
-                    "target": {
-                        "type": "string"
-                    }
-                },
-                "type": "object"
-            },
-            "internal_server.runRequestDoc": {
-                "properties": {
-                    "check": {
-                        "type": "boolean"
-                    },
-                    "playbook": {
-                        "type": "string"
-                    },
-                    "target": {
-                        "type": "string"
-                    }
-                },
-                "type": "object"
-            },
-            "internal_server.syncRequestDoc": {
+            "internal_server_handlers.syncRequestDoc": {
                 "properties": {
                     "branch": {
                         "type": "string"
-                    },
-                    "target": {
-                        "type": "string"
                     }
                 },
                 "type": "object"
             },
-            "internal_server.syncResponseDoc": {
+            "internal_server_handlers.syncResponseDoc": {
                 "properties": {
                     "changed": {
                         "type": "boolean"
@@ -603,7 +347,7 @@
                 },
                 "type": "object"
             },
-            "internal_server.tokenCreateRequestDoc": {
+            "internal_server_handlers.tokenCreateRequestDoc": {
                 "properties": {
                     "name": {
                         "type": "string"
@@ -614,7 +358,7 @@
                 },
                 "type": "object"
             },
-            "internal_server.tokenCreateResponseDoc": {
+            "internal_server_handlers.tokenCreateResponseDoc": {
                 "properties": {
                     "raw": {
                         "type": "string"
@@ -634,21 +378,21 @@
                 "type": "apiKey"
             },
             "syncToken": {
-                "description": "Static auth.token, accepted by the sync endpoints.",
+                "description": "Static auth.token, accepted by collection hook endpoints.",
                 "in": "header",
                 "name": "X-Strangle-Token",
                 "type": "apiKey"
             },
             "userBearer": {
                 "bearerFormat": "st_",
-                "description": "Personal access token created through POST /api/v1/tokens.",
+                "description": "Collection-scoped personal access token created through POST /api/v1/orgs/{org}/collections/{collection}/tokens.",
                 "scheme": "bearer",
                 "type": "http"
             }
         }
     },
     "info": {
-        "description": "HTTP API for running, inspecting and administering Ansible playbook collections.",
+        "description": "Versioned HTTP API for inspecting and administering Ansible playbook collections.",
         "license": {
             "name": "GPL-3.0"
         },
@@ -689,7 +433,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.messageResponseDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.messageResponseDoc"
                                 }
                             }
                         },
@@ -702,202 +446,6 @@
                 ]
             }
         },
-        "/api/v1/hosts": {
-            "get": {
-                "operationId": "get_hosts",
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "items": {
-                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.HostRecord"
-                                    },
-                                    "type": "array"
-                                }
-                            }
-                        },
-                        "description": "Hosts"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "not authenticated"
-                    },
-                    "500": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "store error"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    }
-                ],
-                "summary": "List known hosts",
-                "tags": [
-                    "hosts"
-                ]
-            }
-        },
-        "/api/v1/hosts/{host}/changes": {
-            "get": {
-                "operationId": "get_hosts_host_changes",
-                "parameters": [
-                    {
-                        "description": "Inventory host name",
-                        "in": "path",
-                        "name": "host",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Maximum number of entries",
-                        "in": "query",
-                        "name": "limit",
-                        "schema": {
-                            "default": 200,
-                            "type": "integer"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "items": {
-                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.TaskStateRecord"
-                                    },
-                                    "type": "array"
-                                }
-                            }
-                        },
-                        "description": "Task changes"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "not authenticated"
-                    },
-                    "500": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "store error"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    }
-                ],
-                "summary": "Latest changes of one host",
-                "tags": [
-                    "hosts"
-                ]
-            }
-        },
-        "/api/v1/hosts/{host}/runs": {
-            "get": {
-                "operationId": "get_hosts_host_runs",
-                "parameters": [
-                    {
-                        "description": "Inventory host name",
-                        "in": "path",
-                        "name": "host",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Maximum number of entries",
-                        "in": "query",
-                        "name": "limit",
-                        "schema": {
-                            "default": 10,
-                            "type": "integer"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "items": {
-                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.HostRunRecord"
-                                    },
-                                    "type": "array"
-                                }
-                            }
-                        },
-                        "description": "Host runs"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "not authenticated"
-                    },
-                    "500": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "store error"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    }
-                ],
-                "summary": "Run history of one host",
-                "tags": [
-                    "hosts"
-                ]
-            }
-        },
         "/api/v1/login": {
             "post": {
                 "operationId": "post_login",
@@ -905,7 +453,7 @@
                     "content": {
                         "application/json": {
                             "schema": {
-                                "$ref": "#/components/schemas/internal_server.loginRequestDoc",
+                                "$ref": "#/components/schemas/internal_server_handlers.loginRequestDoc",
                                 "summary": "request",
                                 "description": "credentials"
                             }
@@ -919,7 +467,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.meResponseDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.meResponseDoc"
                                 }
                             }
                         },
@@ -929,7 +477,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -939,7 +487,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -960,7 +508,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.messageResponseDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.messageResponseDoc"
                                 }
                             }
                         },
@@ -981,7 +529,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.meResponseDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.meResponseDoc"
                                 }
                             }
                         },
@@ -991,7 +539,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1035,7 +583,7 @@
                             "application/json": {
                                 "schema": {
                                     "items": {
-                                        "$ref": "#/components/schemas/internal_server.orgInfo"
+                                        "$ref": "#/components/schemas/internal_server_handlers.orgInfo"
                                     },
                                     "type": "array"
                                 }
@@ -1047,7 +595,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1063,6 +611,86 @@
                     }
                 ],
                 "summary": "List visible organizations and their collections",
+                "tags": [
+                    "collections"
+                ]
+            },
+            "post": {
+                "operationId": "post_orgs",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/internal_server_handlers.orgCreateRequestDoc",
+                                "summary": "request",
+                                "description": "organization"
+                            }
+                        }
+                    },
+                    "description": "organization",
+                    "required": true
+                },
+                "responses": {
+                    "201": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/internal_server_handlers.orgCreateResponseDoc"
+                                }
+                            }
+                        },
+                        "description": "Created organization"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
+                                }
+                            }
+                        },
+                        "description": "invalid name"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
+                                }
+                            }
+                        },
+                        "description": "not authenticated"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
+                                }
+                            }
+                        },
+                        "description": "organization already exists"
+                    },
+                    "503": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
+                                }
+                            }
+                        },
+                        "description": "store unavailable"
+                    }
+                },
+                "security": [
+                    {
+                        "sessionCookie": []
+                    },
+                    {
+                        "userBearer": []
+                    }
+                ],
+                "summary": "Create an organization",
                 "tags": [
                     "collections"
                 ]
@@ -1087,7 +715,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.orgInfo"
+                                    "$ref": "#/components/schemas/internal_server_handlers.orgInfo"
                                 }
                             }
                         },
@@ -1097,7 +725,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1107,7 +735,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1148,7 +776,7 @@
                             "application/json": {
                                 "schema": {
                                     "items": {
-                                        "$ref": "#/components/schemas/internal_server.collectionInfo"
+                                        "$ref": "#/components/schemas/internal_server_handlers.collectionInfo"
                                     },
                                     "type": "array"
                                 }
@@ -1160,7 +788,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1170,7 +798,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1219,7 +847,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.collectionDetailResponseDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.collectionDetailResponseDoc"
                                 }
                             }
                         },
@@ -1229,7 +857,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1239,7 +867,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1249,7 +877,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1270,91 +898,9 @@
                 ]
             }
         },
-        "/api/v1/orgs/{org}/collections/{collection}/hostkeys": {
-            "get": {
-                "operationId": "get_orgs_org_collections_collection_hostkeys",
-                "parameters": [
-                    {
-                        "description": "Organization name",
-                        "in": "path",
-                        "name": "org",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Collection (target) name",
-                        "in": "path",
-                        "name": "collection",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "items": {
-                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_sshpool.HostKey"
-                                    },
-                                    "type": "array"
-                                }
-                            }
-                        },
-                        "description": "Host keys"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "not authenticated"
-                    },
-                    "403": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "access denied"
-                    },
-                    "404": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "unknown collection"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    }
-                ],
-                "summary": "Pending SSH host keys of this collection",
-                "tags": [
-                    "ssh"
-                ]
-            }
-        },
-        "/api/v1/orgs/{org}/collections/{collection}/hostkeys/accept": {
+        "/api/v1/orgs/{org}/collections/{collection}/hook": {
             "post": {
-                "operationId": "post_orgs_org_collections_collection_hostkeys_accept",
+                "operationId": "post_orgs_org_collections_collection_hook",
                 "parameters": [
                     {
                         "description": "Organization name",
@@ -1379,13 +925,13 @@
                     "content": {
                         "application/json": {
                             "schema": {
-                                "$ref": "#/components/schemas/internal_server.hostKeyDecisionRequestDoc",
+                                "$ref": "#/components/schemas/internal_server_handlers.syncRequestDoc",
                                 "summary": "request",
-                                "description": "host key decision"
+                                "description": "hook payload"
                             }
                         }
                     },
-                    "description": "host key decision",
+                    "description": "hook payload",
                     "required": true
                 },
                 "responses": {
@@ -1393,37 +939,37 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.hostKeyDecisionResponseDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.syncResponseDoc"
                                 }
                             }
                         },
-                        "description": "Approved"
+                        "description": "Synchronized"
                     },
                     "400": {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
-                        "description": "invalid decision"
+                        "description": "invalid request or not a git collection"
                     },
                     "401": {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
-                        "description": "not authenticated"
+                        "description": "missing or invalid credentials"
                     },
                     "403": {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1433,11 +979,21 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
                         "description": "unknown collection"
+                    },
+                    "502": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
+                                }
+                            }
+                        },
+                        "description": "git failure"
                     }
                 },
                 "security": [
@@ -1446,113 +1002,14 @@
                     },
                     {
                         "userBearer": []
+                    },
+                    {
+                        "syncToken": []
                     }
                 ],
-                "summary": "Approve a pending SSH host key",
+                "summary": "Synchronize a git-backed collection (git hook)",
                 "tags": [
-                    "ssh"
-                ]
-            }
-        },
-        "/api/v1/orgs/{org}/collections/{collection}/hostkeys/reject": {
-            "post": {
-                "operationId": "post_orgs_org_collections_collection_hostkeys_reject",
-                "parameters": [
-                    {
-                        "description": "Organization name",
-                        "in": "path",
-                        "name": "org",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Collection (target) name",
-                        "in": "path",
-                        "name": "collection",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                ],
-                "requestBody": {
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "$ref": "#/components/schemas/internal_server.hostKeyDecisionRequestDoc",
-                                "summary": "request",
-                                "description": "host key decision"
-                            }
-                        }
-                    },
-                    "description": "host key decision",
-                    "required": true
-                },
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.hostKeyDecisionResponseDoc"
-                                }
-                            }
-                        },
-                        "description": "Rejected"
-                    },
-                    "400": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "invalid decision"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "not authenticated"
-                    },
-                    "403": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "access denied"
-                    },
-                    "404": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "unknown collection"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    }
-                ],
-                "summary": "Reject a pending SSH host key",
-                "tags": [
-                    "ssh"
+                    "collections"
                 ]
             }
         },
@@ -1597,7 +1054,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1607,7 +1064,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1617,7 +1074,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1627,7 +1084,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1648,9 +1105,9 @@
                 ]
             }
         },
-        "/api/v1/orgs/{org}/collections/{collection}/hosts/{host}/changes": {
+        "/api/v1/orgs/{org}/collections/{collection}/playbooks": {
             "get": {
-                "operationId": "get_orgs_org_collections_collection_hosts_host_changes",
+                "operationId": "get_orgs_org_collections_collection_playbooks",
                 "parameters": [
                     {
                         "description": "Organization name",
@@ -1669,24 +1126,6 @@
                         "schema": {
                             "type": "string"
                         }
-                    },
-                    {
-                        "description": "Inventory host name",
-                        "in": "path",
-                        "name": "host",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Maximum number of entries",
-                        "in": "query",
-                        "name": "limit",
-                        "schema": {
-                            "default": 200,
-                            "type": "integer"
-                        }
                     }
                 ],
                 "responses": {
@@ -1694,20 +1133,23 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "items": {
-                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.TaskStateRecord"
+                                    "additionalProperties": {
+                                        "items": {
+                                            "$ref": "#/components/schemas/internal_server_handlers.playbookInfo"
+                                        },
+                                        "type": "array"
                                     },
-                                    "type": "array"
+                                    "type": "object"
                                 }
                             }
                         },
-                        "description": "Task changes"
+                        "description": "Playbooks keyed by collection"
                     },
                     "401": {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1717,7 +1159,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1727,7 +1169,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1737,7 +1179,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1752,15 +1194,15 @@
                         "userBearer": []
                     }
                 ],
-                "summary": "Latest changes of one host in this collection",
+                "summary": "Playbooks of this collection",
                 "tags": [
-                    "hosts"
+                    "playbooks"
                 ]
             }
         },
-        "/api/v1/orgs/{org}/collections/{collection}/hosts/{host}/runs": {
-            "get": {
-                "operationId": "get_orgs_org_collections_collection_hosts_host_runs",
+        "/api/v1/orgs/{org}/collections/{collection}/playbooks/{playbook}/hosts/{host}": {
+            "patch": {
+                "operationId": "patch_playbooks_playbook_hosts_host",
                 "parameters": [
                     {
                         "description": "Organization name",
@@ -1775,6 +1217,247 @@
                         "description": "Collection (target) name",
                         "in": "path",
                         "name": "collection",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Playbook (job) name from strangle.yml",
+                        "in": "path",
+                        "name": "playbook",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Inventory host name",
+                        "in": "path",
+                        "name": "host",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "items": {
+                                    "$ref": "#/components/schemas/internal_server_handlers.jsonPatchOperationDoc"
+                                },
+                                "title": "request",
+                                "type": "array"
+                            }
+                        }
+                    },
+                    "description": "JSON Patch operations on /status and /fingerprint",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/internal_server_handlers.hostStatusResponseDoc"
+                                }
+                            }
+                        },
+                        "description": "Updated"
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
+                                }
+                            }
+                        },
+                        "description": "invalid patch or status"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
+                                }
+                            }
+                        },
+                        "description": "not authenticated"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
+                                }
+                            }
+                        },
+                        "description": "access denied"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
+                                }
+                            }
+                        },
+                        "description": "no pending key or unknown collection/playbook"
+                    },
+                    "409": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
+                                }
+                            }
+                        },
+                        "description": "fingerprint mismatch"
+                    }
+                },
+                "security": [
+                    {
+                        "sessionCookie": []
+                    },
+                    {
+                        "userBearer": []
+                    }
+                ],
+                "summary": "Update a host's SSH key trust status with JSON Patch",
+                "tags": [
+                    "ssh"
+                ]
+            }
+        },
+        "/api/v1/orgs/{org}/collections/{collection}/playbooks/{playbook}/hosts/{host}/hostkeys": {
+            "get": {
+                "operationId": "get_playbooks_playbook_hosts_host_hostkeys",
+                "parameters": [
+                    {
+                        "description": "Organization name",
+                        "in": "path",
+                        "name": "org",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Collection (target) name",
+                        "in": "path",
+                        "name": "collection",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Playbook (job) name from strangle.yml",
+                        "in": "path",
+                        "name": "playbook",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Inventory host name",
+                        "in": "path",
+                        "name": "host",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "items": {
+                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_sshpool.HostKey"
+                                    },
+                                    "type": "array"
+                                }
+                            }
+                        },
+                        "description": "Host keys"
+                    },
+                    "401": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
+                                }
+                            }
+                        },
+                        "description": "not authenticated"
+                    },
+                    "403": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
+                                }
+                            }
+                        },
+                        "description": "access denied"
+                    },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
+                                }
+                            }
+                        },
+                        "description": "unknown collection or playbook"
+                    }
+                },
+                "security": [
+                    {
+                        "sessionCookie": []
+                    },
+                    {
+                        "userBearer": []
+                    }
+                ],
+                "summary": "Pending SSH host keys of one host for one playbook",
+                "tags": [
+                    "ssh"
+                ]
+            }
+        },
+        "/api/v1/orgs/{org}/collections/{collection}/playbooks/{playbook}/hosts/{host}/runs": {
+            "get": {
+                "operationId": "get_playbooks_playbook_hosts_host_runs",
+                "parameters": [
+                    {
+                        "description": "Organization name",
+                        "in": "path",
+                        "name": "org",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Collection (target) name",
+                        "in": "path",
+                        "name": "collection",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Playbook (job) name from strangle.yml",
+                        "in": "path",
+                        "name": "playbook",
                         "required": true,
                         "schema": {
                             "type": "string"
@@ -1813,11 +1496,21 @@
                         },
                         "description": "Host runs"
                     },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
+                                }
+                            }
+                        },
+                        "description": "invalid limit"
+                    },
                     "401": {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1827,7 +1520,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1837,17 +1530,17 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
-                        "description": "unknown collection"
+                        "description": "unknown collection or playbook"
                     },
                     "500": {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -1862,15 +1555,15 @@
                         "userBearer": []
                     }
                 ],
-                "summary": "Run history of one host in this collection",
+                "summary": "Run history of one host for one playbook",
                 "tags": [
                     "hosts"
                 ]
             }
         },
-        "/api/v1/orgs/{org}/collections/{collection}/playbooks": {
+        "/api/v1/orgs/{org}/collections/{collection}/tokens": {
             "get": {
-                "operationId": "get_orgs_org_collections_collection_playbooks",
+                "operationId": "get_orgs_org_collections_collection_tokens",
                 "parameters": [
                     {
                         "description": "Organization name",
@@ -1891,1479 +1584,6 @@
                         }
                     }
                 ],
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "additionalProperties": {
-                                        "items": {
-                                            "$ref": "#/components/schemas/internal_server.playbookInfo"
-                                        },
-                                        "type": "array"
-                                    },
-                                    "type": "object"
-                                }
-                            }
-                        },
-                        "description": "Playbooks"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "not authenticated"
-                    },
-                    "403": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "access denied"
-                    },
-                    "404": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "unknown collection"
-                    },
-                    "500": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "store error"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    }
-                ],
-                "summary": "Playbooks of this collection",
-                "tags": [
-                    "playbooks"
-                ]
-            }
-        },
-        "/api/v1/orgs/{org}/collections/{collection}/run": {
-            "post": {
-                "operationId": "post_orgs_org_collections_collection_run",
-                "parameters": [
-                    {
-                        "description": "Organization name",
-                        "in": "path",
-                        "name": "org",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Collection (target) name",
-                        "in": "path",
-                        "name": "collection",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                ],
-                "requestBody": {
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "$ref": "#/components/schemas/internal_server.runRequestDoc",
-                                "summary": "request",
-                                "description": "run request"
-                            }
-                        }
-                    },
-                    "description": "run request",
-                    "required": true
-                },
-                "responses": {
-                    "202": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.runAcceptedResponseDoc"
-                                }
-                            }
-                        },
-                        "description": "Queued"
-                    },
-                    "400": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "invalid request"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "not authenticated"
-                    },
-                    "403": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "access denied"
-                    },
-                    "404": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "unknown playbook"
-                    },
-                    "500": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "store error"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    }
-                ],
-                "summary": "Queue a playbook run in this collection",
-                "tags": [
-                    "runs"
-                ]
-            }
-        },
-        "/api/v1/orgs/{org}/collections/{collection}/runs": {
-            "get": {
-                "operationId": "get_orgs_org_collections_collection_runs",
-                "parameters": [
-                    {
-                        "description": "Organization name",
-                        "in": "path",
-                        "name": "org",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Collection (target) name",
-                        "in": "path",
-                        "name": "collection",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Only runs of this playbook",
-                        "in": "query",
-                        "name": "playbook",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Only runs that mention this host",
-                        "in": "query",
-                        "name": "host",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Inclusive RFC3339 start time",
-                        "in": "query",
-                        "name": "from",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Exclusive RFC3339 end time",
-                        "in": "query",
-                        "name": "to",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Maximum number of runs",
-                        "in": "query",
-                        "name": "limit",
-                        "schema": {
-                            "default": 50,
-                            "type": "integer"
-                        }
-                    },
-                    {
-                        "description": "Number of matching runs to skip",
-                        "in": "query",
-                        "name": "offset",
-                        "schema": {
-                            "default": 0,
-                            "type": "integer"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "items": {
-                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.RunRecord"
-                                    },
-                                    "type": "array"
-                                }
-                            }
-                        },
-                        "description": "Runs",
-                        "headers": {
-                            "X-Total-Count": {
-                                "description": "Total matching runs before pagination",
-                                "schema": {
-                                    "type": "integer"
-                                }
-                            }
-                        }
-                    },
-                    "400": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "invalid filter"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "not authenticated"
-                    },
-                    "403": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "access denied"
-                    },
-                    "404": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "unknown collection"
-                    },
-                    "500": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "store error"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    }
-                ],
-                "summary": "List runs of this collection",
-                "tags": [
-                    "runs"
-                ]
-            }
-        },
-        "/api/v1/orgs/{org}/collections/{collection}/runs/{id}": {
-            "get": {
-                "operationId": "get_orgs_org_collections_collection_runs_id",
-                "parameters": [
-                    {
-                        "description": "Organization name",
-                        "in": "path",
-                        "name": "org",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Collection (target) name",
-                        "in": "path",
-                        "name": "collection",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Numeric run identifier",
-                        "in": "path",
-                        "name": "id",
-                        "required": true,
-                        "schema": {
-                            "type": "integer"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.RunRecord"
-                                }
-                            }
-                        },
-                        "description": "Run"
-                    },
-                    "400": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "invalid run id"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "not authenticated"
-                    },
-                    "403": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "access denied"
-                    },
-                    "404": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "run not found"
-                    },
-                    "500": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "store error"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    }
-                ],
-                "summary": "Run details for this collection",
-                "tags": [
-                    "runs"
-                ]
-            }
-        },
-        "/api/v1/orgs/{org}/collections/{collection}/runs/{id}/cancel": {
-            "post": {
-                "operationId": "post_orgs_org_collections_collection_runs_id_cancel",
-                "parameters": [
-                    {
-                        "description": "Organization name",
-                        "in": "path",
-                        "name": "org",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Collection (target) name",
-                        "in": "path",
-                        "name": "collection",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Numeric run identifier",
-                        "in": "path",
-                        "name": "id",
-                        "required": true,
-                        "schema": {
-                            "type": "integer"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.cancelRunResponseDoc"
-                                }
-                            }
-                        },
-                        "description": "Cancellation requested"
-                    },
-                    "400": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "invalid run id"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "not authenticated"
-                    },
-                    "403": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "access denied"
-                    },
-                    "404": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "run not found"
-                    },
-                    "409": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "run is not active"
-                    },
-                    "500": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "store error"
-                    },
-                    "501": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "cancellation unavailable"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    }
-                ],
-                "summary": "Cancel a queued or running job",
-                "tags": [
-                    "runs"
-                ]
-            }
-        },
-        "/api/v1/orgs/{org}/collections/{collection}/runs/{id}/tasks": {
-            "get": {
-                "operationId": "get_orgs_org_collections_collection_runs_id_tasks",
-                "parameters": [
-                    {
-                        "description": "Organization name",
-                        "in": "path",
-                        "name": "org",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Collection (target) name",
-                        "in": "path",
-                        "name": "collection",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Numeric run identifier",
-                        "in": "path",
-                        "name": "id",
-                        "required": true,
-                        "schema": {
-                            "type": "integer"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "items": {
-                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.TaskRunRecord"
-                                    },
-                                    "type": "array"
-                                }
-                            }
-                        },
-                        "description": "Task runs"
-                    },
-                    "400": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "invalid run id"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "not authenticated"
-                    },
-                    "403": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "access denied"
-                    },
-                    "404": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "run not found"
-                    },
-                    "500": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "store error"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    }
-                ],
-                "summary": "Per-task history of a run",
-                "tags": [
-                    "runs"
-                ]
-            }
-        },
-        "/api/v1/orgs/{org}/collections/{collection}/ssh/stats": {
-            "get": {
-                "operationId": "get_orgs_org_collections_collection_ssh_stats",
-                "parameters": [
-                    {
-                        "description": "Organization name",
-                        "in": "path",
-                        "name": "org",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Collection (target) name",
-                        "in": "path",
-                        "name": "collection",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "additionalProperties": {
-                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_sshpool.Stats"
-                                    },
-                                    "type": "object"
-                                }
-                            }
-                        },
-                        "description": "Pool stats"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "not authenticated"
-                    },
-                    "403": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "access denied"
-                    },
-                    "404": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "unknown collection"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    }
-                ],
-                "summary": "SSH connection pool counters",
-                "tags": [
-                    "ssh"
-                ]
-            }
-        },
-        "/api/v1/orgs/{org}/collections/{collection}/stats": {
-            "get": {
-                "operationId": "get_orgs_org_collections_collection_stats",
-                "parameters": [
-                    {
-                        "description": "Organization name",
-                        "in": "path",
-                        "name": "org",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Collection (target) name",
-                        "in": "path",
-                        "name": "collection",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.Stats"
-                                }
-                            }
-                        },
-                        "description": "Statistics"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "not authenticated"
-                    },
-                    "403": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "access denied"
-                    },
-                    "404": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "unknown collection"
-                    },
-                    "500": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "store error"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    }
-                ],
-                "summary": "Statistics for this collection",
-                "tags": [
-                    "stats"
-                ]
-            }
-        },
-        "/api/v1/orgs/{org}/collections/{collection}/sync": {
-            "post": {
-                "operationId": "post_orgs_org_collections_collection_sync",
-                "parameters": [
-                    {
-                        "description": "Organization name",
-                        "in": "path",
-                        "name": "org",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Collection (target) name",
-                        "in": "path",
-                        "name": "collection",
-                        "required": true,
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                ],
-                "requestBody": {
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "$ref": "#/components/schemas/internal_server.syncRequestDoc",
-                                "summary": "request",
-                                "description": "sync request"
-                            }
-                        }
-                    },
-                    "description": "sync request",
-                    "required": true
-                },
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.syncResponseDoc"
-                                }
-                            }
-                        },
-                        "description": "Synchronized"
-                    },
-                    "400": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "invalid request or not a git collection"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "missing or invalid credentials"
-                    },
-                    "403": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "access denied"
-                    },
-                    "404": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "unknown target"
-                    },
-                    "502": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "git failure"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    },
-                    {
-                        "syncToken": []
-                    }
-                ],
-                "summary": "Synchronize this collection",
-                "tags": [
-                    "collections"
-                ]
-            }
-        },
-        "/api/v1/playbooks": {
-            "get": {
-                "operationId": "get_playbooks",
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "additionalProperties": {
-                                        "items": {
-                                            "$ref": "#/components/schemas/internal_server.playbookInfo"
-                                        },
-                                        "type": "array"
-                                    },
-                                    "type": "object"
-                                }
-                            }
-                        },
-                        "description": "Playbooks"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "not authenticated"
-                    },
-                    "500": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "store error"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    }
-                ],
-                "summary": "Configured playbooks grouped by collection",
-                "tags": [
-                    "playbooks"
-                ]
-            }
-        },
-        "/api/v1/run": {
-            "post": {
-                "operationId": "post_run",
-                "requestBody": {
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "$ref": "#/components/schemas/internal_server.runRequestDoc",
-                                "summary": "request",
-                                "description": "run request"
-                            }
-                        }
-                    },
-                    "description": "run request",
-                    "required": true
-                },
-                "responses": {
-                    "202": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.runAcceptedResponseDoc"
-                                }
-                            }
-                        },
-                        "description": "Queued"
-                    },
-                    "400": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "invalid request"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "not authenticated"
-                    },
-                    "403": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "access denied"
-                    },
-                    "404": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "unknown playbook"
-                    },
-                    "500": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "store error"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    }
-                ],
-                "summary": "Queue a playbook run (legacy alias for collection runs)",
-                "tags": [
-                    "runs"
-                ]
-            }
-        },
-        "/api/v1/runs": {
-            "get": {
-                "operationId": "get_runs",
-                "parameters": [
-                    {
-                        "description": "Only runs of this playbook",
-                        "in": "query",
-                        "name": "playbook",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Only runs that mention this host",
-                        "in": "query",
-                        "name": "host",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Inclusive RFC3339 start time",
-                        "in": "query",
-                        "name": "from",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Exclusive RFC3339 end time",
-                        "in": "query",
-                        "name": "to",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    {
-                        "description": "Maximum number of runs",
-                        "in": "query",
-                        "name": "limit",
-                        "schema": {
-                            "default": 50,
-                            "type": "integer"
-                        }
-                    },
-                    {
-                        "description": "Number of matching runs to skip",
-                        "in": "query",
-                        "name": "offset",
-                        "schema": {
-                            "default": 0,
-                            "type": "integer"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "items": {
-                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.RunRecord"
-                                    },
-                                    "type": "array"
-                                }
-                            }
-                        },
-                        "description": "Runs",
-                        "headers": {
-                            "X-Total-Count": {
-                                "description": "Total matching runs before pagination",
-                                "schema": {
-                                    "type": "integer"
-                                }
-                            }
-                        }
-                    },
-                    "400": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "invalid filter"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "not authenticated"
-                    },
-                    "500": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "store error"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    }
-                ],
-                "summary": "List runs without captured output",
-                "tags": [
-                    "runs"
-                ]
-            }
-        },
-        "/api/v1/runs/{id}": {
-            "get": {
-                "operationId": "get_runs_id",
-                "parameters": [
-                    {
-                        "description": "Numeric run identifier",
-                        "in": "path",
-                        "name": "id",
-                        "required": true,
-                        "schema": {
-                            "type": "integer"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.RunRecord"
-                                }
-                            }
-                        },
-                        "description": "Run"
-                    },
-                    "400": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "invalid run id"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "not authenticated"
-                    },
-                    "404": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "run not found"
-                    },
-                    "500": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "store error"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    }
-                ],
-                "summary": "Run details including captured output",
-                "tags": [
-                    "runs"
-                ]
-            }
-        },
-        "/api/v1/stats": {
-            "get": {
-                "operationId": "get_stats",
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.Stats"
-                                }
-                            }
-                        },
-                        "description": "Statistics"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "not authenticated"
-                    },
-                    "500": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "store error"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    }
-                ],
-                "summary": "Aggregate statistics for visible collections",
-                "tags": [
-                    "stats"
-                ]
-            }
-        },
-        "/api/v1/sync": {
-            "post": {
-                "operationId": "post_sync",
-                "requestBody": {
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "$ref": "#/components/schemas/internal_server.syncRequestDoc",
-                                "summary": "request",
-                                "description": "sync request"
-                            }
-                        }
-                    },
-                    "description": "sync request",
-                    "required": true
-                },
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.syncResponseDoc"
-                                }
-                            }
-                        },
-                        "description": "Synchronized"
-                    },
-                    "400": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "invalid request or not a git collection"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "missing or invalid credentials"
-                    },
-                    "403": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "access denied"
-                    },
-                    "404": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "unknown target"
-                    },
-                    "502": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "git failure"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    },
-                    {
-                        "syncToken": []
-                    }
-                ],
-                "summary": "Synchronize a git-backed collection",
-                "tags": [
-                    "collections"
-                ]
-            }
-        },
-        "/api/v1/tokens": {
-            "get": {
-                "operationId": "get_tokens",
                 "responses": {
                     "200": {
                         "content": {
@@ -3382,7 +1602,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -3392,17 +1612,27 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
                         "description": "a user account is required"
                     },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
+                                }
+                            }
+                        },
+                        "description": "unknown collection"
+                    },
                     "503": {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -3417,18 +1647,38 @@
                         "userBearer": []
                     }
                 ],
-                "summary": "List personal access tokens",
+                "summary": "List collection-scoped personal access tokens",
                 "tags": [
-                    "auth"
+                    "tokens"
                 ]
             },
             "post": {
-                "operationId": "post_tokens",
+                "operationId": "post_orgs_org_collections_collection_tokens",
+                "parameters": [
+                    {
+                        "description": "Organization name",
+                        "in": "path",
+                        "name": "org",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Collection (target) name",
+                        "in": "path",
+                        "name": "collection",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
                 "requestBody": {
                     "content": {
                         "application/json": {
                             "schema": {
-                                "$ref": "#/components/schemas/internal_server.tokenCreateRequestDoc",
+                                "$ref": "#/components/schemas/internal_server_handlers.tokenCreateRequestDoc",
                                 "summary": "request",
                                 "description": "token details"
                             }
@@ -3442,7 +1692,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.tokenCreateResponseDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.tokenCreateResponseDoc"
                                 }
                             }
                         },
@@ -3452,7 +1702,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -3462,7 +1712,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -3472,17 +1722,27 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
                         "description": "a user account is required"
                     },
+                    "404": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
+                                }
+                            }
+                        },
+                        "description": "unknown collection"
+                    },
                     "409": {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -3492,7 +1752,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -3507,16 +1767,34 @@
                         "userBearer": []
                     }
                 ],
-                "summary": "Create a personal access token",
+                "summary": "Create a collection-scoped personal access token",
                 "tags": [
-                    "auth"
+                    "tokens"
                 ]
             }
         },
-        "/api/v1/tokens/{name}": {
+        "/api/v1/orgs/{org}/collections/{collection}/tokens/{name}": {
             "delete": {
-                "operationId": "delete_tokens_name",
+                "operationId": "delete_orgs_org_collections_collection_tokens_name",
                 "parameters": [
+                    {
+                        "description": "Organization name",
+                        "in": "path",
+                        "name": "org",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Collection (target) name",
+                        "in": "path",
+                        "name": "collection",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
                     {
                         "description": "Token name",
                         "in": "path",
@@ -3542,7 +1820,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -3552,7 +1830,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -3562,27 +1840,17 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
-                        "description": "token not found"
-                    },
-                    "500": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "store error"
+                        "description": "unknown collection or token"
                     },
                     "503": {
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
+                                    "$ref": "#/components/schemas/internal_server_handlers.apiErrorDoc"
                                 }
                             }
                         },
@@ -3597,51 +1865,9 @@
                         "userBearer": []
                     }
                 ],
-                "summary": "Revoke a personal access token",
+                "summary": "Revoke a collection-scoped personal access token",
                 "tags": [
-                    "auth"
-                ]
-            }
-        },
-        "/api/v1/workers": {
-            "get": {
-                "operationId": "get_workers",
-                "responses": {
-                    "200": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "items": {
-                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_worker.WorkerStatus"
-                                    },
-                                    "type": "array"
-                                }
-                            }
-                        },
-                        "description": "Workers"
-                    },
-                    "401": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/internal_server.apiErrorDoc"
-                                }
-                            }
-                        },
-                        "description": "not authenticated"
-                    }
-                },
-                "security": [
-                    {
-                        "sessionCookie": []
-                    },
-                    {
-                        "userBearer": []
-                    }
-                ],
-                "summary": "Worker pool status",
-                "tags": [
-                    "workers"
+                    "tokens"
                 ]
             }
         }

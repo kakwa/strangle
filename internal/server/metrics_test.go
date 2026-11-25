@@ -18,8 +18,11 @@ func TestMetricsRoute(t *testing.T) {
 		t.Fatalf("status = %d, want %d (body %s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "strangle_store_up 0") {
-		t.Errorf("metrics body = %s, want the store-down gauge", body)
+	if !strings.Contains(body, `strangle_workers{state="total"} 0`) {
+		t.Errorf("metrics body = %s, want the zero-valued worker gauge", body)
+	}
+	if !strings.Contains(body, "strangle_build_info{version=\"dev\"} 1") {
+		t.Errorf("metrics body = %s, want build info", body)
 	}
 	if !strings.Contains(body, "# TYPE go_goroutines gauge") {
 		t.Errorf("metrics body = %s, want Prometheus runtime metrics", body)

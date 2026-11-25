@@ -103,24 +103,34 @@ func TestOpenAPISpecCoversVersionedRoutes(t *testing.T) {
 	if spec.Info.Title != "Strangle API" || spec.Info.Version != "v1" {
 		t.Errorf("info = %+v, want Strangle API v1", spec.Info)
 	}
-	if len(spec.Paths) < 30 {
+	if len(spec.Paths) < 18 {
 		t.Fatalf("spec has %d paths, want the whole versioned API", len(spec.Paths))
 	}
 
-	// Every versioned Echo route must appear in the generated document.
+	// Every versioned Echo route must appear in the generated document, and
+	// every documented operation must be registered on the router.
+	registered := map[string]bool{}
 	for _, route := range e.Router().Routes() {
+		path := echoParamPattern.ReplaceAllString(route.Path, "{$1}")
+		method := strings.ToLower(route.Method)
+		registered[method+" "+path] = true
 		if !strings.HasPrefix(route.Path, apiPrefix+"/") {
 			continue
 		}
-		path := echoParamPattern.ReplaceAllString(route.Path, "{$1}")
 		ops, ok := spec.Paths[path]
 		if !ok {
 			t.Errorf("path %q is registered but missing from the spec", route.Path)
 			continue
 		}
-		method := strings.ToLower(route.Method)
 		if _, ok := ops[method]; !ok {
 			t.Errorf("%s %s is registered but missing from the spec", method, path)
+		}
+	}
+	for path, ops := range spec.Paths {
+		for method := range ops {
+			if !registered[method+" "+path] {
+				t.Errorf("%s %s is documented but not registered on the router", method, path)
+			}
 		}
 	}
 
@@ -145,23 +155,21 @@ func TestOpenAPISpecCoversVersionedRoutes(t *testing.T) {
 		}
 	}
 
-	run := spec.Paths[apiPrefix+"/orgs/{org}/collections/{collection}/run"]["post"]
-	if run.RequestBody == nil {
-		t.Fatal("collection run has no request body in the spec")
+	hook := spec.Paths[apiPrefix+"/orgs/{org}/collections/{collection}/hook"]["post"]
+	if hook.RequestBody == nil {
+		t.Fatal("collection hook has no request body in the spec")
 	}
-	media, ok := run.RequestBody.Content[jsonMedia]
-	if !ok || !strings.Contains(media.Schema.Ref, "runRequestDoc") {
-		t.Fatalf("run request schema = %+v, want runRequestDoc", media.Schema)
+	media, ok := hook.RequestBody.Content[jsonMedia]
+	if !ok || !strings.Contains(media.Schema.Ref, "syncRequestDoc") {
+		t.Fatalf("hook request schema = %+v, want syncRequestDoc", media.Schema)
 	}
 	name := strings.TrimPrefix(media.Schema.Ref, "#/components/schemas/")
 	schema, ok := spec.Components.Schemas[name]
 	if !ok {
-		t.Fatalf("run request schema %q is missing from components", name)
+		t.Fatalf("hook request schema %q is missing from components", name)
 	}
-	for _, prop := range []string{"playbook", "check"} {
-		if _, ok := schema.Properties[prop]; !ok {
-			t.Errorf("run request schema has no %q property", prop)
-		}
+	if _, ok := schema.Properties["branch"]; !ok {
+		t.Error("hook request schema has no \"branch\" property")
 	}
 	if _, ok := spec.Components.SecuritySchemes["userBearer"]; !ok {
 		t.Error("spec does not define the user token security scheme")
@@ -220,7 +228,7 @@ func TestOpenAPIDocsArePublicWhenAuthOn(t *testing.T) {
 			t.Errorf("%s without a session = %d, want %d", path, rec.Code, http.StatusOK)
 		}
 	}
-	if rec := openAPIGet(t, s, "/api/stats"); rec.Code != http.StatusUnauthorized {
-		t.Errorf("/api/stats without a session = %d, want %d", rec.Code, http.StatusUnauthorized)
+	if rec := openAPIGet(t, s, "/api/v1/orgs"); rec.Code != http.StatusUnauthorized {
+		t.Errorf("/api/v1/orgs without a session = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }

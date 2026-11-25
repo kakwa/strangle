@@ -1,4 +1,5 @@
 import {
+  IconActivity,
   IconBook,
   IconFingerprint,
   IconGauge,
@@ -23,12 +24,12 @@ const mainLinks = [
   { icon: IconBook, label: 'Playbooks' },
   { icon: IconFingerprint, label: 'SSH' },
   { icon: IconKey, label: 'Tokens' },
+  { icon: IconActivity, label: 'Monitor' },
 ]
 
 const dashboardLinks = [
   { id: 'dash-overview', label: 'Overview' },
-  { id: 'dash-runs', label: 'Recent runs' },
-  { id: 'dash-playbooks', label: 'Per-playbook' },
+  { id: 'dash-collections', label: 'Collections' },
 ]
 
 export function DoubleNavbar({
@@ -102,36 +103,25 @@ export function DoubleNavbar({
             ))}
           {activeSection === 'hosts' && (
             <ScrollArea.Autosize mah="100%">
+              {hostLinks.length === 0 && (
+                <span className={classes.link} style={{ cursor: 'default' }}>
+                  No hosts in this collection
+                </span>
+              )}
               {hostLinks}
             </ScrollArea.Autosize>
           )}
           {activeSection === 'playbooks' && (
             <ScrollArea.Autosize mah="100%">
-              {Object.keys(playbooks).length === 0 && (
+              {playbooks.length === 0 && (
                 <span className={classes.link} style={{ cursor: 'default' }}>
-                  No targets configured
+                  No playbooks in this collection
                 </span>
               )}
-              {Object.entries(playbooks).map(([target, pbs]) => (
-                <div key={target}>
-                  <span
-                    className={classes.link}
-                    style={{
-                      cursor: 'default',
-                      fontWeight: 700,
-                      color: 'var(--mantine-color-dimmed)',
-                      fontSize: 'var(--mantine-font-size-xs)',
-                      textTransform: 'uppercase',
-                    }}
-                  >
-                    {target}
-                  </span>
-                  {pbs.map((pb) => (
-                    <span key={pb.name} className={classes.link} style={{ cursor: 'default', paddingLeft: 20 }}>
-                      {pb.name}
-                    </span>
-                  ))}
-                </div>
+              {playbooks.map((pb) => (
+                <span key={pb.name} className={classes.link} style={{ cursor: 'default' }}>
+                  {pb.name}
+                </span>
               ))}
             </ScrollArea.Autosize>
           )}

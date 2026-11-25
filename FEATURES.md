@@ -28,17 +28,17 @@ command line · **[SCHED]** scheduling · **[GIT]** git-backed collections ·
 - [x] 14. [TESTS] [UI] Cypress tests
 - [x] 15. [AUTH] [UI] UI authentication (local accounts; LDAP/OAuth as later options)
 - [x] 16. [AUTH] [API] API / token self-service (for user-linked CLIs or webhooks / integrations)
-- [x] 17. [API] API rework: base layout `/api/v<>/orgs/{org}/collections/{collection}` — orgs and collections as first-class entities (a collection is the current target, an org groups collections), versioned prefix with the current flat routes kept as aliases. Subsumes the former "versioned API" item.
+- [x] 17. [API] API rework: only base layout `/api/v1/orgs/{org}/collections/{collection}` — orgs and collections as first-class entities (a collection is the current target, an org groups collections); the flat `/api/*` aliases were removed. Subsumes the former "versioned API" item.
 - [x] 18. [AUTH] [API] Per-collection access restrictions (user-to-collection membership on the org/collection model, so the groups and ownership model from TODO2 can be layered on later)
 - [x] 19. [SANDBOXING] Sandboxing: file-system isolation between collections (Landlock via go-landlock; deny ansible FS writes; keep one collection's credentials away from the others) + a validating playbook collection
-- [x] 20. [API] [UI] Run detail: `GET /api/v1/orgs/{org}/collections/{collection}/runs/{id}` and a run view with the full captured output; stop inlining the full output of the last 50 runs into the collection's runs listing on every poll
-- [x] 21. [API] Filter a collection's runs (`/api/v1/orgs/{org}/collections/{collection}/runs`) by playbook, host and time range (+ pagination)
-- [x] 22. [UI] [SSH] UI for pending SSH host keys (approve/reject) and SSH pool stats — collection-scoped versioned endpoints under `/api/v<>/orgs/{org}/collections/{collection}`
+- [x] 20. [API] [UI] Recent runs are read from `GET /api/v1/orgs/{org}/collections/{collection}/playbooks/{playbook}/hosts/{host}/runs?limit=N`; the standalone run detail endpoint and view were removed
+- [x] 21. [API] The run listing, its filters and pagination were removed with the manual-run API; only `?limit=` on the per-host runs endpoint remains
+- [x] 22. [UI] [SSH] UI for pending SSH host keys of one playbook/host, approved/rejected with `PATCH /api/v1/orgs/{org}/collections/{collection}/playbooks/{playbook}/hosts/{host}`; SSH pool stats endpoints were removed (the Monitor tab shows worker metrics from `/metrics`)
 - [x] 23. [SCHED] Per-target or per-playbook robfig/cron v3 schedules instead of the single global interval
 - [x] 25. [DB] Task history: keep the per-task results of every run
 - [x] 26. [DB] [UI] ansible_facts: collect, save and display them — a jsonb blob per host, refreshed by runs
-- [x] 27. [API] [UI] Cancel a running run (`POST /api/v1/orgs/{org}/collections/{collection}/runs/{id}/cancel` + UI button)
-- [x] 28. [API] [UI] Check mode: run a playbook with `--check` (dry run) from the UI or API
+- [x] 27. [API] [UI] Run cancellation endpoints and the UI button were removed; graceful shutdown drains in-flight runs instead
+- [x] 28. [API] [UI] Dry-run support (`--check`) remains in the runner; there is no HTTP endpoint to start a run
 - [x] 29. [DB] Retention: a policy to purge old runs (max age and/or max count)
 - [x] 30. [DB] [SCHED] Host auto clean-up (remove hosts not seen and not targeted after a configurable delay)
 - [x] 31. [INFRA] TLS support for the HTTP server (cert/key in server.yml)
@@ -47,7 +47,7 @@ command line · **[SCHED]** scheduling · **[GIT]** git-backed collections ·
 - [x] 34. [UI] Host search box in the hosts view (name filter)
 - [x] 35. [SSH] [AUTH] Ephemeral SSH certificates (short-lived, internal CA or a vault PKI / approle integration, pluggable in the ssh options)
 - [x] 36. [API] [DOCS] Swagger / OpenAPI 3.1 documentation of the API, generated from swaggo/swag v2 annotations on the versioned routes and served from the server (e.g. `/api/docs`)
-- [x] 37. [CLI] [API] CLI client: subcommands hitting the versioned API (`strangle-cli run <target> <playbook>`, `strangle-cli runs|hosts|host <name>`, `strangle-cli hostkeys list/accept/reject`) with the auth token from config
+- [x] 37. [CLI] [API] CLI client: subcommands hitting `/api/v1` (`strangle-cli hosts`, `strangle-cli host <name> <target> --playbook NAME`, `strangle-cli hostkeys list --playbook NAME`, `hostkeys approve/reject <target> <host> --playbook NAME`) with a collection-scoped auth token from config; no `run`/`runs` commands
 
 ## Additional (beyond TODO)
 
@@ -56,16 +56,16 @@ command line · **[SCHED]** scheduling · **[GIT]** git-backed collections ·
 
 ## Order notes
 
-- **API layout rule:** apart from common/global endpoints (auth, token
-  self-service, org discovery), every new HTTP endpoint must use
-  `/api/v<>/orgs/{org}/collections/{collection}/...`. Collection data and
-  actions belong to the collection that owns them; the flat `/api/*` routes
-  are legacy aliases from feature 17, not a pattern for new work. Do not add
-  new master-level or flat routes for collection-scoped features.
+- **API layout rule:** apart from common/global endpoints (auth, health,
+  org discovery, docs), every new HTTP endpoint must use
+  `/api/v1/orgs/{org}/collections/{collection}/...`. Collection data and
+  actions belong to the collection that owns them; flat `/api/*` routes were
+  removed in feature 17, not a pattern for new work. Do not add new
+  master-level or flat routes for collection-scoped features.
 - **The API rework (17) is placed before the features that build on the
   new layout** — per-collection access restrictions (18) and the
-  per-collection run endpoints (20, 21, 27) — so they are implemented
-  against `/api/v<>/orgs/{org}/collections/{collection}` from the start.
+  per-collection host/run endpoints (20, 21, 22, 27) — so they are implemented
+  against `/api/v1/orgs/{org}/collections/{collection}` from the start.
   It also subsumes the former "versioned API (`/api/v1` prefix)" item.
 - **36 (swagger) comes after 17** so the OpenAPI docs are generated
   against the versioned routes.
