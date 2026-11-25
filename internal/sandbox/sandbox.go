@@ -201,6 +201,19 @@ func Build(cfg config.SandboxConfig, targets []config.TargetConfig, serverPath, 
 			if !pb.Options.SSH.Enabled {
 				continue
 			}
+			// Credential and certificate material can live outside the
+			// collection; workers need read access to sign with it.
+			addRO(pb.Options.SSH.PrivateKeyFile)
+			if cert := pb.Options.SSH.Certificate; cert != nil {
+				for _, p := range []string{
+					cert.Internal.CAKeyFile,
+					cert.Vault.CACertFile,
+					cert.Vault.RoleIDFile,
+					cert.Vault.SecretIDFile,
+				} {
+					addRO(p)
+				}
+			}
 			for _, p := range []string{pb.Options.SSH.AutoAcceptFile, pb.Options.SSH.PendingFile} {
 				if p == "" {
 					continue

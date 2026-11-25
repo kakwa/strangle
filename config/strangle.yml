@@ -66,3 +66,19 @@ playbooks:
 #     private_key_file: ~/.ssh/id_ed25519
 #     use_agent: true
 #     host_key_policy: api
+#
+# Short-lived SSH user certificates (requires private_key_file, ignores
+# use_agent and an adjacent -cert.pub). See docs/ssh-transport.md:
+#   certificate:
+#     backend: internal        # or vault
+#     ttl: 10m
+#     principals: [deploy]
+#     internal:
+#       ca_key_file: /run/secrets/ssh_ca_key
+#   # For Vault, use instead:
+#   #   backend: vault
+#   #   vault:
+#   #     addr: https://vault.example.com
+#   #     role: strangle
+#   #     role_id_file: /run/secrets/vault_role_id
+#   #     secret_id_file: /run/secrets/vault_secret_id

@@ -394,6 +394,30 @@ Authentication: `private_key_file` (with optional `-cert.pub` for OpenSSH
 user certificates), `use_agent` (SSH agent) and `password` can be combined;
 the first usable method wins. With `use_agent`, `SSH_AUTH_SOCK` must be set.
 
+To issue **short-lived user certificates** instead of using a static
+`-cert.pub`, add `certificate` to the `ssh` block:
+
+| Key | Meaning |
+|-----|---------|
+| `backend` | `internal` (local CA key) or `vault` (Vault SSH secrets engine) |
+| `ttl` | Certificate lifetime; default `10m`, allowed `1m`–`24h` |
+| `principals` | Extra valid principals; the endpoint user is always included |
+| `key_id_prefix` | Prefix for certificate key IDs; default `strangle` |
+| `internal.ca_key_file` | PEM private key used to sign certificates (`internal` backend) |
+| `vault.addr` | Vault URL, e.g. `https://vault.example.com` (`vault` backend) |
+| `vault.namespace` | Optional Vault Enterprise namespace |
+| `vault.mount` / `vault.role` | SSH engine mount (default `ssh`) and signing role |
+| `vault.auth_mount` | AppRole auth mount; default `approle` |
+| `vault.role_id` / `vault.role_id_file` | AppRole role ID, inline or from a file |
+| `vault.secret_id` / `vault.secret_id_file` | AppRole secret ID, inline or from a file |
+| `vault.ca_cert_file` | Optional PEM CA bundle for Vault's TLS certificate |
+
+A certificate backend requires `private_key_file` as the subject key and
+disables `use_agent` plus any adjacent static `-cert.pub`. Connections are
+re-established before their certificate expires. See
+[the SSH transport](ssh-transport.md) for complete internal-CA and Vault
+examples and the host-key policy reference.
+
 Mark hosts with `ansible_connection=strangle_ssh` in the inventory (see
 `tests/ssh/inventory.ini`). The full policy table and the host-key approval
 workflow are in [the SSH transport](ssh-transport.md).

@@ -47,7 +47,7 @@ command line · **[SCHED]** scheduling · **[GIT]** git-backed collections ·
 - [x] 32. [INFRA] `/metrics` endpoint (prometheus)
 - [x] 33. [TESTS] Go tests for the server (API over httptest), applier and scheduler packages
 - [x] 34. [UI] Host search box in the hosts view (name filter)
-- [ ] 35. [SSH] [AUTH] Ephemeral SSH certificates (short-lived, internal CA or a vault PKI / approle integration, pluggable in the ssh options)
+- [x] 35. [SSH] [AUTH] Ephemeral SSH certificates (short-lived, internal CA or a vault PKI / approle integration, pluggable in the ssh options)
 - [ ] 36. [API] [DOCS] Swagger / OpenAPI documentation of the API, generated against the versioned routes and served from the server (e.g. `/api/docs`)
 - [ ] 37. [CLI] [API] CLI client: subcommands hitting the versioned API (`strangle run <target> <playbook>`, `strangle runs|hosts|host <name>`, `strangle hostkeys list/accept/reject`) with the auth token from config
 

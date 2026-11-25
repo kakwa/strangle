@@ -117,6 +117,59 @@ func TestLandlockIsolation(t *testing.T) {
 	}
 }
 
+func TestBuildAllowsCertificateSecretsReadOnly(t *testing.T) {
+	root := t.TempDir()
+	secrets := filepath.Join(root, "secrets")
+	if err := os.MkdirAll(secrets, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	paths := map[string]string{
+		"key":      filepath.Join(secrets, "id_ed25519"),
+		"ca":       filepath.Join(secrets, "ssh_ca_key"),
+		"role":     filepath.Join(secrets, "role_id"),
+		"secret":   filepath.Join(secrets, "secret_id"),
+		"vault-ca": filepath.Join(secrets, "vault-ca.pem"),
+	}
+	for _, p := range paths {
+		if err := os.WriteFile(p, []byte("secret"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := config.TargetConfig{
+		Name: "home", Path: filepath.Join(root, "collection"), WorkingDir: filepath.Join(root, "collection"),
+		Playbooks: []config.PlaybookConfig{{
+			Name: "site",
+			Options: config.PlaybookOptions{SSH: config.SSHConfig{
+				Enabled:        true,
+				PrivateKeyFile: paths["key"],
+				Certificate: &config.CertificateConfig{
+					Backend:  config.CertificateVault,
+					Internal: config.InternalCAConfig{CAKeyFile: paths["ca"]},
+					Vault: config.VaultCertificateConfig{
+						CACertFile:   paths["vault-ca"],
+						RoleIDFile:   paths["role"],
+						SecretIDFile: paths["secret"],
+					},
+				},
+			}},
+		}},
+	}
+	manifests, err := Build(config.SandboxConfig{Enabled: true}, []config.TargetConfig{target},
+		filepath.Join(root, "server.yml"), filepath.Join(root, "collection.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	modes := map[string]string{}
+	for _, r := range manifests["home"].Rules {
+		modes[r.Path] = r.Mode
+	}
+	for _, p := range paths {
+		if modes[p] != ModeRO {
+			t.Errorf("rule for %q = %q, want %q", p, modes[p], ModeRO)
+		}
+	}
+}
+
 func TestBuildKeepsCollectionsReadOnly(t *testing.T) {
 	root := t.TempDir()
 	collDir := filepath.Join(root, "collection")

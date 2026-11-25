@@ -39,7 +39,8 @@ re-syncs a target — optionally switching the tracked branch — and reloads it
 
 The details: [architecture](docs/architecture.md), [configuration reference](docs/configuration.md),
 [API reference](docs/api.md), [git-backed collections](docs/git-collections.md),
-[the Go-managed SSH transport](docs/ssh-transport.md).
+[the Go-managed SSH transport](docs/ssh-transport.md), including short-lived
+user certificates signed by a local CA or by Vault through AppRole.
 
 ## Layout
 

@@ -37,6 +37,77 @@ Configured in the `ssh` block; the first usable method wins:
 `user` (defaulting to the job's `user` option) and `port` (default 22) are
 taken per host from the inventory, with these as fallbacks.
 
+### Ephemeral user certificates
+
+Set `options.ssh.certificate` to replace long-lived `-cert.pub` files with
+short-lived SSH **user** certificates. This is orthogonal to `host_key_policy`,
+which verifies the *server's* key or certificate.
+
+```yaml
+options:
+  ssh:
+    enabled: true
+    private_key_file: /run/secrets/ssh/id_ed25519
+    host_key_policy: api
+    certificate:
+      backend: internal       # internal | vault
+      ttl: 10m                # default 10m; 1m–24h
+      principals: [deploy]    # the endpoint user is always added
+      key_id_prefix: strangle
+      internal:
+        ca_key_file: /run/secrets/ssh_ca_key
+```
+
+When a certificate backend is configured, `private_key_file` is required and
+is the subject key: only its public half is signed. `use_agent` and an adjacent
+`<private_key_file>-cert.pub` are ignored, so a stale certificate cannot be
+used as a long-lived fallback. The same option block can be set at the
+target's top level and overridden per playbook.
+
+A fresh certificate is issued lazily on the first dial of each scope and
+reissued shortly before expiry. Pooled connections are closed at that refresh
+deadline, so a subsequent task reconnects with the new certificate; a long
+running task is never interrupted mid-execution. The master builds the same
+provider for its approval API but does not dial, so no certificate is issued
+there.
+
+**Internal CA** (`backend: internal`) signs with an unencrypted PEM private key
+given by `internal.ca_key_file`. Keep this file outside the collection and
+readable only by the worker (or use the Vault backend), because playbook code
+runs in the same process. The subject key, CA key and Vault credential/CA files
+are automatically added to the sandbox's read-only paths; they are never made
+writable.
+
+**Vault** (`backend: vault`) logs in through an AppRole and calls the SSH
+secrets engine's `sign` endpoint. Credentials should be mounted as files:
+
+```yaml
+options:
+  ssh:
+    enabled: true
+    private_key_file: /run/secrets/ssh/id_ed25519
+    certificate:
+      backend: vault
+      ttl: 15m
+      vault:
+        addr: https://vault.example.com
+        namespace: team-a         # optional Vault Enterprise namespace
+        mount: ssh                # SSH secrets engine mount (default ssh)
+        role: strangle
+        auth_mount: approle       # default approle
+        role_id_file: /run/secrets/vault_role_id
+        secret_id_file: /run/secrets/vault_secret_id
+        ca_cert_file: /etc/ssl/vault-ca.pem  # optional TLS trust
+```
+
+The inline `role_id`/`secret_id` keys are also accepted but file-based values
+are strongly preferred. The AppRole token is cached until shortly before its
+lease expires. Only `public_key`, `valid_principals`, `ttl` and `key_id` are
+sent to Vault; the subject private key never leaves the process. SSH options
+are frozen when a worker starts (see
+[git-backed collections](git-collections.md)), so a rotated AppRole secret or
+CA key takes effect on the next worker build.
+
 ## Host-key policies
 
 `host_key_policy` selects how unknown or changed host keys are handled:

@@ -344,18 +344,51 @@ type OptionsSpec struct {
 
 // SSHSpec is the YAML shape of the SSH transport options.
 type SSHSpec struct {
-	Enabled              *bool         `yaml:"enabled,omitempty"`
-	User                 string        `yaml:"user,omitempty"`
-	Port                 *int          `yaml:"port,omitempty"`
-	PrivateKeyFile       string        `yaml:"private_key_file,omitempty"`
-	PrivateKeyPassphrase string        `yaml:"private_key_passphrase,omitempty"`
-	UseAgent             *bool         `yaml:"use_agent,omitempty"`
-	Password             string        `yaml:"password,omitempty"`
-	HostKeyPolicy        HostKeyPolicy `yaml:"host_key_policy,omitempty"`
-	KnownHostsFile       string        `yaml:"known_hosts_file,omitempty"`
-	CAFiles              []string      `yaml:"ca_files,omitempty"`
-	AutoAcceptFile       string        `yaml:"auto_accept_file,omitempty"`
-	PendingFile          string        `yaml:"pending_file,omitempty"`
+	Enabled              *bool            `yaml:"enabled,omitempty"`
+	User                 string           `yaml:"user,omitempty"`
+	Port                 *int             `yaml:"port,omitempty"`
+	PrivateKeyFile       string           `yaml:"private_key_file,omitempty"`
+	PrivateKeyPassphrase string           `yaml:"private_key_passphrase,omitempty"`
+	UseAgent             *bool            `yaml:"use_agent,omitempty"`
+	Password             string           `yaml:"password,omitempty"`
+	HostKeyPolicy        HostKeyPolicy    `yaml:"host_key_policy,omitempty"`
+	KnownHostsFile       string           `yaml:"known_hosts_file,omitempty"`
+	CAFiles              []string         `yaml:"ca_files,omitempty"`
+	AutoAcceptFile       string           `yaml:"auto_accept_file,omitempty"`
+	PendingFile          string           `yaml:"pending_file,omitempty"`
+	Certificate          *CertificateSpec `yaml:"certificate,omitempty"`
+}
+
+// CertificateSpec configures short-lived SSH user certificates. It is a
+// pointer in SSHSpec so a playbook override can distinguish "unset" from an
+// explicit backend choice.
+type CertificateSpec struct {
+	Backend     CertificateBackend    `yaml:"backend,omitempty"`
+	TTL         string                `yaml:"ttl,omitempty"`
+	Principals  []string              `yaml:"principals,omitempty"`
+	KeyIDPrefix string                `yaml:"key_id_prefix,omitempty"`
+	Internal    *InternalCASpec       `yaml:"internal,omitempty"`
+	Vault       *VaultCertificateSpec `yaml:"vault,omitempty"`
+}
+
+// InternalCASpec configures signing with a local CA private key.
+type InternalCASpec struct {
+	CAKeyFile string `yaml:"ca_key_file,omitempty"`
+}
+
+// VaultCertificateSpec configures Vault's SSH secrets engine. Credentials can
+// come from YAML or, preferably, from files (e.g. mounted AppRole secrets).
+type VaultCertificateSpec struct {
+	Addr         string `yaml:"addr,omitempty"`
+	Namespace    string `yaml:"namespace,omitempty"`
+	Mount        string `yaml:"mount,omitempty"`
+	Role         string `yaml:"role,omitempty"`
+	AuthMount    string `yaml:"auth_mount,omitempty"`
+	RoleID       string `yaml:"role_id,omitempty"`
+	RoleIDFile   string `yaml:"role_id_file,omitempty"`
+	SecretID     string `yaml:"secret_id,omitempty"`
+	SecretIDFile string `yaml:"secret_id_file,omitempty"`
+	CACertFile   string `yaml:"ca_cert_file,omitempty"`
 }
 
 // PlaybookOptions holds the resolved Ansible and SSH options of one playbook.
@@ -476,21 +509,67 @@ func (p HostKeyPolicy) Valid() bool {
 	return false
 }
 
+// CertificateBackend selects how ephemeral SSH user certificates are signed.
+type CertificateBackend string
+
+const (
+	// CertificateInternal signs certificates with a local CA private key.
+	CertificateInternal CertificateBackend = "internal"
+	// CertificateVault signs certificates through Vault's SSH secrets engine.
+	CertificateVault CertificateBackend = "vault"
+)
+
+// Valid reports whether b is a supported certificate backend.
+func (b CertificateBackend) Valid() bool {
+	return b == CertificateInternal || b == CertificateVault
+}
+
+// CertificateConfig is the resolved certificate configuration of one playbook.
+type CertificateConfig struct {
+	Backend     CertificateBackend
+	TTL         time.Duration
+	Principals  []string
+	KeyIDPrefix string
+	Internal    InternalCAConfig
+	Vault       VaultCertificateConfig
+}
+
+// InternalCAConfig is the resolved local-CA certificate configuration.
+type InternalCAConfig struct {
+	CAKeyFile string
+}
+
+// VaultCertificateConfig is the resolved Vault certificate configuration.
+// RoleID and SecretID may have been read from files at config load time.
+type VaultCertificateConfig struct {
+	Addr         string
+	Namespace    string
+	Mount        string
+	Role         string
+	AuthMount    string
+	RoleID       string
+	RoleIDFile   string
+	SecretID     string
+	SecretIDFile string
+	CACertFile   string
+}
+
 // SSHConfig configures the persistent SSH connections owned by the Go process
 // for one playbook.
 type SSHConfig struct {
-	Enabled              bool          `yaml:"enabled,omitempty"`
-	User                 string        `yaml:"user,omitempty"`
-	Port                 int           `yaml:"port,omitempty"`
-	PrivateKeyFile       string        `yaml:"private_key_file,omitempty"`
-	PrivateKeyPassphrase string        `yaml:"private_key_passphrase,omitempty"`
-	UseAgent             bool          `yaml:"use_agent,omitempty"`
-	Password             string        `yaml:"password,omitempty"`
-	HostKeyPolicy        HostKeyPolicy `yaml:"host_key_policy,omitempty"`
-	KnownHostsFile       string        `yaml:"known_hosts_file,omitempty"`
-	CAFiles              []string      `yaml:"ca_files,omitempty"`
-	AutoAcceptFile       string        `yaml:"auto_accept_file,omitempty"`
-	PendingFile          string        `yaml:"pending_file,omitempty"`
+	Enabled              bool               `yaml:"enabled,omitempty"`
+	User                 string             `yaml:"user,omitempty"`
+	Port                 int                `yaml:"port,omitempty"`
+	PrivateKeyFile       string             `yaml:"private_key_file,omitempty"`
+	PrivateKeyPassphrase string             `yaml:"private_key_passphrase,omitempty"`
+	UseAgent             bool               `yaml:"use_agent,omitempty"`
+	Password             string             `yaml:"password,omitempty"`
+	HostKeyPolicy        HostKeyPolicy      `yaml:"host_key_policy,omitempty"`
+	KnownHostsFile       string             `yaml:"known_hosts_file,omitempty"`
+	CAFiles              []string           `yaml:"ca_files,omitempty"`
+	AutoAcceptFile       string             `yaml:"auto_accept_file,omitempty"`
+	PendingFile          string             `yaml:"pending_file,omitempty"`
+	Certificate          *CertificateConfig `yaml:"certificate,omitempty"`
 }
 
 // Load reads the server.yml and collection.yml files and resolves each
@@ -1011,7 +1090,69 @@ func mergeSSH(base, over SSHSpec) SSHSpec {
 	if over.PendingFile != "" {
 		out.PendingFile = over.PendingFile
 	}
+	if over.Certificate != nil {
+		if base.Certificate == nil {
+			out.Certificate = over.Certificate
+		} else {
+			merged := mergeCertificate(*base.Certificate, *over.Certificate)
+			out.Certificate = &merged
+		}
+	}
 	return out
+}
+
+// mergeCertificate overlays a playbook's certificate options on the target
+// defaults. Nested backend blocks are merged field by field as well.
+func mergeCertificate(base, over CertificateSpec) CertificateSpec {
+	out := base
+	if over.Backend != "" {
+		out.Backend = over.Backend
+	}
+	if over.TTL != "" {
+		out.TTL = over.TTL
+	}
+	if len(over.Principals) > 0 {
+		out.Principals = over.Principals
+	}
+	if over.KeyIDPrefix != "" {
+		out.KeyIDPrefix = over.KeyIDPrefix
+	}
+	if over.Internal != nil {
+		if base.Internal == nil {
+			out.Internal = over.Internal
+		} else {
+			merged := *base.Internal
+			if over.Internal.CAKeyFile != "" {
+				merged.CAKeyFile = over.Internal.CAKeyFile
+			}
+			out.Internal = &merged
+		}
+	}
+	if over.Vault != nil {
+		if base.Vault == nil {
+			out.Vault = over.Vault
+		} else {
+			merged := *base.Vault
+			overlayString(&merged.Addr, over.Vault.Addr)
+			overlayString(&merged.Namespace, over.Vault.Namespace)
+			overlayString(&merged.Mount, over.Vault.Mount)
+			overlayString(&merged.Role, over.Vault.Role)
+			overlayString(&merged.AuthMount, over.Vault.AuthMount)
+			overlayString(&merged.RoleID, over.Vault.RoleID)
+			overlayString(&merged.RoleIDFile, over.Vault.RoleIDFile)
+			overlayString(&merged.SecretID, over.Vault.SecretID)
+			overlayString(&merged.SecretIDFile, over.Vault.SecretIDFile)
+			overlayString(&merged.CACertFile, over.Vault.CACertFile)
+			out.Vault = &merged
+		}
+	}
+	return out
+}
+
+func overlayString(dst *string, value string) {
+	if value != "" {
+		*dst = value
+	}
 }
 
 // resolveOptions turns a YAML options block into concrete values and applies
@@ -1049,6 +1190,21 @@ func resolveOptions(spec OptionsSpec, targetPath, playbookName string) (Playbook
 	if !o.SSH.Enabled {
 		return o, nil
 	}
+	if s.Certificate != nil {
+		cert, err := resolveCertificate(*s.Certificate)
+		if err != nil {
+			return o, fmt.Errorf("ssh.certificate: %w", err)
+		}
+		o.SSH.Certificate = &cert
+	}
+	if o.SSH.Certificate != nil {
+		if o.SSH.PrivateKeyFile == "" {
+			return o, errors.New("ssh.certificate requires ssh.private_key_file")
+		}
+		if o.SSH.UseAgent {
+			return o, errors.New("ssh.certificate does not support ssh.use_agent; use ssh.private_key_file")
+		}
+	}
 	if o.SSH.User == "" {
 		o.SSH.User = o.User
 	}
@@ -1076,6 +1232,74 @@ func resolveOptions(spec OptionsSpec, targetPath, playbookName string) (Playbook
 		o.SSH.PendingFile = prefix + ".pending.json"
 	}
 	return o, nil
+}
+
+// resolveCertificate validates certificate options and fills in defaults.
+func resolveCertificate(spec CertificateSpec) (CertificateConfig, error) {
+	c := CertificateConfig{
+		Backend:     spec.Backend,
+		TTL:         10 * time.Minute,
+		Principals:  append([]string(nil), spec.Principals...),
+		KeyIDPrefix: spec.KeyIDPrefix,
+	}
+	if !c.Backend.Valid() {
+		return c, fmt.Errorf("backend must be %q or %q (got %q)", CertificateInternal, CertificateVault, c.Backend)
+	}
+	if spec.TTL != "" {
+		ttl, err := time.ParseDuration(spec.TTL)
+		if err != nil {
+			return c, fmt.Errorf("ttl %q is not a duration: %w", spec.TTL, err)
+		}
+		if ttl < time.Minute || ttl > 24*time.Hour {
+			return c, fmt.Errorf("ttl %q must be between 1m and 24h", spec.TTL)
+		}
+		c.TTL = ttl
+	}
+	if c.KeyIDPrefix == "" {
+		c.KeyIDPrefix = "strangle"
+	}
+
+	switch c.Backend {
+	case CertificateInternal:
+		if spec.Internal == nil || spec.Internal.CAKeyFile == "" {
+			return c, errors.New("internal requires internal.ca_key_file")
+		}
+		c.Internal = InternalCAConfig{CAKeyFile: spec.Internal.CAKeyFile}
+	case CertificateVault:
+		if spec.Vault == nil {
+			return c, errors.New("vault requires a vault block")
+		}
+		v := spec.Vault
+		u, err := url.Parse(v.Addr)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return c, fmt.Errorf("vault.addr %q must be an http(s) URL", v.Addr)
+		}
+		if v.Role == "" {
+			return c, errors.New("vault.role is required")
+		}
+		if (v.RoleID == "" && v.RoleIDFile == "") || (v.SecretID == "" && v.SecretIDFile == "") {
+			return c, errors.New("vault requires role_id/secret_id or role_id_file/secret_id_file")
+		}
+		c.Vault = VaultCertificateConfig{
+			Addr:         v.Addr,
+			Namespace:    v.Namespace,
+			Mount:        v.Mount,
+			Role:         v.Role,
+			AuthMount:    v.AuthMount,
+			RoleID:       v.RoleID,
+			RoleIDFile:   v.RoleIDFile,
+			SecretID:     v.SecretID,
+			SecretIDFile: v.SecretIDFile,
+			CACertFile:   v.CACertFile,
+		}
+		if c.Vault.Mount == "" {
+			c.Vault.Mount = "ssh"
+		}
+		if c.Vault.AuthMount == "" {
+			c.Vault.AuthMount = "approle"
+		}
+	}
+	return c, nil
 }
 
 func boolOr(p *bool, fallback bool) bool {

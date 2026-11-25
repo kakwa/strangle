@@ -176,10 +176,17 @@ which maintains a persistent connection pool per job scope
 (`<target>/<playbook name>`). Connections are created lazily and kept open,
 so they are reused across tasks and across runs. No `ssh` process is spawned.
 
+If `options.ssh.certificate` is configured, the pool asks a signer provider
+for a short-lived user certificate whenever it opens a connection: an
+internal CA signs locally, or Vault's SSH engine signs through AppRole. The
+provider caches the certificate and the pool drops connections at its refresh
+deadline, so later tasks reconnect with a fresh certificate. This is separate
+from host-key verification.
+
 Host keys are persisted per scope as JSON/known_hosts files in the target
 directory (shared with the master, which serves the approval API). See
-[the SSH transport](ssh-transport.md) for the policies and the approval
-workflow.
+[the SSH transport](ssh-transport.md) for the policies, certificate setup and
+the approval workflow.
 
 ## Shutdown order
 

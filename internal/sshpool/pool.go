@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/kakwa/strangle/internal/config"
 	"golang.org/x/crypto/ssh"
@@ -35,13 +36,17 @@ type ExecResult struct {
 // Manager is a pool of persistent SSH clients.
 type Manager struct {
 	cfg      config.SSHConfig
-	signers  []ssh.Signer
+	provider SignerProvider
 	password string
 	hostKeys *HostKeyStore
 
-	mu      sync.Mutex
-	clients map[string]*ssh.Client
-	dials   int
+	mu         sync.Mutex
+	dialMu     sync.Mutex
+	clients    map[string]*ssh.Client
+	retired    map[string][]*ssh.Client
+	authExpiry map[string]time.Time
+	inUse      map[string]int
+	dials      int
 }
 
 // Stats describes the current state of the connection pool.
@@ -57,41 +62,58 @@ func New(cfg config.SSHConfig) (*Manager, error) {
 	}
 
 	m := &Manager{
-		cfg:      cfg,
-		password: cfg.Password,
-		clients:  map[string]*ssh.Client{},
+		cfg:        cfg,
+		password:   cfg.Password,
+		clients:    map[string]*ssh.Client{},
+		retired:    map[string][]*ssh.Client{},
+		authExpiry: map[string]time.Time{},
+		inUse:      map[string]int{},
 	}
 
-	if cfg.PrivateKeyFile != "" {
-		signer, err := loadSigner(cfg.PrivateKeyFile, cfg.PrivateKeyPassphrase)
-		if err != nil {
-			return nil, err
+	// Static credentials are only used when certificate issuance is not
+	// configured. With a certificate backend the private key is the subject
+	// key for the freshly issued certificate, and static <key>-cert.pub files
+	// or agent signers would otherwise allow long-lived authentication.
+	var static []ssh.Signer
+	if cfg.Certificate == nil {
+		if cfg.PrivateKeyFile != "" {
+			signer, err := loadSigner(cfg.PrivateKeyFile, cfg.PrivateKeyPassphrase)
+			if err != nil {
+				return nil, err
+			}
+			static = append(static, signer)
 		}
-		m.signers = append(m.signers, signer)
+
+		if cfg.UseAgent {
+			sock := os.Getenv("SSH_AUTH_SOCK")
+			if sock == "" {
+				return nil, errors.New("ssh use_agent is enabled but SSH_AUTH_SOCK is unset")
+			}
+			conn, err := net.Dial("unix", sock)
+			if err != nil {
+				return nil, fmt.Errorf("connect to SSH agent: %w", err)
+			}
+			signers, err := agent.NewClient(conn).Signers()
+			if err != nil {
+				return nil, fmt.Errorf("list SSH agent keys: %w", err)
+			}
+			static = append(static, signers...)
+		}
+
+		if len(static) == 0 && cfg.Password == "" {
+			return nil, errors.New("ssh requires a private_key_file, use_agent, or password")
+		}
 	}
 
-	if cfg.UseAgent {
-		sock := os.Getenv("SSH_AUTH_SOCK")
-		if sock == "" {
-			return nil, errors.New("ssh use_agent is enabled but SSH_AUTH_SOCK is unset")
-		}
-		conn, err := net.Dial("unix", sock)
-		if err != nil {
-			return nil, fmt.Errorf("connect to SSH agent: %w", err)
-		}
-		signers, err := agent.NewClient(conn).Signers()
-		if err != nil {
-			return nil, fmt.Errorf("list SSH agent keys: %w", err)
-		}
-		m.signers = append(m.signers, signers...)
+	provider, err := newSignerProvider(cfg, static)
+	if err != nil {
+		return nil, err
 	}
-
-	if len(m.signers) == 0 && cfg.Password == "" {
-		return nil, errors.New("ssh requires a private_key_file, use_agent, or password")
-	}
+	m.provider = provider
 
 	hostKeys, err := NewHostKeyStore(cfg)
 	if err != nil {
+		_ = provider.Close()
 		return nil, err
 	}
 	m.hostKeys = hostKeys
@@ -117,20 +139,30 @@ func (m *Manager) Stats() Stats {
 	return Stats{ActiveConnections: len(m.clients), TotalDials: m.dials}
 }
 
-func loadSigner(path, passphrase string) (ssh.Signer, error) {
+func loadPrivateKey(path, passphrase string) (ssh.Signer, error) {
 	data, err := os.ReadFile(expandHome(path))
 	if err != nil {
 		return nil, fmt.Errorf("read private key %q: %w", path, err)
 	}
 
-	var signer ssh.Signer
 	if passphrase != "" {
-		signer, err = ssh.ParsePrivateKeyWithPassphrase(data, []byte(passphrase))
-	} else {
-		signer, err = ssh.ParsePrivateKey(data)
+		signer, err := ssh.ParsePrivateKeyWithPassphrase(data, []byte(passphrase))
+		if err != nil {
+			return nil, fmt.Errorf("parse private key %q: %w", path, err)
+		}
+		return signer, nil
 	}
+	signer, err := ssh.ParsePrivateKey(data)
 	if err != nil {
 		return nil, fmt.Errorf("parse private key %q: %w", path, err)
+	}
+	return signer, nil
+}
+
+func loadSigner(path, passphrase string) (ssh.Signer, error) {
+	signer, err := loadPrivateKey(path, passphrase)
+	if err != nil {
+		return nil, err
 	}
 
 	// If an OpenSSH user certificate accompanies the key, wrap the signer.
@@ -153,38 +185,127 @@ func loadSigner(path, passphrase string) (ssh.Signer, error) {
 	return signer, nil
 }
 
-func (m *Manager) client(ep Endpoint) (*ssh.Client, error) {
+// normalizeEndpoint applies the configured user and port defaults and returns
+// the cache key used by both client() and drop().
+func (m *Manager) normalizeEndpoint(ep Endpoint) (Endpoint, string, error) {
 	if ep.Host == "" {
-		return nil, errors.New("ssh: empty host")
+		return ep, "", errors.New("ssh: empty host")
 	}
 	if ep.User == "" {
 		ep.User = m.cfg.User
 	}
 	if ep.User == "" {
-		return nil, errors.New("ssh: empty user")
+		return ep, "", errors.New("ssh: empty user")
 	}
 	if ep.Port == 0 {
 		ep.Port = m.cfg.Port
 	}
-
 	addr := net.JoinHostPort(ep.Host, strconv.Itoa(ep.Port))
-	key := ep.User + "@" + addr
+	return ep, ep.User + "@" + addr, nil
+}
 
+// liveClient returns a pooled client that can be used for new work. An
+// expired or explicitly dropped client is retired: closed immediately if
+// idle, otherwise kept alive until its last in-flight task releases it.
+func (m *Manager) liveClient(key string) (*ssh.Client, bool) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	client, ok := m.clients[key]
+	if !ok {
+		return nil, false
+	}
+	if expires, expiring := m.authExpiry[key]; expiring && !time.Now().Before(expires) {
+		m.retireLocked(key)
+		return nil, false
+	}
+	return client, true
+}
+
+// retireLocked moves the active client aside so a fresh one can be dialed
+// while older tasks finish. The caller must hold m.mu.
+func (m *Manager) retireLocked(key string) {
 	if client, ok := m.clients[key]; ok {
-		m.mu.Unlock()
-		return client, nil
+		m.retired[key] = append(m.retired[key], client)
+		delete(m.clients, key)
+	}
+	delete(m.authExpiry, key)
+	if m.inUse[key] == 0 {
+		m.closeRetiredLocked(key)
+	}
+}
+
+func (m *Manager) closeRetiredLocked(key string) {
+	for _, client := range m.retired[key] {
+		_ = client.Close()
+	}
+	delete(m.retired, key)
+}
+
+// acquire pins a pooled client for the duration of one operation so an
+// expiring certificate cannot close a connection under an active task.
+func (m *Manager) acquire(ep Endpoint) (*ssh.Client, string, error) {
+	ep, key, err := m.normalizeEndpoint(ep)
+	if err != nil {
+		return nil, "", err
+	}
+	client, err := m.client(ep)
+	if err != nil {
+		return nil, "", err
+	}
+	m.mu.Lock()
+	current, ok := m.clients[key]
+	retry := !ok || current != client
+	if !retry {
+		m.inUse[key]++
 	}
 	m.mu.Unlock()
+	if retry {
+		return m.acquire(ep)
+	}
+	return client, key, nil
+}
 
+func (m *Manager) release(key string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.inUse[key]--
+	if m.inUse[key] > 0 {
+		return
+	}
+	delete(m.inUse, key)
+	m.closeRetiredLocked(key)
+}
+
+func (m *Manager) client(ep Endpoint) (*ssh.Client, error) {
+	ep, key, err := m.normalizeEndpoint(ep)
+	if err != nil {
+		return nil, err
+	}
+	if client, ok := m.liveClient(key); ok {
+		return client, nil
+	}
+
+	// Serialize issuance and dialing so concurrent tasks do not each open a
+	// connection or ask Vault to sign the same certificate.
+	m.dialMu.Lock()
+	defer m.dialMu.Unlock()
+	if client, ok := m.liveClient(key); ok {
+		return client, nil
+	}
+
+	signers, expires, err := m.provider.Signers(ep)
+	if err != nil {
+		return nil, err
+	}
 	auth := []ssh.AuthMethod{}
-	if len(m.signers) > 0 {
-		auth = append(auth, ssh.PublicKeys(m.signers...))
+	if len(signers) > 0 {
+		auth = append(auth, ssh.PublicKeys(signers...))
 	}
 	if m.password != "" {
 		auth = append(auth, ssh.Password(m.password))
 	}
 
+	addr := net.JoinHostPort(ep.Host, strconv.Itoa(ep.Port))
 	client, err := ssh.Dial("tcp", addr, &ssh.ClientConfig{
 		User:            ep.User,
 		Auth:            auth,
@@ -197,6 +318,11 @@ func (m *Manager) client(ep Endpoint) (*ssh.Client, error) {
 
 	m.mu.Lock()
 	m.clients[key] = client
+	if expires.IsZero() {
+		delete(m.authExpiry, key)
+	} else {
+		m.authExpiry[key] = expires
+	}
 	m.dials++
 	m.mu.Unlock()
 	return client, nil
@@ -204,10 +330,11 @@ func (m *Manager) client(ep Endpoint) (*ssh.Client, error) {
 
 // Exec runs a command over a reused SSH connection.
 func (m *Manager) Exec(ep Endpoint, command string, stdin []byte) (ExecResult, error) {
-	client, err := m.client(ep)
+	client, key, err := m.acquire(ep)
 	if err != nil {
 		return ExecResult{}, err
 	}
+	defer m.release(key)
 
 	session, err := client.NewSession()
 	if err != nil {
@@ -238,10 +365,11 @@ func (m *Manager) Exec(ep Endpoint, command string, stdin []byte) (ExecResult, e
 
 // Put writes a local file to the remote host over SFTP.
 func (m *Manager) Put(ep Endpoint, remotePath string, content []byte, mode uint32) error {
-	client, err := m.client(ep)
+	client, key, err := m.acquire(ep)
 	if err != nil {
 		return err
 	}
+	defer m.release(key)
 
 	sftp, err := newSFTPClient(client)
 	if err != nil {
@@ -270,10 +398,11 @@ func (m *Manager) Put(ep Endpoint, remotePath string, content []byte, mode uint3
 
 // Fetch reads a remote file over SFTP.
 func (m *Manager) Fetch(ep Endpoint, remotePath string) ([]byte, error) {
-	client, err := m.client(ep)
+	client, key, err := m.acquire(ep)
 	if err != nil {
 		return nil, err
 	}
+	defer m.release(key)
 
 	sftp, err := newSFTPClient(client)
 	if err != nil {
@@ -295,22 +424,33 @@ func (m *Manager) Fetch(ep Endpoint, remotePath string) ([]byte, error) {
 }
 
 func (m *Manager) drop(ep Endpoint) {
-	key := ep.User + "@" + net.JoinHostPort(ep.Host, strconv.Itoa(ep.Port))
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if client, ok := m.clients[key]; ok {
-		client.Close()
-		delete(m.clients, key)
+	_, key, err := m.normalizeEndpoint(ep)
+	if err != nil {
+		return
 	}
+	m.dropKey(key)
 }
 
-// Close closes all pooled connections.
-func (m *Manager) Close() {
+func (m *Manager) dropKey(key string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.retireLocked(key)
+}
+
+// Close closes all pooled connections and releases provider resources.
+func (m *Manager) Close() {
+	m.mu.Lock()
 	for key, client := range m.clients {
 		_ = client.Close()
 		delete(m.clients, key)
+		delete(m.authExpiry, key)
+	}
+	for key := range m.retired {
+		m.closeRetiredLocked(key)
+	}
+	m.mu.Unlock()
+	if m.provider != nil {
+		_ = m.provider.Close()
 	}
 }
 
