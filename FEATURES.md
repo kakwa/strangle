@@ -43,6 +43,19 @@ Each box is ticked in the commit that implements the feature, on
 - [ ] 35. Versioned API: `/api/v1` prefix (current routes kept as aliases)
 - [ ] 36. CLI client: subcommands hitting the API (`strangle run <target> <playbook>`, `strangle runs|hosts|host <name>`, `strangle hostkeys list/accept/reject`) with the auth token from config
 
+## Order notes
+
+TODO file order is the default. Planned deviations, for logical
+implementation order:
+
+- **35 before 34** — introduce the `/api/v1` prefix first, then generate
+  the swagger / OpenAPI docs against the versioned routes.
+- **17 is designed with TODO2 in mind** — per-collection access
+  restrictions are implemented as a user-to-collection membership (the
+  "collection" of the future `/api/v<>/orgs/{org}/collections/{collection}`
+  layout is the current target), so the groups and ownership model from
+  TODO2 can be layered on later without rework.
+
 ## Additional (beyond TODO)
 
 - [x] CLI shape: `strangle <command> --flags` (no bare `strangle` with flags) and a `strangle serve` command to launch the server
