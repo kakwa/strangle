@@ -9,9 +9,10 @@ processes** through an embedded CPython interpreter (via
 `ansible-playbook` process is spawned.
 
 Every run is recorded: run metadata, a per-host recap (ok / changed / failed /
-unreachable) and a per-host × per-task trace of the last status, diff and
-error. Fleet statistics — host count, hosts that disappeared from the recap,
-run duration, change/failed counts — are derived from the stored history.
+unreachable) and every per-host × per-task result with its status, diff and
+error. A separate latest-state view keeps the familiar host task traces.
+Fleet statistics — host count, hosts that disappeared from the recap, run
+duration, change/failed counts — are derived from the stored history.
 
 ## How it works
 
@@ -86,6 +87,8 @@ docs/                documentation: architecture, configuration, API, git collec
   duration, exit code, host/changed/failed counts, full captured output.
 - **HostRun** — per-run, per-host recap line (`ok`, `changed`, `failed`,
   `unreachable`, `skipped`, `rescued`, `ignored`).
+- **TaskResult** — append-only per-run history of each host × task result,
+  including its status, diff and error.
 - **TaskState** — per host × task (play + task name): the last status, when
   it last ran, the last diff and the last error. Updated on every run.
 - **Host** — every host (identified by target + name, so the same name in
@@ -121,6 +124,8 @@ docs/                documentation: architecture, configuration, API, git collec
   `POST /api/v1/orgs/{org}/collections/{collection}/hostkeys/reject`
 - `GET /api/v1/orgs/{org}/collections/{collection}/ssh/stats` — SSH pool
   counters per scope
+- `GET /api/v1/orgs/{org}/collections/{collection}/runs/{id}/tasks` — every
+  per-task result of one run
 
 Full request/response examples: [docs/api.md](docs/api.md).
 
@@ -132,8 +137,9 @@ shows a login screen; the header shows the signed-in user and a log-out
 button:
 
 - `/` — **Dashboard**: fleet stats and the most recent runs.
-- `/runs/{id}` — **Run detail**: metadata and the full captured output,
-  fetched only when the run is opened.
+- `/runs/{id}` — **Run detail**: metadata, the full captured output and the
+  run's per-task results (with expandable diffs and errors), fetched only
+  when the run is opened.
 - `/hosts` — **Hosts**: the host table with last status and disappearance state.
 - `/hosts/{host}` — **Host detail**: the last runs for that host, plus its task
   traces with expandable diffs and errors.

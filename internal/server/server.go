@@ -395,6 +395,49 @@ func (s *Server) Routes() http.Handler {
 	apiHandler(mux, "GET", apiPrefix+"/runs/{id}", handleRunDetail)
 	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/runs/{id}", s.withCollectionAccess(handleRunDetail))
 
+	// Task history is new collection-scoped data: no flat alias, and only
+	// reachable for a run belonging to the URL's collection.
+	handleRunTasks := func(w http.ResponseWriter, r *http.Request) {
+		coll, ok := s.collectionScope(r)
+		if !ok {
+			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
+			return
+		}
+		id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
+		if err != nil || id == 0 {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid run id %q", r.PathValue("id")))
+			return
+		}
+		run, err := s.store.Run(r.Context(), id)
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err)
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if coll != "" && run.Target != coll {
+			writeError(w, http.StatusNotFound, fmt.Errorf("run %d not found in collection %q", id, coll))
+			return
+		}
+		allowed := s.accessibleTargets(r.Context(), r)
+		if coll != "" {
+			allowed = map[string]bool{coll: true}
+		}
+		if !targetVisible(allowed, run.Target) {
+			writeError(w, http.StatusNotFound, errors.New("run not found"))
+			return
+		}
+		tasks, err := s.store.RunTasks(r.Context(), id)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, tasks)
+	}
+	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/runs/{id}/tasks", s.withCollectionAccess(handleRunTasks))
+
 	handleHosts := func(w http.ResponseWriter, r *http.Request) {
 		coll, ok := s.collectionScope(r)
 		if !ok {

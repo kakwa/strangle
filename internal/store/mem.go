@@ -19,6 +19,8 @@ type Mem struct {
 	// hostRuns keeps recap lines denormalized with the host name.
 	hostRuns []HostRunRecord
 	tasks    map[string]*TaskStateRecord // key: host + "\x00" + task
+	// taskRuns is append-only history: one row per task result per run.
+	taskRuns []TaskRunRecord
 }
 
 // NewMem returns an empty in-memory Store.
@@ -93,9 +95,20 @@ func (s *Mem) SaveRun(_ context.Context, in RunInput) error {
 		}
 	}
 
-	// Task states.
+	// Task states and per-run history.
 	hostChanged := map[string]bool{}
 	for _, t := range in.Tasks {
+		s.taskRuns = append(s.taskRuns, TaskRunRecord{
+			ID:         uint64(len(s.taskRuns) + 1),
+			RunID:      run.ID,
+			Target:     target,
+			Host:       t.Host,
+			Task:       t.Task,
+			Status:     t.Status,
+			Diff:       t.LastDiff,
+			Error:      t.LastError,
+			FinishedAt: run.FinishedAt,
+		})
 		key := target + "\x00" + t.Host + "\x00" + t.Task
 		ts := s.tasks[key]
 		if ts == nil {
@@ -160,6 +173,29 @@ func (s *Mem) Run(_ context.Context, id uint64) (RunRecord, error) {
 		}
 	}
 	return RunRecord{}, fmt.Errorf("run %d: %w", id, ErrNotFound)
+}
+
+func (s *Mem) RunTasks(_ context.Context, runID uint64) ([]TaskRunRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	found := false
+	for _, run := range s.runs {
+		if run.ID == runID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("run %d: %w", runID, ErrNotFound)
+	}
+	out := make([]TaskRunRecord, 0)
+	for _, t := range s.taskRuns {
+		if t.RunID == runID {
+			out = append(out, t)
+		}
+	}
+	return out, nil
 }
 
 func (s *Mem) ListHosts(_ context.Context) ([]HostRecord, error) {

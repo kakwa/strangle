@@ -37,7 +37,7 @@ command line · **[SCHED]** scheduling · **[GIT]** git-backed collections ·
 - [x] 22. [UI] [SSH] UI for pending SSH host keys (approve/reject) and SSH pool stats — collection-scoped versioned endpoints under `/api/v<>/orgs/{org}/collections/{collection}`
 - [x] 23. [SCHED] Per-target or per-playbook interval instead of the single global interval (ideally cron-like)
 - [x] 24. [NOTIFY] Notify on run failure (webhook, email, slack or similar), configured per collection
-- [ ] 25. [DB] Task history: keep the per-task results of every run
+- [x] 25. [DB] Task history: keep the per-task results of every run
 - [ ] 26. [DB] [UI] ansible_facts: collect, save and display them — a jsonb blob per host, refreshed by runs
 - [ ] 27. [API] [UI] Cancel a running run (`POST /api/v1/orgs/{org}/collections/{collection}/runs/{id}/cancel` + UI button)
 - [ ] 28. [API] [UI] Check mode: run a playbook with `--check` (dry run) from the UI or API

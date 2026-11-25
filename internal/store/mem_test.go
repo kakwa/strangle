@@ -110,6 +110,18 @@ func TestMemSaveRunAndQueries(t *testing.T) {
 		t.Errorf("changes[0].LastDiff = %q", changes[0].LastDiff)
 	}
 
+	history, err := s.RunTasks(ctx, runs[0].ID)
+	if err != nil || len(history) != 2 {
+		t.Fatalf("RunTasks() = %v, %v; want both parsed task results", history, err)
+	}
+	if history[0].Task != "Install nginx" || history[0].Status != "changed" ||
+		history[0].Diff != "-a\n+b" || history[0].RunID != runs[0].ID {
+		t.Errorf("RunTasks()[0] = %+v", history[0])
+	}
+	if _, err := s.RunTasks(ctx, 999); !errors.Is(err, ErrNotFound) {
+		t.Errorf("RunTasks(unknown) error = %v, want ErrNotFound", err)
+	}
+
 	// A host sharing a prefix must not leak its task states.
 	in2 := RunInput{
 		Run:   testRun("home", "site.yml", t2),
@@ -118,6 +130,14 @@ func TestMemSaveRunAndQueries(t *testing.T) {
 	}
 	if err := s.SaveRun(ctx, in2); err != nil {
 		t.Fatalf("SaveRun() error: %v", err)
+	}
+	run2, err := s.ListRuns(ctx, 1)
+	if err != nil || len(run2) != 1 {
+		t.Fatalf("ListRuns() after second save = %v, %v", run2, err)
+	}
+	history2, err := s.RunTasks(ctx, run2[0].ID)
+	if err != nil || len(history2) != 1 || history2[0].Host != "h10" {
+		t.Errorf("RunTasks(run 2) = %v, %v; want the h10 task", history2, err)
 	}
 	changes, err = s.HostChanges(ctx, "h1", 10)
 	if err != nil || len(changes) != 2 {

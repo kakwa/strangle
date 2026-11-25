@@ -164,6 +164,22 @@ const HOST_CHANGES = {
   ],
 }
 
+// Per-run task history is append-only: unlike HOST_CHANGES (latest state),
+// this endpoint keeps every task result of each run.
+const RUN_TASKS = {}
+let nextTaskID = 1
+for (const changes of Object.values(HOST_CHANGES)) {
+  for (const c of changes) {
+    const key = String(c.last_run_id)
+    if (!RUN_TASKS[key]) RUN_TASKS[key] = []
+    RUN_TASKS[key].push({
+      id: nextTaskID++, run_id: c.last_run_id, target: c.target, host: c.host,
+      task: c.task, status: c.status, diff: c.last_diff || '', error: c.last_error || '',
+      finished_at: c.last_run_at,
+    })
+  }
+}
+
 const PLAYBOOKS = {
   alpha: [
     {
@@ -404,6 +420,15 @@ function handleApi(req, res, url) {
   }
   if (req.method === 'GET' && p === '/api/orgs') {
     return json(res, 200, ORGS)
+  }
+  const runTasks = p.match(/^\/api\/orgs\/([^/]+)\/collections\/([^/]+)\/runs\/(\d+)\/tasks$/)
+  if (req.method === 'GET' && runTasks) {
+    const org = decodeURIComponent(runTasks[1])
+    const coll = decodeURIComponent(runTasks[2])
+    if (!collectionExists(org, coll)) return json(res, 404, { error: `unknown collection ${org}/${coll}` })
+    const run = runs.find((r) => String(r.id) === runTasks[3])
+    if (!run || run.target !== coll) return json(res, 404, { error: `run ${runTasks[3]} not found` })
+    return json(res, 200, RUN_TASKS[runTasks[3]] || [])
   }
   const collResource = p.match(/^\/api\/orgs\/([^/]+)\/collections\/([^/]+)\/(hostkeys|ssh\/stats)$/)
   if (req.method === 'GET' && collResource) {

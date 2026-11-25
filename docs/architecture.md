@@ -117,7 +117,12 @@ they are server-side configuration, not repository content.
 
 - `internal/store` — in-memory; used when no DSN is configured.
 - `internal/db` — GORM on PostgreSQL; tables for runs, per-host recap lines,
-  per-task state and hosts.
+  append-only per-task results, per-task latest state and hosts.
+
+Every task result parsed from a run is appended to task history, so the run
+detail can show all of its statuses, diffs and errors. The separate
+`task_states` table keeps only the latest state per host/task and powers the
+host page; history starts at the upgrade that introduced it.
 
 Hosts are keyed by `target + name`, so the same host name in two targets is
 two distinct hosts. The web UI merges same-named hosts across targets when

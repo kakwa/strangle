@@ -668,24 +668,50 @@ function HostDetail({ host, onBack }) {
   )
 }
 
-// RunDetail shows one run's full captured output. The output is deliberately
-// not part of the polling list: it is fetched only when this view is opened.
+// RunDetail shows one run's full captured output and its per-task history.
+// Both are deliberately absent from the polling list: they are fetched only
+// when this view is opened. Task history is collection-scoped, so the run's
+// collection is resolved through the org directory first.
 function RunDetail({ onBack }) {
   const { id } = useParams()
   const [run, setRun] = useState(null)
+  const [tasks, setTasks] = useState([])
   const [error, setError] = useState(null)
 
   useEffect(() => {
     let active = true
     setRun(null)
+    setTasks([])
     setError(null)
-    fetch(`/api/runs/${encodeURIComponent(id)}`)
-      .then(async (res) => {
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/runs/${encodeURIComponent(id)}`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        return asObject(await res.json())
-      })
-      .then((data) => { if (active) setRun(data) })
-      .catch((err) => { if (active) setError(err.message) })
+        const data = asObject(await res.json())
+
+        let org = null
+        const orgsRes = await fetch(ORGS_PATH).catch(() => null)
+        if (orgsRes?.ok) {
+          for (const candidate of asArray(await orgsRes.json())) {
+            if (asArray(candidate?.collections).some((c) => c?.name === data.target)) {
+              org = candidate.name
+              break
+            }
+          }
+        }
+        let taskData = []
+        if (org) {
+          const taskRes = await fetch(collectionAPI(org, data.target, `runs/${encodeURIComponent(id)}/tasks`))
+          if (taskRes.ok) taskData = asArray(await taskRes.json())
+        }
+        if (active) {
+          setRun(data)
+          setTasks(taskData)
+        }
+      } catch (err) {
+        if (active) setError(err.message)
+      }
+    })()
     return () => { active = false }
   }, [id])
 
@@ -728,6 +754,34 @@ function RunDetail({ onBack }) {
               {run.output || 'No output captured for this run.'}
             </Text>
           </div>
+        </Card>
+      )}
+      {run && (
+        <Card withBorder>
+          <Title order={4} mb="sm">Task results</Title>
+          <Accordion>
+            {tasks.map((task, i) => (
+              <Accordion.Item key={`${task.host}-${task.task}-${i}`} value={String(i)}>
+                <Accordion.Control>
+                  <Group justify="space-between" wrap="nowrap" style={{ minWidth: 0 }}>
+                    <Text size="sm" truncate style={{ flex: 1, minWidth: 0 }}>
+                      {task.host}: {task.task}
+                    </Text>
+                    <Group gap="xs" flexShrink={0}>
+                      <StatusBadge status={task.status} />
+                      <Text size="xs" c="dimmed">{fmtAgo(task.finished_at)}</Text>
+                    </Group>
+                  </Group>
+                </Accordion.Control>
+                <Accordion.Panel>
+                  <DiffBlock diff={task.diff} error={task.error} />
+                </Accordion.Panel>
+              </Accordion.Item>
+            ))}
+            {tasks.length === 0 && (
+              <Text size="sm" c="dimmed">No per-task results recorded for this run.</Text>
+            )}
+          </Accordion>
         </Card>
       )}
     </Stack>

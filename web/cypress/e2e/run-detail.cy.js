@@ -14,6 +14,11 @@ describe('Run detail', () => {
     cy.contains('Playbook: web')
     cy.contains('pre', 'TASK [Update Nginx config]')
     cy.contains('changed: [web-01]')
+    cy.contains('Task results').should('be.visible')
+    cy.contains('web-01: Update Nginx config').click()
+    cy.contains('+    server_name web01.example.com;')
+    cy.contains('Collect disk usage').click()
+    cy.contains('df: command not found')
   })
 
   it('renders from a bookmarkable URL and navigates back', () => {

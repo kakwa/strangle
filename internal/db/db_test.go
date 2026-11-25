@@ -24,7 +24,7 @@ func openTestDB(t *testing.T) *DB {
 		t.Fatalf("Open() error: %v", err)
 	}
 	ctx := context.Background()
-	for _, table := range []string{"task_states", "host_runs", "hosts", "runs", "users", "api_tokens"} {
+	for _, table := range []string{"task_run_results", "task_states", "host_runs", "hosts", "runs", "users", "api_tokens"} {
 		if err := d.db.WithContext(ctx).Exec("TRUNCATE " + table + " CASCADE").Error; err != nil {
 			t.Fatalf("truncate %s: %v", table, err)
 		}
@@ -146,6 +146,19 @@ func TestDBRoundTrip(t *testing.T) {
 		t.Errorf("Install nginx change = %+v", install)
 	}
 
+	taskHistory, err := d.RunTasks(ctx, runs[0].ID)
+	if err != nil || len(taskHistory) != 2 {
+		t.Fatalf("RunTasks() = %v, %v; want both parsed task results", taskHistory, err)
+	}
+	if taskHistory[0].Host != "h1" || taskHistory[0].Task != "Install nginx" ||
+		taskHistory[0].Status != "changed" || taskHistory[0].Diff != "-a\n+b" ||
+		taskHistory[0].RunID != runs[0].ID {
+		t.Errorf("RunTasks()[0] = %+v", taskHistory[0])
+	}
+	if _, err := d.RunTasks(ctx, 999999); err == nil {
+		t.Error("RunTasks(unknown) error = nil, want an error")
+	}
+
 	// A second run must not duplicate host-run rows.
 	in2 := store.RunInput{
 		Run: store.RunRecord{
@@ -231,5 +244,49 @@ func TestDBRoundTrip(t *testing.T) {
 	}
 	if perPB["home/site.yml"] != 2 || perPB["other/site.yml"] != 1 {
 		t.Errorf("Stats().PerPlaybook = %v", perPB)
+	}
+}
+
+func TestDBTaskHistoryAcrossRuns(t *testing.T) {
+	d := openTestDB(t)
+	defer d.Close()
+	ctx := context.Background()
+	base := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
+
+	for i, status := range []string{"changed", "ok"} {
+		in := store.RunInput{
+			Run: store.RunRecord{
+				Target: "home", Playbook: "site.yml",
+				StartedAt:  base.Add(time.Duration(i) * time.Hour),
+				FinishedAt: base.Add(time.Duration(i)*time.Hour + time.Minute),
+				Success:    true, Hosts: 1,
+			},
+			Hosts: []store.HostRunRecord{{Target: "home", Host: "h1", Status: status, Ok: 1}},
+			Tasks: []store.TaskStateRecord{{
+				Target: "home", Host: "h1", Task: "Install nginx", Status: status,
+				LastDiff: "diff-" + status,
+			}},
+		}
+		if err := d.SaveRun(ctx, in); err != nil {
+			t.Fatalf("SaveRun() #%d error: %v", i+1, err)
+		}
+	}
+
+	runs, err := d.ListRuns(ctx, 10)
+	if err != nil || len(runs) != 2 {
+		t.Fatalf("ListRuns() = %v, %v", runs, err)
+	}
+	for _, run := range runs {
+		history, err := d.RunTasks(ctx, run.ID)
+		if err != nil || len(history) != 1 {
+			t.Fatalf("RunTasks(%d) = %v, %v; want one row per run", run.ID, history, err)
+		}
+		if history[0].RunID != run.ID || history[0].Task != "Install nginx" || history[0].Diff == "" {
+			t.Errorf("RunTasks(%d)[0] = %+v", run.ID, history[0])
+		}
+	}
+	changes, err := d.HostChanges(ctx, "h1", 10)
+	if err != nil || len(changes) != 1 {
+		t.Fatalf("HostChanges(h1) = %v, %v; want one latest state", changes, err)
 	}
 }

@@ -284,6 +284,39 @@ another collection's log. Unknown IDs are `404`, malformed IDs are `400`.
 }
 ```
 
+## GET /api/v1/orgs/{org}/collections/{collection}/runs/{id}/tasks
+
+Every per-task result recorded for one run, in task order. Unlike
+`/api/hosts/{host}/changes` (the latest state of a task), this endpoint is an
+append-only history: repeated task names and older runs remain available.
+There is deliberately no flat alias. A run from another collection returns
+`404`; collection membership still applies.
+
+```json
+[
+  {
+    "id": 9102,
+    "run_id": 1234,
+    "target": "home",
+    "host": "web-01",
+    "task": "configure nginx",
+    "status": "changed",
+    "diff": "@@ -1,2 +1,2 @@\n-worker_connections auto;\n+worker_connections 512;\n",
+    "error": "",
+    "finished_at": "..."
+  },
+  {
+    "id": 9103,
+    "run_id": 1234,
+    "target": "home",
+    "host": "web-01",
+    "task": "check nginx",
+    "status": "ok",
+    "finished_at": "..."
+  }
+]
+```
+
 ## GET /api/hosts
 
 All hosts with their last status and disappearance state. Hosts are scoped

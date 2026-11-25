@@ -76,6 +76,20 @@ type TaskState struct {
 	LastError     string
 }
 
+// TaskRunResult is one task result of one run. It is append-only: task_states
+// keeps only the latest state per host/task, while this table preserves every
+// run's status, diff and error (including repeated task names).
+type TaskRunResult struct {
+	ID         uint64 `gorm:"primaryKey"`
+	RunID      uint64 `gorm:"index"`
+	HostID     uint64
+	Task       string `gorm:"size:512"`
+	Status     string
+	Diff       string `gorm:"type:text"`
+	Error      string
+	FinishedAt time.Time
+}
+
 // DB is a store.Store backed by PostgreSQL.
 type DB struct {
 	db *gorm.DB
@@ -101,7 +115,7 @@ func Open(ctx context.Context, dsn string) (*DB, error) {
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
 
-	if err := gdb.WithContext(ctx).AutoMigrate(&Run{}, &Host{}, &HostRun{}, &TaskState{}, &UserRecord{}, &TokenRecord{}, &CollectionMemberRecord{}); err != nil {
+	if err := gdb.WithContext(ctx).AutoMigrate(&Run{}, &Host{}, &HostRun{}, &TaskState{}, &TaskRunResult{}, &UserRecord{}, &TokenRecord{}, &CollectionMemberRecord{}); err != nil {
 		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
 
@@ -223,10 +237,20 @@ func (d *DB) SaveRun(ctx context.Context, in store.RunInput) error {
 			}
 		}
 
-		// Task states.
+		// Task states (latest view) and append-only task history.
 		changedHosts := map[uint64]struct{}{}
+		taskRuns := make([]TaskRunResult, 0, len(in.Tasks))
 		for _, t := range in.Tasks {
 			hostID := hostIDs[t.Host]
+			taskRuns = append(taskRuns, TaskRunResult{
+				RunID:      run.ID,
+				HostID:     hostID,
+				Task:       t.Task,
+				Status:     t.Status,
+				Diff:       t.LastDiff,
+				Error:      t.LastError,
+				FinishedAt: run.FinishedAt,
+			})
 			var ts TaskState
 			err := tx.Where("host_id = ? AND task = ?", hostID, t.Task).First(&ts).Error
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -271,6 +295,11 @@ func (d *DB) SaveRun(ctx context.Context, in store.RunInput) error {
 			}
 			if err := tx.Model(&TaskState{}).Where("id = ?", ts.ID).Updates(updates).Error; err != nil {
 				return err
+			}
+		}
+		if len(taskRuns) > 0 {
+			if err := tx.Create(&taskRuns).Error; err != nil {
+				return fmt.Errorf("insert task history: %w", err)
 			}
 		}
 
@@ -403,6 +432,46 @@ func (d *DB) HostChanges(ctx context.Context, host string, limit int) ([]store.T
 			LastChangedAt: r.LastChangedAt,
 			LastDiff:      r.LastDiff,
 			LastError:     r.LastError,
+		})
+	}
+	return out, nil
+}
+
+func (d *DB) RunTasks(ctx context.Context, runID uint64) ([]store.TaskRunRecord, error) {
+	var run Run
+	if err := d.db.WithContext(ctx).Select("id").First(&run, runID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("run %d: %w", runID, store.ErrNotFound)
+		}
+		return nil, err
+	}
+
+	type row struct {
+		TaskRunResult
+		HostName   string `gorm:"column:hostname"`
+		HostTarget string `gorm:"column:hosttarget"`
+	}
+	var rows []row
+	if err := d.db.WithContext(ctx).Model(&TaskRunResult{}).
+		Joins("JOIN hosts h ON h.id = task_run_results.host_id").
+		Select("task_run_results.*, h.name AS hostname, h.target AS hosttarget").
+		Where("task_run_results.run_id = ?", runID).
+		Order("task_run_results.id").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]store.TaskRunRecord, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, store.TaskRunRecord{
+			ID:         r.ID,
+			RunID:      r.RunID,
+			Target:     r.HostTarget,
+			Host:       r.HostName,
+			Task:       r.Task,
+			Status:     r.Status,
+			Diff:       r.Diff,
+			Error:      r.Error,
+			FinishedAt: r.FinishedAt,
 		})
 	}
 	return out, nil

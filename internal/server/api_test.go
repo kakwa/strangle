@@ -62,6 +62,7 @@ func seedTargetRun(t *testing.T, st store.Store, target string) {
 			Output: "PLAY [all] ***\nfull output for " + target + "\n",
 		},
 		Hosts: []store.HostRunRecord{{Host: "web1", Status: "ok", Ok: 1}},
+		Tasks: []store.TaskStateRecord{{Host: "web1", Task: "Install nginx", Status: "changed", LastDiff: "-old\n+new"}},
 	}); err != nil {
 		t.Fatalf("SaveRun() error: %v", err)
 	}
@@ -252,6 +253,26 @@ func TestRunDetailAndListingWithoutOutput(t *testing.T) {
 		if rec = doGet(t, s, tc.path); rec.Code != tc.code {
 			t.Errorf("GET %s: status = %d, want %d (body %s)", tc.path, rec.Code, tc.code, rec.Body.String())
 		}
+	}
+
+	// Per-run task history is collection-scoped only.
+	tasksPath := "/api/v1/orgs/default/collections/home/runs/" + id + "/tasks"
+	rec = doGet(t, s, tasksPath)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET %s: status = %d, body %s", tasksPath, rec.Code, rec.Body.String())
+	}
+	var tasks []store.TaskRunRecord
+	if err := json.Unmarshal(rec.Body.Bytes(), &tasks); err != nil {
+		t.Fatalf("decode tasks: %v", err)
+	}
+	if len(tasks) != 1 || tasks[0].Task != "Install nginx" || tasks[0].RunID != all[0].ID {
+		t.Errorf("run tasks = %+v, want the seeded task result", tasks)
+	}
+	if rec = doGet(t, s, "/api/runs/"+id+"/tasks"); strings.Contains(rec.Body.String(), "Install nginx") {
+		t.Errorf("flat run tasks path exposes task history: %s", rec.Body.String())
+	}
+	if rec = doGet(t, s, "/api/v1/orgs/lab/collections/edge/runs/"+id+"/tasks"); rec.Code != http.StatusNotFound {
+		t.Errorf("sibling collection run tasks: status = %d, want 404", rec.Code)
 	}
 }
 

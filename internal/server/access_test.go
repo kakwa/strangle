@@ -99,6 +99,14 @@ func TestCollectionRestrictions(t *testing.T) {
 		t.Errorf("GET edge run detail: status = %d, want 200", rec.Code)
 	}
 
+	// Per-run task history carries diffs/errors and follows the same rules.
+	if rec = getAuthWith(t, s, "/api/v1/orgs/default/collections/home/runs/"+ids["home"]+"/tasks", headers); rec.Code != http.StatusForbidden {
+		t.Errorf("GET home run tasks: status = %d, want 403", rec.Code)
+	}
+	if rec = getAuthWith(t, s, "/api/v1/orgs/lab/collections/edge/runs/"+ids["edge"]+"/tasks", headers); rec.Code != http.StatusOK {
+		t.Errorf("GET edge run tasks: status = %d, want 200", rec.Code)
+	}
+
 	// POST /run is checked using the target in the body on flat routes.
 	post := func(path, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))

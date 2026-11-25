@@ -78,6 +78,21 @@ type TaskStateRecord struct {
 	LastError     string     `json:"last_error,omitempty"`
 }
 
+// TaskRunRecord is one task result from one run. Unlike TaskStateRecord (the
+// latest state of a host/task), these rows are append-only: every run keeps
+// its own result, including repeated task names and diffs/errors.
+type TaskRunRecord struct {
+	ID         uint64    `json:"id"`
+	RunID      uint64    `json:"run_id"`
+	Target     string    `json:"target"`
+	Host       string    `json:"host"`
+	Task       string    `json:"task"`
+	Status     string    `json:"status"`
+	Diff       string    `json:"diff,omitempty"`
+	Error      string    `json:"error,omitempty"`
+	FinishedAt time.Time `json:"finished_at"`
+}
+
 // PlaybookStats is the per-(target, playbook) run breakdown in Stats.
 type PlaybookStats struct {
 	Target    string    `json:"target"`
@@ -117,7 +132,9 @@ type RunInput struct {
 	Run RunRecord
 	// Hosts are the per-host recap lines of this run.
 	Hosts []HostRunRecord
-	// Tasks are the per-(host, task) states observed in this run.
+	// Tasks are the per-(host, task) results observed in this run. Stores
+	// update their latest-state view from these and append one history row
+	// per result.
 	Tasks []TaskStateRecord
 	// ScopeNames are the hosts this run was expected to reach (the play
 	// targets resolved against the inventory). Hosts in the scope but absent
@@ -152,6 +169,9 @@ type Store interface {
 	// HostChanges returns the host's task change traces (across all targets),
 	// most recently changed first.
 	HostChanges(ctx context.Context, host string, limit int) ([]TaskStateRecord, error)
+	// RunTasks returns every per-task result recorded for one run, in the
+	// order the tasks were parsed from that run's output.
+	RunTasks(ctx context.Context, runID uint64) ([]TaskRunRecord, error)
 	// Stats returns aggregate statistics.
 	Stats(ctx context.Context) (*Stats, error)
 	// Close releases underlying resources.
