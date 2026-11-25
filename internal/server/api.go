@@ -40,11 +40,18 @@ type collectionInfo struct {
 	Playbooks []playbookInfo `json:"playbooks,omitempty"`
 }
 
+// routeRegistrar is the small part of http.ServeMux used for registration.
+// routeCatalog implements it as well so the OpenAPI document can be generated
+// from the very patterns that are actually registered.
+type routeRegistrar interface {
+	HandleFunc(pattern string, handler http.HandlerFunc)
+}
+
 // apiHandler registers h both under a versioned path and under the legacy
 // flat alias (e.g. GET /api/v1/runs and GET /api/runs). Patterns registered
 // only under the versioned tree, such as the org/collection resources, use
 // mux.HandleFunc directly instead.
-func apiHandler(mux *http.ServeMux, method, path string, h http.HandlerFunc) {
+func apiHandler(mux routeRegistrar, method, path string, h http.HandlerFunc) {
 	mux.HandleFunc(method+" "+path, h)
 	if strings.HasPrefix(path, apiPrefix) {
 		alias := "/api" + strings.TrimPrefix(path, apiPrefix)
@@ -366,7 +373,7 @@ func (s *Server) requireCollection(w http.ResponseWriter, r *http.Request) (conf
 
 // registerOrgRoutes adds the first-class org and collection resources. These
 // exist only in the versioned API: there is no flat alias for an org.
-func (s *Server) registerOrgRoutes(mux *http.ServeMux) {
+func (s *Server) registerOrgRoutes(mux routeRegistrar) {
 	// GET /api/v1/orgs lists every organization and its collections.
 	mux.HandleFunc("GET "+apiPrefix+"/orgs", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.visibleOrganizations(r))

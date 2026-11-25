@@ -154,12 +154,21 @@ func New(addr string, apr *applier.Ansible, st store.Store, ssh *sshpool.Multi, 
 //
 // UI authentication is enforced when a user store is configured and holds
 // at least one user: every /api/* request then needs a valid session,
-// except the login endpoints and GET /api/health (liveness). Without users
-// the server runs open and logs a warning pointing at `strangle user add`.
+// except the login endpoints, GET /api/health (liveness), GET /api/docs and
+// GET /api/v1/openapi.json. Without users the server runs open and logs a
+// warning pointing at `strangle user add`.
 func (s *Server) Routes() http.Handler {
+	handler, _ := s.buildRoutes()
+	return handler
+}
+
+// buildRoutes registers the handlers and returns both the HTTP handler and
+// the catalog of registered patterns. The catalog is the source used to
+// generate the served OpenAPI document.
+func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 	s.initAuth()
 
-	mux := http.NewServeMux()
+	mux := newRouteCatalog()
 
 	apiHandler(mux, "GET", apiPrefix+"/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -169,6 +178,10 @@ func (s *Server) Routes() http.Handler {
 	// Prometheus scrape endpoint. It is intentionally outside /api so it is
 	// reachable without a UI session; only aggregate counts are exposed.
 	mux.Handle("GET /metrics", metrics.Handler(s.store, s.workers, s.logger))
+
+	// Machine-readable API description and Swagger UI. Both are public: the
+	// spec describes the routes but exposes no collection data itself.
+	s.registerDocsRoutes(mux)
 
 	// --- UI authentication -------------------------------------------------
 
@@ -890,9 +903,9 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/", spaHandler(uiFS))
 
 	// When authentication is on, every /api/* request (except the login
-	// endpoints and health) needs a valid session. Static UI files are
-	// served unconditionally: the app itself gates on GET /api/me.
-	return s.requireAuth(mux)
+	// endpoints, health and the API docs) needs a valid session. Static UI
+	// files are served unconditionally: the app itself gates on GET /api/me.
+	return s.requireAuth(mux), mux
 }
 
 // initAuth sets up the session table and decides, once, whether UI
@@ -926,7 +939,8 @@ type meResponse struct {
 // identity when authentication is on. An identity is a valid session
 // (cookie) or a user bearer token; the static sync token only unlocks
 // POST /api/sync. The open endpoints are GET /api/health (liveness),
-// POST /api/login, POST /api/logout and GET /api/me.
+// POST /api/login, POST /api/logout, GET /api/me, GET /api/docs and
+// GET /api/v1/openapi.json.
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.authOn && strings.HasPrefix(r.URL.Path, "/api/") {
@@ -950,6 +964,10 @@ func (s *Server) syncOK(r *http.Request) bool {
 // authOpen lists the API endpoints reachable without a session, under both
 // the versioned prefix and their flat aliases.
 func (s *Server) authOpen(r *http.Request) bool {
+	// API docs are public but have no legacy flat alias for the spec.
+	if r.Method == http.MethodGet && (r.URL.Path == "/api/docs" || r.URL.Path == apiPrefix+"/openapi.json") {
+		return true
+	}
 	path := apiAliasPath(r.URL.Path)
 	switch {
 	case path == "/api/health" && r.Method == http.MethodGet:

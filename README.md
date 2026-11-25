@@ -102,6 +102,8 @@ docs/                documentation: architecture, configuration, API, git collec
 
 - `GET /api/health`      — liveness (open, no auth)
 - `GET /metrics`         — Prometheus text exposition: aggregate run, host and worker stats (open)
+- `GET /api/v1/openapi.json` — generated OpenAPI 3 document (open)
+- `GET /api/docs`        — Swagger UI for the versioned API (open)
 - `POST /api/login`      — authenticate a local account, sets a 12 h session cookie
 - `POST /api/logout`     — end the session
 - `GET /api/me`          — who is logged in; the UI's auth probe
@@ -134,7 +136,8 @@ docs/                documentation: architecture, configuration, API, git collec
 - `POST /api/v1/orgs/{org}/collections/{collection}/runs/{id}/cancel` — cancel
   a queued or running run; the run detail view offers the same action
 
-Full request/response examples: [docs/api.md](docs/api.md).
+Full request/response examples: [docs/api.md](docs/api.md), or the served
+Swagger UI at `/api/docs` backed by `/api/v1/openapi.json`.
 
 ## Web UI
 

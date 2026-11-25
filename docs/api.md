@@ -65,6 +65,19 @@ On collection-scoped `run` and `sync` routes the collection in the URL selects
 the target; a conflicting `target` field in the JSON body is rejected with
 `400`. An unknown org/collection pair returns `404`.
 
+## OpenAPI / Swagger
+
+The machine-readable OpenAPI 3 document is generated from the routes the
+server actually registers, so a new versioned route appears automatically.
+The canonical paths (not the legacy flat aliases) are documented:
+
+- `GET /api/v1/openapi.json` — the OpenAPI 3.0.3 JSON document.
+- `GET /api/docs` — Swagger UI, initialized from the document above.
+
+Both are public, even when UI authentication is on: they describe the API but
+expose no run, host or collection data themselves. Operation schemas are
+derived from the request/response Go types.
+
 ## Authentication
 
 There are two independent mechanisms:
@@ -72,9 +85,10 @@ There are two independent mechanisms:
 **UI authentication (session cookie).** When at least one local account
 exists (see [configuration](configuration.md#ui-authentication)), every
 `/api/*` request needs a valid session cookie, except the open endpoints:
-`GET /api/health`, `POST /api/login`, `POST /api/logout` and `GET /api/me`.
-Sessions live 12 hours and are held in the master's memory (a master
-restart logs everyone out). Static UI files are always served; the app
+`GET /api/health`, `POST /api/login`, `POST /api/logout`, `GET /api/me`,
+`GET /api/docs` and `GET /api/v1/openapi.json`. Sessions live 12 hours and are
+held in the master's memory (a master restart logs everyone out). Static UI
+files are always served; the app
 itself gates on `GET /api/me`.
 
 **Sync token (webhooks).** Independently of UI authentication, when
