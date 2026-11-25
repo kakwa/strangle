@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/internal/auth"
-	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/cfg"
 	"github.com/kakwa/strangle/internal/db"
 	"github.com/spf13/cobra"
 )
@@ -144,17 +144,13 @@ func userCmd() *cobra.Command {
 	return cmd
 }
 
-// openUserStore opens the users table from the configured server file. UI
-// accounts only exist when a database is configured.
+// openUserStore opens the users table from the configured server file.
 func openUserStore(serverConfigPath string) (auth.UserStore, error) {
-	cfg, err := config.LoadServer(serverConfigPath)
+	conf, err := cfg.LoadServer(serverConfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
-	if cfg.Database.DSN == "" {
-		return nil, errors.New("no database.dsn in server.yml: UI accounts are stored in the database")
-	}
-	d, err := db.Open(context.Background(), cfg.Database.DSN)
+	d, err := db.Open(context.Background(), conf.Database.DSN)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -302,16 +298,13 @@ func tokenCmd() *cobra.Command {
 }
 
 // openTokenStores opens the users and api_tokens tables from the configured
-// server file. API tokens only exist when a database is configured.
+// server file.
 func openTokenStores(serverConfigPath string) (auth.UserStore, auth.TokenStore, error) {
-	cfg, err := config.LoadServer(serverConfigPath)
+	conf, err := cfg.LoadServer(serverConfigPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid configuration: %w", err)
 	}
-	if cfg.Database.DSN == "" {
-		return nil, nil, errors.New("no database.dsn in server.yml: API tokens are stored in the database")
-	}
-	d, err := db.Open(context.Background(), cfg.Database.DSN)
+	d, err := db.Open(context.Background(), conf.Database.DSN)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -391,16 +384,13 @@ func collectionCmd() *cobra.Command {
 }
 
 // openAccessStore opens the collection_members table from the configured
-// server file. Memberships only exist when a database is configured.
+// server file.
 func openAccessStore(serverConfigPath string) (auth.CollectionAccess, error) {
-	cfg, err := config.LoadServer(serverConfigPath)
+	conf, err := cfg.LoadServer(serverConfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
-	if cfg.Database.DSN == "" {
-		return nil, errors.New("no database.dsn in server.yml: collection memberships are stored in the database")
-	}
-	d, err := db.Open(context.Background(), cfg.Database.DSN)
+	d, err := db.Open(context.Background(), conf.Database.DSN)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}

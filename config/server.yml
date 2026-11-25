@@ -7,13 +7,12 @@ listen_addr: ":8080"
 # Log level: debug, info, warn or error. Defaults to info.
 log_level: info
 
-# Fallback for jobs that do not define their own schedule/interval in
-# strangle.yml. Those jobs run at startup and then on every tick.
-# Defaults to 15m.
-interval: 2m
+# Fallback for jobs that do not define their own schedule in strangle.yml.
+# Uses robfig/cron v3 format (five-field cron or a descriptor such as
+# "@every 30m"). Defaults to "@every 15m".
+schedule: "@every 2m"
 
-# PostgreSQL DSN for run history. Without a DSN strangle falls back to an
-# in-memory store and history is lost on restart.
+# PostgreSQL DSN, required for run history, accounts and the River job queue.
 database:
   dsn: postgres://postgres@127.0.0.1:5432/strangle
 

@@ -1,6 +1,7 @@
 // Package store defines the persistence interface for strangle: run records,
 // per-host run results, per-task change traces and aggregate stats.
-// Implementations live in store (in-memory) and db (gorm/PostgreSQL).
+// The production implementation always lives in db (GORM/PostgreSQL); there is
+// no in-memory fallback.
 package store
 
 import (
@@ -147,9 +148,9 @@ type Stats struct {
 	PerPlaybook []PlaybookStats `json:"per_playbook"`
 }
 
-// AggregateStats computes Stats from a set of runs and hosts. Both store
-// implementations and callers that need a collection-scoped view use it so
-// counts, averages and per-playbook ordering stay identical everywhere.
+// AggregateStats computes Stats from a set of runs and hosts. Callers that
+// need a collection-scoped view use it so counts, averages and per-playbook
+// ordering stay identical everywhere.
 func AggregateStats(runs []RunRecord, hosts []HostRecord) *Stats {
 	st := &Stats{PerPlaybook: []PlaybookStats{}}
 

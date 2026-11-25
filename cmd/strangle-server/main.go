@@ -13,19 +13,15 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
-	"sync"
 	"syscall"
 	"time"
 
-	"github.com/kakwa/strangle/internal/ansible"
 	"github.com/kakwa/strangle/internal/applier"
 	"github.com/kakwa/strangle/internal/auth"
+	"github.com/kakwa/strangle/internal/cfg"
 	"github.com/kakwa/strangle/internal/collection"
-	"github.com/kakwa/strangle/internal/config"
 	"github.com/kakwa/strangle/internal/db"
 	"github.com/kakwa/strangle/internal/maintenance"
-	"github.com/kakwa/strangle/internal/notify"
 	"github.com/kakwa/strangle/internal/riverqueue"
 	"github.com/kakwa/strangle/internal/sandbox"
 	"github.com/kakwa/strangle/internal/scheduler"
@@ -100,12 +96,12 @@ func workerCmd() *cobra.Command {
 }
 
 func run(cmd *cobra.Command, args []string) error {
-	cfg, err := config.Load(serverConfigPath, collectionConfigPath)
+	conf, err := cfg.Load(serverConfigPath, collectionConfigPath)
 	if err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	logger, err := newLogger(cfg.Server.LogLevel)
+	logger, err := newLogger(conf.Server.LogLevel)
 	if err != nil {
 		return err
 	}
@@ -116,7 +112,7 @@ func run(cmd *cobra.Command, args []string) error {
 	// Git-backed targets are cloned into their configured path and pinned
 	// to their tracked ref. A failure is reported, not fatal: the target
 	// can be synced later through POST /api/sync.
-	collMgr := collection.New(cfg.Targets, logger)
+	collMgr := collection.New(conf.Targets, logger)
 	if collMgr.HasGit() {
 		if err := collMgr.InitialSync(ctx); err != nil {
 			logger.Error("collection sync failed at startup", zap.Error(err))
@@ -138,17 +134,17 @@ func run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("resolve executable path: %w", err)
 	}
 	workerOpts := []worker.ManagerOption{}
-	if cfg.Server.Sandbox.Enabled {
+	if conf.Server.Sandbox.Enabled {
 		if !sandbox.KernelSupported() {
 			logger.Warn("Landlock is not supported by this kernel: collection sandboxing will not be enforced")
 		}
-		manifests, err := sandbox.Build(cfg.Server.Sandbox, collMgr.Targets(), serverConfigPath, collectionConfigPath)
+		manifests, err := sandbox.Build(conf.Server.Sandbox, collMgr.Targets(), serverConfigPath, collectionConfigPath)
 		if err != nil {
 			return fmt.Errorf("build sandbox policies: %w", err)
 		}
 		workerOpts = append(workerOpts, worker.WithSandbox(manifests))
 	}
-	mgr, err := worker.NewManager(ctx, binPath, serverConfigPath, collectionConfigPath, cfg.Server.Workers, logger, workerOpts...)
+	mgr, err := worker.NewManager(ctx, binPath, serverConfigPath, collectionConfigPath, conf.Server.Workers, logger, workerOpts...)
 	if err != nil {
 		return fmt.Errorf("failed to start workers: %w", err)
 	}
@@ -160,49 +156,35 @@ func run(cmd *cobra.Command, args []string) error {
 		logger.Error("a worker slot is permanently down; playbook runs will fail until the master is restarted")
 	}()
 
-	var st store.Store
-	var users auth.UserStore
-	var tokens auth.TokenStore
-	var access auth.CollectionAccess
-	if cfg.Server.Database.DSN != "" {
-		dctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		d, err := db.Open(dctx, cfg.Server.Database.DSN)
-		cancel()
-		if err != nil {
-			_ = mgr.Stop()
-			return fmt.Errorf("failed to open database: %w", err)
-		}
-		st = d
-		users = d.Users()
-		tokens = d.Tokens()
-		access = d.Access()
-		logger.Info("using PostgreSQL store")
-	} else {
-		st = store.NewMem()
-		logger.Warn("no database DSN configured, using in-memory store")
+	dctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	d, err := db.Open(dctx, conf.Server.Database.DSN)
+	cancel()
+	if err != nil {
+		_ = mgr.Stop()
+		return fmt.Errorf("failed to open database: %w", err)
 	}
+	var st store.Store = d
+	var users auth.UserStore = d.Users()
+	var tokens auth.TokenStore = d.Tokens()
+	var access auth.CollectionAccess = d.Access()
 
-	apr := applier.NewAnsible(collMgr.Targets(), mgr, st, logger, notify.New(logger))
+	apr := applier.NewAnsible(collMgr.Targets(), mgr, st, logger)
 
-	// With a database, playbook runs flow through a postgres-backed River
-	// queue and a River client in this process dispatches them to the worker
-	// pool. Without a database, playbooks run directly. The scheduler below
-	// decides when each individual (target, playbook) pair runs.
-	var queue *riverqueue.Client
-	var enqueue server.RunEnqueuer
-	if cfg.Server.Database.DSN != "" {
-		var err error
-		queue, err = riverqueue.Open(ctx, cfg.Server.Database.DSN, cfg.Server.Workers, func(ctx context.Context, target, playbook string, runID uint64, check bool) error {
-			return apr.Trigger(applier.WithCheck(applier.WithRunID(ctx, runID), check), target, playbook)
-		}, logger)
-		if err != nil {
-			_ = mgr.Stop()
-			return fmt.Errorf("failed to initialize job queue: %w", err)
+	// Playbook runs flow through a postgres-backed River queue and a River
+	// client in this process dispatches them to the worker pool. The
+	// scheduler below decides when each individual (target, playbook) pair
+	// runs.
+	queue, err := riverqueue.Open(ctx, conf.Server.Database.DSN, conf.Server.Workers, func(ctx context.Context, target, playbook string, runID uint64, check bool) error {
+		return apr.Trigger(applier.WithCheck(applier.WithRunID(ctx, runID), check), target, playbook)
+	}, logger)
+	if err != nil {
+		_ = mgr.Stop()
+		if closeErr := d.Close(); closeErr != nil {
+			logger.Warn("failed to close store after queue error", zap.Error(closeErr))
 		}
-		enqueue = queue
-	} else {
-		enqueue = &directEnqueuer{apr: apr, logger: logger, cancels: map[string]context.CancelFunc{}}
+		return fmt.Errorf("failed to initialize job queue: %w", err)
 	}
+	var enqueue server.RunEnqueuer = queue
 
 	// Read the live target list on every reconcile: git-backed targets gain
 	// (or change) their playbooks and schedules only after a sync.
@@ -234,14 +216,14 @@ func run(cmd *cobra.Command, args []string) error {
 		}
 		return nil
 	}
-	sched := scheduler.New(cfg.Server.Interval, jobProvider, runScheduled, logger)
+	sched := scheduler.New(conf.Server.Schedule, jobProvider, runScheduled, logger)
 	var syncer server.Syncer
 	if collMgr.HasGit() {
 		syncer = collMgr
 	}
-	srv := server.New(cfg.Server.ListenAddr, apr, st, multi, enqueue, mgr, syncer, users, tokens, cfg.Server.Auth.Token, logger,
+	srv := server.New(conf.Server.ListenAddr, apr, st, multi, enqueue, mgr, syncer, users, tokens, conf.Server.Auth.Token, logger,
 		server.WithCollectionAccess(access),
-		server.WithTLS(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile))
+		server.WithTLS(conf.Server.TLS.CertFile, conf.Server.TLS.KeyFile))
 
 	done := make(chan struct{})
 	go func() {
@@ -250,28 +232,26 @@ func run(cmd *cobra.Command, args []string) error {
 	}()
 
 	retentionDone := maintenance.Start(ctx,
-		maintenance.NewRetention(st, cfg.Server.Retention, collMgr.Targets, logger))
+		maintenance.NewRetention(st, conf.Server.Retention, collMgr.Targets, logger))
 	cleanupDone := maintenance.Start(ctx,
-		maintenance.NewHostCleanup(st, cfg.Server.HostCleanup, collMgr.Targets, logger))
+		maintenance.NewHostCleanup(st, conf.Server.HostCleanup, collMgr.Targets, logger))
 
-	if queue != nil {
-		// The queue runs on its own context, not the signal context: a
-		// SIGTERM must not hard-cancel in-flight runs; Stop drains them.
-		queueCtx, cancelQueue := context.WithCancel(context.Background())
-		defer cancelQueue()
-		if err := queue.Start(queueCtx); err != nil {
-			queue.Close()
-			_ = mgr.Stop()
-			return fmt.Errorf("failed to start job queue: %w", err)
-		}
+	// The queue runs on its own context, not the signal context: a SIGTERM
+	// must not hard-cancel in-flight runs; Stop drains them.
+	queueCtx, cancelQueue := context.WithCancel(context.Background())
+	defer cancelQueue()
+	if err := queue.Start(queueCtx); err != nil {
+		queue.Close()
+		_ = mgr.Stop()
+		return fmt.Errorf("failed to start job queue: %w", err)
 	}
 
 	logger.Info("starting strangle",
-		zap.String("addr", cfg.Server.ListenAddr),
-		zap.Duration("default_interval", cfg.Server.Interval),
+		zap.String("addr", conf.Server.ListenAddr),
+		zap.String("default_schedule", conf.Server.Schedule),
 		zap.Int("scheduled_jobs", len(jobProvider())),
-		zap.Int("workers", cfg.Server.Workers),
-		zap.String("queue", queueMode(queue)),
+		zap.Int("workers", conf.Server.Workers),
+		zap.String("queue", "river"),
 		zap.Strings("targets", apr.TargetNames()),
 	)
 	if err := srv.ListenAndServe(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -282,62 +262,6 @@ func run(cmd *cobra.Command, args []string) error {
 	shutdown(stop, done, retentionDone, cleanupDone, mgr, st, queue, logger)
 	logger.Info("strangle stopped")
 	return nil
-}
-
-// directEnqueuer runs a playbook in a background goroutine. It is used when
-// no database is configured and there is no job queue to back manual runs.
-// It still supports cancellation by tracking each run's context.
-type directEnqueuer struct {
-	apr     *applier.Ansible
-	logger  *zap.Logger
-	mu      sync.Mutex
-	nextID  uint64
-	cancels map[string]context.CancelFunc
-}
-
-func (d *directEnqueuer) EnqueueRun(_ context.Context, target, playbook string, runID uint64, check bool) (string, error) {
-	d.mu.Lock()
-	d.nextID++
-	id := strconv.FormatUint(d.nextID, 10)
-	ctx, cancel := context.WithTimeout(applier.WithCheck(applier.WithRunID(context.Background(), runID), check), 30*time.Minute)
-	d.cancels[id] = cancel
-	d.mu.Unlock()
-
-	go func() {
-		defer func() {
-			cancel()
-			d.mu.Lock()
-			delete(d.cancels, id)
-			d.mu.Unlock()
-		}()
-		if err := d.apr.Trigger(ctx, target, playbook); err != nil && !errors.Is(err, context.Canceled) {
-			d.logger.Error("run failed",
-				zap.String("target", target),
-				zap.String("playbook", playbook),
-				zap.Error(err),
-			)
-		}
-	}()
-	return id, nil
-}
-
-// CancelRun cancels the context of a direct run.
-func (d *directEnqueuer) CancelRun(_ context.Context, jobID string) error {
-	d.mu.Lock()
-	cancel, ok := d.cancels[jobID]
-	d.mu.Unlock()
-	if !ok {
-		return errors.New("run is no longer active")
-	}
-	cancel()
-	return nil
-}
-
-func queueMode(queue *riverqueue.Client) string {
-	if queue != nil {
-		return "river"
-	}
-	return "direct"
 }
 
 // runWorker serves the worker JSON-RPC API inside a worker child process.
@@ -359,13 +283,13 @@ func runWorker(cmd *cobra.Command, args []string) error {
 		sandbox.SetEnv(manifest.Env)
 	}
 
-	cfg, err := config.Load(serverConfigPath, collectionConfigPath)
+	conf, err := cfg.Load(serverConfigPath, collectionConfigPath)
 	if err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 	if manifest.Collection != "" {
-		owned := make([]config.TargetConfig, 0, 1)
-		for _, t := range cfg.Targets {
+		owned := make([]cfg.TargetConfig, 0, 1)
+		for _, t := range conf.Targets {
 			if t.Name == manifest.Collection {
 				owned = append(owned, t)
 			}
@@ -373,10 +297,10 @@ func runWorker(cmd *cobra.Command, args []string) error {
 		if len(owned) != 1 {
 			return fmt.Errorf("sandbox manifest names unknown collection %q", manifest.Collection)
 		}
-		cfg.Targets = owned
+		conf.Targets = owned
 	}
 
-	logger, err := newLogger(cfg.Server.LogLevel)
+	logger, err := newLogger(conf.Server.LogLevel)
 	if err != nil {
 		return err
 	}
@@ -394,7 +318,7 @@ func runWorker(cmd *cobra.Command, args []string) error {
 	// The worker shares the master's checkouts: resolve the playbooks of
 	// git-backed targets from disk so its SSH managers match what the
 	// master will dispatch. Reload does not touch git.
-	collMgr := collection.New(cfg.Targets, logger)
+	collMgr := collection.New(conf.Targets, logger)
 	if err := collMgr.Reload(); err != nil {
 		logger.Error("failed to fully resolve collection for worker", zap.Error(err))
 	}
@@ -405,7 +329,7 @@ func runWorker(cmd *cobra.Command, args []string) error {
 	}
 	defer multi.Close()
 
-	runner, err := ansible.NewRunner(multi)
+	runner, err := applier.NewRunner(multi)
 	if err != nil {
 		return fmt.Errorf("failed to initialize embedded Python: %w", err)
 	}
@@ -435,10 +359,10 @@ func newLogger(level string) (*zap.Logger, error) {
 	default:
 		return nil, fmt.Errorf("unknown log level %q", level)
 	}
-	cfg := zap.NewProductionConfig()
-	cfg.Level = zap.NewAtomicLevelAt(lvl)
-	cfg.EncoderConfig.TimeKey = "ts"
-	return cfg.Build()
+	conf := zap.NewProductionConfig()
+	conf.Level = zap.NewAtomicLevelAt(lvl)
+	conf.EncoderConfig.TimeKey = "ts"
+	return conf.Build()
 }
 
 // shutdown stops the scheduler, drains the job queue (waiting for in-flight
@@ -450,14 +374,12 @@ func shutdown(stop context.CancelFunc, done, retentionDone, cleanupDone <-chan s
 	<-done
 	<-retentionDone
 	<-cleanupDone
-	if queue != nil {
-		qctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-		if err := queue.Stop(qctx); err != nil {
-			logger.Warn("job queue did not drain in time", zap.Error(err))
-		}
-		cancel()
-		queue.Close()
+	qctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	if err := queue.Stop(qctx); err != nil {
+		logger.Warn("job queue did not drain in time", zap.Error(err))
 	}
+	cancel()
+	queue.Close()
 	if err := mgr.Stop(); err != nil {
 		logger.Warn("failed to stop workers", zap.Error(err))
 	}

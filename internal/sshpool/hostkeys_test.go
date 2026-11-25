@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/cfg"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -34,13 +34,13 @@ func testAddr(host string) net.Addr {
 
 func TestHostKeyStoreAPI(t *testing.T) {
 	dir := t.TempDir()
-	cfg := config.SSHConfig{
+	conf := cfg.SSHConfig{
 		HostKeyPolicy:  "api",
 		AutoAcceptFile: filepath.Join(dir, "accepted.json"),
 		PendingFile:    filepath.Join(dir, "pending.json"),
 	}
 
-	store, err := NewHostKeyStore(cfg)
+	store, err := NewHostKeyStore(conf)
 	if err != nil {
 		t.Fatalf("NewHostKeyStore: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestHostKeyStoreAPI(t *testing.T) {
 	}
 
 	// Persisted across restarts.
-	reloaded, err := NewHostKeyStore(cfg)
+	reloaded, err := NewHostKeyStore(conf)
 	if err != nil {
 		t.Fatalf("NewHostKeyStore (reload): %v", err)
 	}
@@ -86,13 +86,13 @@ func TestHostKeyStoreAPI(t *testing.T) {
 
 func TestHostKeyStoreAuto(t *testing.T) {
 	dir := t.TempDir()
-	cfg := config.SSHConfig{
+	conf := cfg.SSHConfig{
 		HostKeyPolicy:  "auto",
 		AutoAcceptFile: filepath.Join(dir, "accepted.json"),
 		PendingFile:    filepath.Join(dir, "pending.json"),
 	}
 
-	store, err := NewHostKeyStore(cfg)
+	store, err := NewHostKeyStore(conf)
 	if err != nil {
 		t.Fatalf("NewHostKeyStore: %v", err)
 	}
@@ -111,12 +111,12 @@ func TestHostKeyStoreAuto(t *testing.T) {
 
 func TestHostKeyStoreReject(t *testing.T) {
 	dir := t.TempDir()
-	cfg := config.SSHConfig{
+	conf := cfg.SSHConfig{
 		HostKeyPolicy:  "api",
 		AutoAcceptFile: filepath.Join(dir, "accepted.json"),
 		PendingFile:    filepath.Join(dir, "pending.json"),
 	}
-	store, err := NewHostKeyStore(cfg)
+	store, err := NewHostKeyStore(conf)
 	if err != nil {
 		t.Fatalf("NewHostKeyStore: %v", err)
 	}
@@ -131,22 +131,22 @@ func TestHostKeyStoreReject(t *testing.T) {
 }
 
 func TestHostKeyStorePolicies(t *testing.T) {
-	for _, policy := range []config.HostKeyPolicy{"api", "auto", "insecure"} {
-		cfg := config.SSHConfig{HostKeyPolicy: policy, AutoAcceptFile: filepath.Join(t.TempDir(), "keys.json")}
-		if _, err := NewHostKeyStore(cfg); err != nil {
+	for _, policy := range []cfg.HostKeyPolicy{"api", "auto", "insecure"} {
+		conf := cfg.SSHConfig{HostKeyPolicy: policy, AutoAcceptFile: filepath.Join(t.TempDir(), "keys.json")}
+		if _, err := NewHostKeyStore(conf); err != nil {
 			t.Errorf("policy %q: %v", policy, err)
 		}
 	}
 
 	// CA policy without any CA files is an error.
-	cfg := config.SSHConfig{HostKeyPolicy: "ca"}
-	if _, err := NewHostKeyStore(cfg); err == nil {
+	conf := cfg.SSHConfig{HostKeyPolicy: "ca"}
+	if _, err := NewHostKeyStore(conf); err == nil {
 		t.Error("ca policy without ca_files succeeded, want error")
 	}
 
 	// Unknown policy is an error.
-	cfg.HostKeyPolicy = "bogus"
-	if _, err := NewHostKeyStore(cfg); err == nil {
+	conf.HostKeyPolicy = "bogus"
+	if _, err := NewHostKeyStore(conf); err == nil {
 		t.Error("unknown policy succeeded, want error")
 	}
 }

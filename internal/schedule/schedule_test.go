@@ -11,23 +11,20 @@ func mustParse(t *testing.T, spec string) Schedule {
 	if err != nil {
 		t.Fatalf("Parse(%q): %v", spec, err)
 	}
+	if s.IsZero() {
+		t.Fatalf("Parse(%q) returned the zero schedule", spec)
+	}
 	return s
 }
 
-func TestDurationSchedules(t *testing.T) {
+func TestEverySchedule(t *testing.T) {
 	from := time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC)
-	for _, spec := range []string{"15m", "@every 30s"} {
-		s := mustParse(t, spec)
-		if !s.Enabled() {
-			t.Errorf("%q: Enabled() = false", spec)
-		}
-		want := from.Add(15 * time.Minute)
-		if spec == "@every 30s" {
-			want = from.Add(30 * time.Second)
-		}
-		if got := s.Next(from); !got.Equal(want) {
-			t.Errorf("%q: Next() = %v, want %v", spec, got, want)
-		}
+	s := mustParse(t, "@every 30s")
+	if got, want := s.Next(from), from.Add(30*time.Second); !got.Equal(want) {
+		t.Errorf("Next() = %v, want %v", got, want)
+	}
+	if got := s.String(); got != "@every 30s" {
+		t.Errorf("String() = %q, want the original spec", got)
 	}
 }
 
@@ -53,18 +50,17 @@ func TestCronSchedules(t *testing.T) {
 			want: time.Date(2026, 11, 26, 0, 0, 0, 0, time.UTC),
 		},
 		{
-			spec: "0 3 * * MON",                                 // weekday names are case-insensitive
+			spec: "0 3 * * MON",
 			from: time.Date(2026, 11, 25, 3, 1, 0, 0, time.UTC), // Wednesday
 			want: time.Date(2026, 11, 30, 3, 0, 0, 0, time.UTC), // next Monday
 		},
 		{
-			spec: "0 0 1 JAN *", // month names and day-of-month
+			spec: "0 0 1 JAN *",
 			from: time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC),
 			want: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
 		{
-			// With both fields restricted, Vixie cron uses OR: Friday the
-			// 13th is nearer than the next 13th of a month.
+			// robfig/cron keeps Vixie OR semantics when both day fields are restricted.
 			spec: "0 0 13 * 5",
 			from: time.Date(2026, 11, 25, 0, 0, 0, 0, time.UTC),
 			want: time.Date(2026, 11, 27, 0, 0, 0, 0, time.UTC),
@@ -83,9 +79,6 @@ func TestCronSchedules(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.spec, func(t *testing.T) {
 			s := mustParse(t, tc.spec)
-			if !s.Enabled() {
-				t.Fatal("Enabled() = false, want true")
-			}
 			if got := s.Next(tc.from); !got.Equal(tc.want) {
 				t.Errorf("Next(%v) = %v, want %v", tc.from, got, tc.want)
 			}
@@ -93,20 +86,13 @@ func TestCronSchedules(t *testing.T) {
 	}
 }
 
-func TestDisabledSchedule(t *testing.T) {
-	for _, spec := range []string{"off", "@off", "disabled"} {
-		s := mustParse(t, spec)
-		if s.Enabled() || !s.Next(time.Now()).IsZero() {
-			t.Errorf("%q: want a disabled schedule", spec)
-		}
-	}
-}
-
 func TestParseErrors(t *testing.T) {
+	// Bare durations, disabled aliases, and local extensions are not part of
+	// robfig/cron's standard format and must be rejected.
 	for _, spec := range []string{
 		"", "bogus", "0 0", "60 * * * *", "* 24 * * *", "* * 0 * *",
-		"* * * 13 *", "* * * * 8", "*/0 * * * *", "@every 0s", "@every nope",
-		"0 0 30 2 *", // no upcoming occurrence
+		"* * * 13 *", "* * * * 7", "*/0 * * * *", "@every nope",
+		"15m", "@off", "disabled", "0 0 30 2 *",
 	} {
 		if _, err := Parse(spec); err == nil {
 			t.Errorf("Parse(%q) = nil error, want an error", spec)

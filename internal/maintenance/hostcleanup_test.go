@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/cfg"
 	"github.com/kakwa/strangle/internal/store"
 	"go.uber.org/zap"
 )
@@ -27,12 +27,12 @@ func (s *stubStore) PruneHosts(_ context.Context, target string, delay time.Dura
 
 func TestHostCleanupPolicies(t *testing.T) {
 	st := &stubStore{}
-	targets := []config.TargetConfig{
+	targets := []cfg.TargetConfig{
 		{Name: "home"},
-		{Name: "edge", HostCleanup: config.HostCleanupConfig{Delay: 6 * time.Hour}},
+		{Name: "edge", HostCleanup: cfg.HostCleanupConfig{Delay: 6 * time.Hour}},
 	}
-	m := NewHostCleanup(st, config.HostCleanupConfig{Delay: 24 * time.Hour, Interval: time.Minute},
-		func() []config.TargetConfig { return targets }, zap.NewNop())
+	m := NewHostCleanup(st, cfg.HostCleanupConfig{Delay: 24 * time.Hour, Interval: time.Minute},
+		func() []cfg.TargetConfig { return targets }, zap.NewNop())
 	if m == nil {
 		t.Fatal("NewHostCleanup() = nil, want an enabled task")
 	}
@@ -51,8 +51,8 @@ func TestHostCleanupPolicies(t *testing.T) {
 
 func TestHostCleanupDisabled(t *testing.T) {
 	st := &stubStore{}
-	targets := []config.TargetConfig{{Name: "home"}}
-	if m := NewHostCleanup(st, config.HostCleanupConfig{}, func() []config.TargetConfig { return targets }, zap.NewNop()); m != nil {
+	targets := []cfg.TargetConfig{{Name: "home"}}
+	if m := NewHostCleanup(st, cfg.HostCleanupConfig{}, func() []cfg.TargetConfig { return targets }, zap.NewNop()); m != nil {
 		t.Fatal("NewHostCleanup() enabled cleanup with no delay")
 	}
 	var m *Task

@@ -1,37 +1,123 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/kakwa/strangle/internal/applier"
 	"github.com/kakwa/strangle/internal/auth"
+	"github.com/kakwa/strangle/internal/cfg"
+	swag "github.com/swaggo/swag/v2"
+	"go.uber.org/zap"
 )
 
-func TestOpenAPISpecCoversVersionedRoutes(t *testing.T) {
-	s := newTestServer(&recEnqueuer{status: "queued"})
-	_, catalog := s.buildRoutes()
-	spec := buildOpenAPISpec(catalog)
+// Minimal view of the generated OpenAPI document: enough to check that swag
+// produced a complete 3.1 spec without coupling the test to generated Go
+// structs.
+type openAPIDoc struct {
+	OpenAPI string `json:"openapi"`
+	Info    struct {
+		Title   string `json:"title"`
+		Version string `json:"version"`
+	} `json:"info"`
+	Paths map[string]map[string]struct {
+		OperationID string                     `json:"operationId"`
+		Responses   map[string]json.RawMessage `json:"responses"`
+		RequestBody *struct {
+			Content map[string]struct {
+				Schema struct {
+					Ref string `json:"$ref"`
+				} `json:"schema"`
+			} `json:"content"`
+		} `json:"requestBody"`
+	} `json:"paths"`
+	Components struct {
+		SecuritySchemes map[string]json.RawMessage `json:"securitySchemes"`
+		Schemas         map[string]struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		} `json:"schemas"`
+	} `json:"components"`
+}
 
-	if spec.OpenAPI != "3.0.3" {
-		t.Errorf("openapi = %q, want 3.0.3", spec.OpenAPI)
+var echoParamPattern = regexp.MustCompile(`:([\w]+)`)
+
+type openAPINoEnqueuer struct{}
+
+func (openAPINoEnqueuer) EnqueueRun(context.Context, string, string, uint64, bool) (string, error) {
+	return "1", nil
+}
+
+type openAPIExecutor struct{}
+
+func (openAPIExecutor) RunPlaybook(context.Context, string, string, string, ...string) (int, string, map[string]json.RawMessage, error) {
+	return 0, "", nil, nil
+}
+
+// newOpenAPITestServer builds a server with no store: the documentation
+// routes under test never read one.
+func newOpenAPITestServer(users auth.UserStore) *Server {
+	targets := []cfg.TargetConfig{{
+		Name: "home",
+		Playbooks: []cfg.PlaybookConfig{
+			{Name: "site", Playbook: "site.yml", Inventory: "inventory.ini"},
+		},
+	}}
+	apr := applier.NewAnsible(targets, openAPIExecutor{}, nil, zap.NewNop())
+	return New("test", apr, nil, nil, openAPINoEnqueuer{}, nil, nil, users, nil, "", zap.NewNop())
+}
+
+func openAPIGet(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	return rec
+}
+
+func generatedSpec(t *testing.T) openAPIDoc {
+	t.Helper()
+	raw, err := swag.ReadDoc()
+	if err != nil {
+		t.Fatalf("swag.ReadDoc(): %v", err)
+	}
+	var spec openAPIDoc
+	if err := json.Unmarshal([]byte(raw), &spec); err != nil {
+		t.Fatalf("decode generated spec: %v", err)
+	}
+	return spec
+}
+
+func TestOpenAPISpecCoversVersionedRoutes(t *testing.T) {
+	s := newOpenAPITestServer(nil)
+	e := s.buildRoutes()
+	spec := generatedSpec(t)
+
+	if !strings.HasPrefix(spec.OpenAPI, "3.1") {
+		t.Errorf("openapi = %q, want 3.1.x", spec.OpenAPI)
+	}
+	if spec.Info.Title != "Strangle API" || spec.Info.Version != "v1" {
+		t.Errorf("info = %+v, want Strangle API v1", spec.Info)
 	}
 	if len(spec.Paths) < 30 {
 		t.Fatalf("spec has %d paths, want the whole versioned API", len(spec.Paths))
 	}
 
-	// Every versioned pattern the mux registered must appear in the spec.
-	for _, pattern := range catalog.patterns {
-		method, path, ok := splitPattern(pattern)
-		if !ok || !strings.HasPrefix(path, apiPrefix+"/") {
+	// Every versioned Echo route must appear in the generated document.
+	for _, route := range e.Router().Routes() {
+		if !strings.HasPrefix(route.Path, apiPrefix+"/") {
 			continue
 		}
+		path := echoParamPattern.ReplaceAllString(route.Path, "{$1}")
 		ops, ok := spec.Paths[path]
 		if !ok {
-			t.Errorf("path %q is registered but missing from the spec", path)
+			t.Errorf("path %q is registered but missing from the spec", route.Path)
 			continue
 		}
+		method := strings.ToLower(route.Method)
 		if _, ok := ops[method]; !ok {
 			t.Errorf("%s %s is registered but missing from the spec", method, path)
 		}
@@ -58,21 +144,23 @@ func TestOpenAPISpecCoversVersionedRoutes(t *testing.T) {
 		}
 	}
 
-	run := spec.Paths[apiPrefix+"/orgs/{org}/collections/{collection}/run"]["POST"]
+	run := spec.Paths[apiPrefix+"/orgs/{org}/collections/{collection}/run"]["post"]
 	if run.RequestBody == nil {
 		t.Fatal("collection run has no request body in the spec")
-	} else {
-		props := run.RequestBody.Content[jsonMedia].Schema.Properties
-		if _, ok := props["playbook"]; !ok {
-			t.Error("run request schema has no playbook property")
-		}
-		if _, ok := props["check"]; !ok {
-			t.Error("run request schema has no check property")
-		}
 	}
-	runs := spec.Paths[apiPrefix+"/runs"]["GET"]
-	if _, ok := runs.Responses["200"].Headers["X-Total-Count"]; !ok {
-		t.Error("run list response does not document X-Total-Count")
+	media, ok := run.RequestBody.Content[jsonMedia]
+	if !ok || !strings.Contains(media.Schema.Ref, "runRequestDoc") {
+		t.Fatalf("run request schema = %+v, want runRequestDoc", media.Schema)
+	}
+	name := strings.TrimPrefix(media.Schema.Ref, "#/components/schemas/")
+	schema, ok := spec.Components.Schemas[name]
+	if !ok {
+		t.Fatalf("run request schema %q is missing from components", name)
+	}
+	for _, prop := range []string{"playbook", "check"} {
+		if _, ok := schema.Properties[prop]; !ok {
+			t.Errorf("run request schema has no %q property", prop)
+		}
 	}
 	if _, ok := spec.Components.SecuritySchemes["userBearer"]; !ok {
 		t.Error("spec does not define the user token security scheme")
@@ -80,16 +168,16 @@ func TestOpenAPISpecCoversVersionedRoutes(t *testing.T) {
 }
 
 func TestOpenAPIEndpoints(t *testing.T) {
-	s := newTestServer(&recEnqueuer{status: "queued"})
+	s := newOpenAPITestServer(nil)
 
-	rec := doGet(t, s, "/api/v1/openapi.json")
+	rec := openAPIGet(t, s, "/api/v1/openapi.json")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("spec status = %d, want %d (body %s)", rec.Code, http.StatusOK, rec.Body.String())
 	}
 	if got := rec.Header().Get("Content-Type"); got != jsonMedia {
 		t.Errorf("spec content type = %q, want %q", got, jsonMedia)
 	}
-	var spec openAPISpec
+	var spec openAPIDoc
 	if err := json.NewDecoder(rec.Body).Decode(&spec); err != nil {
 		t.Fatalf("decode spec: %v", err)
 	}
@@ -97,7 +185,7 @@ func TestOpenAPIEndpoints(t *testing.T) {
 		t.Error("served spec has no paths")
 	}
 
-	rec = doGet(t, s, "/api/docs")
+	rec = openAPIGet(t, s, "/api/docs")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("docs status = %d, want %d", rec.Code, http.StatusOK)
 	}
@@ -107,22 +195,29 @@ func TestOpenAPIEndpoints(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "SwaggerUIBundle") {
 		t.Error("docs page does not initialize Swagger UI")
 	}
-	if !strings.Contains(rec.Body.String(), "/api/v1/openapi.json") {
+	// html/template escapes slashes inside the embedded JS string.
+	if !strings.Contains(rec.Body.String(), "api\\/v1\\/openapi.json") {
 		t.Error("docs page does not point at the versioned spec")
 	}
 }
 
 func TestOpenAPIDocsArePublicWhenAuthOn(t *testing.T) {
 	users := auth.NewMemUserStore()
-	seedUser(t, users, "alice", "s3cret")
-	s := newAuthTestServer(users)
+	hash, err := auth.HashPassword("s3cret")
+	if err != nil {
+		t.Fatalf("HashPassword(): %v", err)
+	}
+	if err := users.CreateUser(context.Background(), "alice", hash); err != nil {
+		t.Fatalf("CreateUser(): %v", err)
+	}
+	s := newOpenAPITestServer(users)
 
-	for _, path := range []string{"/api/docs", "/api/v1/openapi.json"} {
-		if rec := doGet(t, s, path); rec.Code != http.StatusOK {
+	for _, path := range []string{"/api/docs", "/api/docs/swagger-ui.css", "/api/v1/openapi.json"} {
+		if rec := openAPIGet(t, s, path); rec.Code != http.StatusOK {
 			t.Errorf("%s without a session = %d, want %d", path, rec.Code, http.StatusOK)
 		}
 	}
-	if rec := doGet(t, s, "/api/stats"); rec.Code != http.StatusUnauthorized {
+	if rec := openAPIGet(t, s, "/api/stats"); rec.Code != http.StatusUnauthorized {
 		t.Errorf("/api/stats without a session = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }

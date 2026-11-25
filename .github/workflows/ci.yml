@@ -9,9 +9,22 @@ jobs:
   go:
     name: Go
     runs-on: ubuntu-26.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
+      STRANGLE_TEST_DSN: postgres://postgres@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v4
 

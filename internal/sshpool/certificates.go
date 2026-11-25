@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/cfg"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -40,25 +40,25 @@ func (p *staticSignerProvider) Signers(Endpoint) ([]ssh.Signer, time.Time, error
 
 func (p *staticSignerProvider) Close() error { return nil }
 
-func newSignerProvider(cfg config.SSHConfig, static []ssh.Signer) (SignerProvider, error) {
-	if cfg.Certificate == nil {
+func newSignerProvider(conf cfg.SSHConfig, static []ssh.Signer) (SignerProvider, error) {
+	if conf.Certificate == nil {
 		return &staticSignerProvider{signers: static}, nil
 	}
 
 	// Certificate providers sign the public half of this key. The private key
 	// stays local; only the public key is sent to Vault.
-	subject, err := loadPrivateKey(cfg.PrivateKeyFile, cfg.PrivateKeyPassphrase)
+	subject, err := loadPrivateKey(conf.PrivateKeyFile, conf.PrivateKeyPassphrase)
 	if err != nil {
 		return nil, err
 	}
 
-	switch cfg.Certificate.Backend {
-	case config.CertificateInternal:
-		return newInternalCAProvider(cfg, subject)
-	case config.CertificateVault:
-		return newVaultProvider(cfg, subject)
+	switch conf.Certificate.Backend {
+	case cfg.CertificateInternal:
+		return newInternalCAProvider(conf, subject)
+	case cfg.CertificateVault:
+		return newVaultProvider(conf, subject)
 	default:
-		return nil, fmt.Errorf("unsupported certificate backend %q", cfg.Certificate.Backend)
+		return nil, fmt.Errorf("unsupported certificate backend %q", conf.Certificate.Backend)
 	}
 }
 
@@ -112,8 +112,8 @@ type internalCAProvider struct {
 	refreshAt time.Time
 }
 
-func newInternalCAProvider(cfg config.SSHConfig, subject ssh.Signer) (SignerProvider, error) {
-	path := cfg.Certificate.Internal.CAKeyFile
+func newInternalCAProvider(conf cfg.SSHConfig, subject ssh.Signer) (SignerProvider, error) {
+	path := conf.Certificate.Internal.CAKeyFile
 	if path == "" {
 		return nil, fmt.Errorf("internal certificate backend requires ca_key_file")
 	}
@@ -128,9 +128,9 @@ func newInternalCAProvider(cfg config.SSHConfig, subject ssh.Signer) (SignerProv
 	return &internalCAProvider{
 		subject:     subject,
 		authority:   authority,
-		principals:  append([]string(nil), cfg.Certificate.Principals...),
-		keyIDPrefix: cfg.Certificate.KeyIDPrefix,
-		ttl:         cfg.Certificate.TTL,
+		principals:  append([]string(nil), conf.Certificate.Principals...),
+		keyIDPrefix: conf.Certificate.KeyIDPrefix,
+		ttl:         conf.Certificate.TTL,
 	}, nil
 }
 
@@ -170,7 +170,7 @@ func (p *internalCAProvider) Close() error { return nil }
 // to sign the subject's public key. Only public keys and the requested
 // principals/TTL cross the network.
 type vaultProvider struct {
-	cfg         config.VaultCertificateConfig
+	conf        cfg.VaultCertificateConfig
 	httpClient  *http.Client
 	subject     ssh.Signer
 	principals  []string
@@ -197,8 +197,8 @@ type vaultSignResponse struct {
 	} `json:"data"`
 }
 
-func newVaultProvider(cfg config.SSHConfig, subject ssh.Signer) (SignerProvider, error) {
-	v := cfg.Certificate.Vault
+func newVaultProvider(conf cfg.SSHConfig, subject ssh.Signer) (SignerProvider, error) {
+	v := conf.Certificate.Vault
 	if v.Mount == "" {
 		v.Mount = "ssh"
 	}
@@ -232,12 +232,12 @@ func newVaultProvider(cfg config.SSHConfig, subject ssh.Signer) (SignerProvider,
 	resolved.RoleID = roleID
 	resolved.SecretID = secretID
 	return &vaultProvider{
-		cfg:         resolved,
+		conf:        resolved,
 		httpClient:  &http.Client{Timeout: 15 * time.Second, Transport: &http.Transport{TLSClientConfig: tlsConfig}},
 		subject:     subject,
-		principals:  append([]string(nil), cfg.Certificate.Principals...),
-		keyIDPrefix: cfg.Certificate.KeyIDPrefix,
-		ttl:         cfg.Certificate.TTL,
+		principals:  append([]string(nil), conf.Certificate.Principals...),
+		keyIDPrefix: conf.Certificate.KeyIDPrefix,
+		ttl:         conf.Certificate.TTL,
 	}, nil
 }
 
@@ -261,13 +261,13 @@ func (p *vaultProvider) request(ctx context.Context, method, path string, body, 
 		return err
 	}
 	req, err := http.NewRequestWithContext(ctx, method,
-		strings.TrimRight(p.cfg.Addr, "/")+"/v1/"+path, bytes.NewReader(encoded))
+		strings.TrimRight(p.conf.Addr, "/")+"/v1/"+path, bytes.NewReader(encoded))
 	if err != nil {
 		return fmt.Errorf("build Vault request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if p.cfg.Namespace != "" {
-		req.Header.Set("X-Vault-Namespace", p.cfg.Namespace)
+	if p.conf.Namespace != "" {
+		req.Header.Set("X-Vault-Namespace", p.conf.Namespace)
 	}
 	if withToken {
 		req.Header.Set("X-Vault-Token", p.token)
@@ -297,11 +297,11 @@ func (p *vaultProvider) ensureToken(ctx context.Context) error {
 	if p.token != "" && time.Now().Add(10*time.Second).Before(p.tokenUntil) {
 		return nil
 	}
-	path := "auth/" + url.PathEscape(p.cfg.AuthMount) + "/login"
+	path := "auth/" + url.PathEscape(p.conf.AuthMount) + "/login"
 	var login vaultLoginResponse
 	err := p.request(ctx, http.MethodPost, path, map[string]string{
-		"role_id":   p.cfg.RoleID,
-		"secret_id": p.cfg.SecretID,
+		"role_id":   p.conf.RoleID,
+		"secret_id": p.conf.SecretID,
 	}, &login, false)
 	if err != nil {
 		return err
@@ -335,7 +335,7 @@ func (p *vaultProvider) Signers(ep Endpoint) ([]ssh.Signer, time.Time, error) {
 		return nil, time.Time{}, err
 	}
 
-	path := url.PathEscape(p.cfg.Mount) + "/sign/" + url.PathEscape(p.cfg.Role)
+	path := url.PathEscape(p.conf.Mount) + "/sign/" + url.PathEscape(p.conf.Role)
 	var signed vaultSignResponse
 	err := p.request(ctx, http.MethodPost, path, map[string]string{
 		"public_key":       strings.TrimSpace(string(ssh.MarshalAuthorizedKey(p.subject.PublicKey()))),

@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync"
 	"testing"
-	"time"
 
 	"go.uber.org/zap"
 )
@@ -14,7 +13,7 @@ func TestDuplicateJobsAreIgnored(t *testing.T) {
 	defer cancel()
 	counter := newCallCounter()
 	job := Job{Target: "dup", Playbook: "pb", Schedule: "@every 1h"}
-	s := New(time.Hour, func() []Job { return []Job{job, job} }, counter.run, zap.NewNop())
+	s := New("", func() []Job { return []Job{job, job} }, counter.run, zap.NewNop())
 
 	s.reconcile(ctx)
 	s.mu.Lock()
@@ -30,7 +29,7 @@ func TestInvalidScheduleIsSkipped(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	counter := newCallCounter()
-	s := New(time.Hour, func() []Job {
+	s := New("", func() []Job {
 		return []Job{{Target: "bad", Playbook: "pb", Schedule: "not-a-schedule"}}
 	}, counter.run, zap.NewNop())
 
@@ -52,7 +51,7 @@ func TestScheduleChangeRestartsJob(t *testing.T) {
 	counter := newCallCounter()
 	var mu sync.Mutex
 	schedule := "@every 1h"
-	s := New(time.Hour, func() []Job {
+	s := New("", func() []Job {
 		mu.Lock()
 		defer mu.Unlock()
 		return []Job{{Target: "changing", Playbook: "pb", Schedule: schedule}}
@@ -77,14 +76,15 @@ func TestScheduleChangeRestartsJob(t *testing.T) {
 	if got := spec(); got != "@every 1h" {
 		t.Fatalf("initial schedule = %q, want @every 1h", got)
 	}
-	setSchedule("@every 20ms")
-	if got := spec(); got != "@every 20ms" {
-		t.Fatalf("schedule after change = %q, want @every 20ms", got)
+	setSchedule("@every 1s")
+	if got := spec(); got != "@every 1s" {
+		t.Fatalf("schedule after change = %q, want @every 1s", got)
 	}
 	waitFor(t, "the rescheduled job to run", func() bool { return counter.count("changing/pb") >= 1 })
 
-	setSchedule("@off")
+	// With no fallback either, an empty schedule is manual-only.
+	setSchedule("")
 	if got := spec(); got != "" {
-		t.Fatalf("schedule after disabling = %q, want no entry", got)
+		t.Fatalf("schedule after clearing = %q, want no entry", got)
 	}
 }

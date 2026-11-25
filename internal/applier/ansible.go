@@ -11,9 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kakwa/strangle/internal/config"
-	"github.com/kakwa/strangle/internal/notify"
-	"github.com/kakwa/strangle/internal/parser"
+	"github.com/kakwa/strangle/internal/cfg"
 	"github.com/kakwa/strangle/internal/store"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
@@ -56,27 +54,21 @@ func checkFrom(ctx context.Context) bool {
 // Ansible applies playbooks for every configured target by dispatching each
 // run to a worker process and records the results in a store.
 type Ansible struct {
-	mu       sync.RWMutex
-	targets  map[string]config.TargetConfig
-	exec     Executor
-	store    store.Store
-	notifier notify.FailureNotifier
-	logger   *zap.Logger
+	mu      sync.RWMutex
+	targets map[string]cfg.TargetConfig
+	exec    Executor
+	store   store.Store
+	logger  *zap.Logger
 }
 
 // NewAnsible returns an Applier for the given targets. Runs are executed by
-// the given executor (a pool of worker processes in production). An optional
-// failure notifier sends collection-configured notifications for failed runs;
-// callers that do not care about notifications can omit it.
-func NewAnsible(targets []config.TargetConfig, exec Executor, st store.Store, logger *zap.Logger, notifier ...notify.FailureNotifier) *Ansible {
+// the given executor (a pool of worker processes in production).
+func NewAnsible(targets []cfg.TargetConfig, exec Executor, st store.Store, logger *zap.Logger) *Ansible {
 	a := &Ansible{
-		targets: map[string]config.TargetConfig{},
+		targets: map[string]cfg.TargetConfig{},
 		exec:    exec,
 		store:   st,
 		logger:  logger,
-	}
-	if len(notifier) > 0 {
-		a.notifier = notifier[0]
 	}
 	for _, t := range targets {
 		a.targets[t.Name] = t
@@ -86,7 +78,7 @@ func NewAnsible(targets []config.TargetConfig, exec Executor, st store.Store, lo
 
 // UpdateTargets updates the configured targets, e.g. after a git sync has
 // reloaded a target's strangle.yml.
-func (a *Ansible) UpdateTargets(targets []config.TargetConfig) {
+func (a *Ansible) UpdateTargets(targets []cfg.TargetConfig) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, t := range targets {
@@ -109,7 +101,7 @@ func (a *Ansible) TargetNames() []string {
 // Target returns the resolved configuration of one target, including its
 // organization. The API uses it to expose collections as first-class
 // entities under /api/v1/orgs/{org}/collections/{collection}.
-func (a *Ansible) Target(name string) (config.TargetConfig, bool) {
+func (a *Ansible) Target(name string) (cfg.TargetConfig, bool) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	t, ok := a.targets[name]
@@ -132,7 +124,7 @@ func (a *Ansible) Playbooks(target string) []string {
 }
 
 // PlaybookConfigs returns the configured jobs of one target, in order.
-func (a *Ansible) PlaybookConfigs(target string) []config.PlaybookConfig {
+func (a *Ansible) PlaybookConfigs(target string) []cfg.PlaybookConfig {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	t, ok := a.targets[target]
@@ -159,7 +151,7 @@ func (a *Ansible) KnownPlaybook(target, name string) bool {
 // still run.
 func (a *Ansible) RunCycle(ctx context.Context) error {
 	a.mu.RLock()
-	targets := make([]config.TargetConfig, 0, len(a.targets))
+	targets := make([]cfg.TargetConfig, 0, len(a.targets))
 	for _, t := range a.targets {
 		targets = append(targets, t)
 	}
@@ -202,7 +194,7 @@ func (a *Ansible) Trigger(ctx context.Context, target, name string) error {
 // and records the results. The target is a snapshot, safe to run without
 // holding a.mu. It returns the first error encountered; playbooks after a
 // failure still run.
-func (a *Ansible) runTarget(ctx context.Context, t config.TargetConfig, firstErr *error, only ...config.PlaybookConfig) error {
+func (a *Ansible) runTarget(ctx context.Context, t cfg.TargetConfig, firstErr *error, only ...cfg.PlaybookConfig) error {
 	playbooks := t.Playbooks
 	if len(only) > 0 {
 		playbooks = only
@@ -244,7 +236,7 @@ func (a *Ansible) runTarget(ctx context.Context, t config.TargetConfig, firstErr
 
 // runPlaybook dispatches one playbook to the worker pool, parses the output
 // and persists the results.
-func (a *Ansible) runPlaybook(ctx context.Context, target config.TargetConfig, pb config.PlaybookConfig, sshScope string, scope []string, invHosts []store.InventoryHost) error {
+func (a *Ansible) runPlaybook(ctx context.Context, target cfg.TargetConfig, pb cfg.PlaybookConfig, sshScope string, scope []string, invHosts []store.InventoryHost) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -273,7 +265,7 @@ func (a *Ansible) runPlaybook(ctx context.Context, target config.TargetConfig, p
 		output += fmt.Sprintf("[strangle] runner error: %v", runErr)
 	}
 
-	summaries, tasks := parser.Parse(output)
+	summaries, tasks := Parse(output)
 
 	state := store.RunStateCompleted
 	canceled := false
@@ -305,7 +297,7 @@ func (a *Ansible) runPlaybook(ctx context.Context, target config.TargetConfig, p
 		hostRuns = append(hostRuns, store.HostRunRecord{
 			Target:      pb.TargetName,
 			Host:        s.Host,
-			Status:      parser.Status(s.Ok, s.Changed, s.Failed, s.Unreachable),
+			Status:      store.HostStatus(s.Ok, s.Changed, s.Failed, s.Unreachable),
 			Ok:          s.Ok,
 			Changed:     s.Changed,
 			Failed:      s.Failed,
@@ -351,18 +343,6 @@ func (a *Ansible) runPlaybook(ctx context.Context, target config.TargetConfig, p
 		zap.Int64("duration_ms", run.DurationMS),
 	)
 
-	if !run.Success && a.notifier != nil {
-		// A broken notification endpoint must not change the recorded run
-		// result, so errors are logged here and not returned.
-		if err := a.notifier.NotifyFailure(ctx, target, run); err != nil {
-			a.logger.Error("failure notification failed",
-				zap.String("target", target.Name),
-				zap.String("playbook", pb.Name),
-				zap.Error(err),
-			)
-		}
-	}
-
 	if runErr != nil {
 		return runErr
 	}
@@ -375,7 +355,7 @@ func (a *Ansible) runPlaybook(ctx context.Context, target config.TargetConfig, p
 // loadInventory parses one playbook's inventory directory. It returns nil for
 // anything it cannot parse (e.g. an INI file), in which case host membership
 // is not tracked for that cycle.
-func (a *Ansible) loadInventory(pb config.PlaybookConfig) (*Inventory, []store.InventoryHost) {
+func (a *Ansible) loadInventory(pb cfg.PlaybookConfig) (*Inventory, []store.InventoryHost) {
 	dir := pb.InventoryPath()
 	st, err := os.Stat(dir)
 	if err != nil || !st.IsDir() {
@@ -453,10 +433,10 @@ func playHosts(path string) ([]string, error) {
 	return patterns, nil
 }
 
-func countStatus(summaries []parser.HostSummary, status string) int {
+func countStatus(summaries []HostSummary, status string) int {
 	n := 0
 	for _, s := range summaries {
-		if parser.Status(s.Ok, s.Changed, s.Failed, s.Unreachable) == status {
+		if store.HostStatus(s.Ok, s.Changed, s.Failed, s.Unreachable) == status {
 			n++
 		}
 	}

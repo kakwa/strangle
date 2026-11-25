@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/cfg"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
@@ -37,23 +37,23 @@ type keyDatabase struct {
 // HostKeyStore persists host key trust decisions and builds SSH callbacks.
 type HostKeyStore struct {
 	mu       sync.Mutex
-	policy   config.HostKeyPolicy
-	cfg      config.SSHConfig
+	policy   cfg.HostKeyPolicy
+	conf     cfg.SSHConfig
 	db       keyDatabase
 	caKeys   []ssh.PublicKey
 	callback ssh.HostKeyCallback
 }
 
 // NewHostKeyStore creates a store from configuration.
-func NewHostKeyStore(cfg config.SSHConfig) (*HostKeyStore, error) {
-	policy := cfg.HostKeyPolicy
+func NewHostKeyStore(conf cfg.SSHConfig) (*HostKeyStore, error) {
+	policy := conf.HostKeyPolicy
 	if policy == "" {
-		policy = config.PolicyAPI
+		policy = cfg.PolicyAPI
 	}
 
 	s := &HostKeyStore{
 		policy: policy,
-		cfg:    cfg,
+		conf:   conf,
 		db: keyDatabase{
 			Approved: map[string]HostKey{},
 			Pending:  map[string]HostKey{},
@@ -61,14 +61,14 @@ func NewHostKeyStore(cfg config.SSHConfig) (*HostKeyStore, error) {
 	}
 
 	switch policy {
-	case config.PolicyKnownHosts:
-		cb, err := knownhosts.New(cfg.KnownHostsFile)
+	case cfg.PolicyKnownHosts:
+		cb, err := knownhosts.New(conf.KnownHostsFile)
 		if err != nil {
-			return nil, fmt.Errorf("load known_hosts %q: %w", cfg.KnownHostsFile, err)
+			return nil, fmt.Errorf("load known_hosts %q: %w", conf.KnownHostsFile, err)
 		}
 		s.callback = cb
-	case config.PolicyCA:
-		for _, path := range cfg.CAFiles {
+	case cfg.PolicyCA:
+		for _, path := range conf.CAFiles {
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return nil, fmt.Errorf("read CA file %q: %w", path, err)
@@ -93,12 +93,12 @@ func NewHostKeyStore(cfg config.SSHConfig) (*HostKeyStore, error) {
 			},
 		}
 		s.callback = checker.CheckHostKey
-	case config.PolicyAPI, config.PolicyAuto:
+	case cfg.PolicyAPI, cfg.PolicyAuto:
 		if err := s.load(); err != nil {
 			return nil, err
 		}
 		s.callback = s.verify
-	case config.PolicyInsecure:
+	case cfg.PolicyInsecure:
 		s.callback = ssh.InsecureIgnoreHostKey()
 	default:
 		return nil, fmt.Errorf("unknown host_key_policy %q", policy)
@@ -132,7 +132,7 @@ func (s *HostKeyStore) verify(host string, _ net.Addr, key ssh.PublicKey) error 
 
 	// Reload from disk: the trust decision may have been made in another
 	// process (the master or a worker) since this store was constructed.
-	if s.policy == config.PolicyAPI || s.policy == config.PolicyAuto {
+	if s.policy == cfg.PolicyAPI || s.policy == cfg.PolicyAuto {
 		if err := s.load(); err != nil {
 			return err
 		}
@@ -140,7 +140,7 @@ func (s *HostKeyStore) verify(host string, _ net.Addr, key ssh.PublicKey) error 
 
 	known, ok := s.db.Approved[host]
 	if !ok {
-		if s.policy == config.PolicyAPI {
+		if s.policy == cfg.PolicyAPI {
 			record.Status = "pending"
 			s.db.Pending[host] = record
 			_ = s.save()
@@ -153,7 +153,7 @@ func (s *HostKeyStore) verify(host string, _ net.Addr, key ssh.PublicKey) error 
 
 	if known.Fingerprint != fingerprint {
 		err := fmt.Errorf("host key for %s changed: expected %s, got %s", host, known.Fingerprint, fingerprint)
-		if s.policy == config.PolicyAPI {
+		if s.policy == cfg.PolicyAPI {
 			record.Status = "rejected"
 			s.db.Pending[host] = record
 			_ = s.save()
@@ -169,7 +169,7 @@ func (s *HostKeyStore) verify(host string, _ net.Addr, key ssh.PublicKey) error 
 func (s *HostKeyStore) Pending() []HostKey {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.policy == config.PolicyAPI || s.policy == config.PolicyAuto {
+	if s.policy == cfg.PolicyAPI || s.policy == cfg.PolicyAuto {
 		_ = s.load()
 	}
 	result := make([]HostKey, 0, len(s.db.Pending))
@@ -184,7 +184,7 @@ func (s *HostKeyStore) Approve(host, fingerprint string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.policy == config.PolicyAPI || s.policy == config.PolicyAuto {
+	if s.policy == cfg.PolicyAPI || s.policy == cfg.PolicyAuto {
 		if err := s.load(); err != nil {
 			return err
 		}
@@ -209,7 +209,7 @@ func (s *HostKeyStore) Reject(host string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.policy == config.PolicyAPI || s.policy == config.PolicyAuto {
+	if s.policy == cfg.PolicyAPI || s.policy == cfg.PolicyAuto {
 		if err := s.load(); err != nil {
 			return err
 		}
@@ -223,11 +223,11 @@ func (s *HostKeyStore) Reject(host string) error {
 }
 
 func (s *HostKeyStore) load() error {
-	approved, err := loadKeys(s.cfg.AutoAcceptFile)
+	approved, err := loadKeys(s.conf.AutoAcceptFile)
 	if err != nil {
 		return err
 	}
-	pending, err := loadKeys(s.cfg.PendingFile)
+	pending, err := loadKeys(s.conf.PendingFile)
 	if err != nil {
 		return err
 	}
@@ -261,11 +261,11 @@ func loadKeys(path string) (map[string]HostKey, error) {
 }
 
 func (s *HostKeyStore) save() error {
-	if err := saveKeys(s.cfg.AutoAcceptFile, s.db.Approved); err != nil {
+	if err := saveKeys(s.conf.AutoAcceptFile, s.db.Approved); err != nil {
 		return err
 	}
-	if s.cfg.PendingFile != "" {
-		return saveKeys(s.cfg.PendingFile, s.db.Pending)
+	if s.conf.PendingFile != "" {
+		return saveKeys(s.conf.PendingFile, s.db.Pending)
 	}
 	return nil
 }

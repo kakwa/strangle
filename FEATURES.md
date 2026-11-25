@@ -7,8 +7,7 @@ commit that implements the feature, on `features/auto`.
 Tags: **[UI]** web UI · **[API]** HTTP API · **[AUTH]** authentication /
 authorization · **[SANDBOXING]** isolation · **[DB]** storage · **[CLI]**
 command line · **[SCHED]** scheduling · **[GIT]** git-backed collections ·
-**[SSH]** SSH transport / credentials · **[NOTIFY]** notifications ·
-**[TESTS]** tests · **[DOCS]** documentation · **[INFRA]** process model
+**[SSH]** SSH transport / credentials · **[TESTS]** tests · **[DOCS]** documentation · **[INFRA]** process model
 (workers, queue, TLS, metrics)
 
 ## TODO
@@ -35,8 +34,7 @@ command line · **[SCHED]** scheduling · **[GIT]** git-backed collections ·
 - [x] 20. [API] [UI] Run detail: `GET /api/v1/orgs/{org}/collections/{collection}/runs/{id}` and a run view with the full captured output; stop inlining the full output of the last 50 runs into the collection's runs listing on every poll
 - [x] 21. [API] Filter a collection's runs (`/api/v1/orgs/{org}/collections/{collection}/runs`) by playbook, host and time range (+ pagination)
 - [x] 22. [UI] [SSH] UI for pending SSH host keys (approve/reject) and SSH pool stats — collection-scoped versioned endpoints under `/api/v<>/orgs/{org}/collections/{collection}`
-- [x] 23. [SCHED] Per-target or per-playbook interval instead of the single global interval (ideally cron-like)
-- [x] 24. [NOTIFY] Notify on run failure (webhook, email, slack or similar), configured per collection
+- [x] 23. [SCHED] Per-target or per-playbook robfig/cron v3 schedules instead of the single global interval
 - [x] 25. [DB] Task history: keep the per-task results of every run
 - [x] 26. [DB] [UI] ansible_facts: collect, save and display them — a jsonb blob per host, refreshed by runs
 - [x] 27. [API] [UI] Cancel a running run (`POST /api/v1/orgs/{org}/collections/{collection}/runs/{id}/cancel` + UI button)
@@ -48,7 +46,7 @@ command line · **[SCHED]** scheduling · **[GIT]** git-backed collections ·
 - [x] 33. [TESTS] Go tests for the server (API over httptest), applier and scheduler packages
 - [x] 34. [UI] Host search box in the hosts view (name filter)
 - [x] 35. [SSH] [AUTH] Ephemeral SSH certificates (short-lived, internal CA or a vault PKI / approle integration, pluggable in the ssh options)
-- [x] 36. [API] [DOCS] Swagger / OpenAPI documentation of the API, generated against the versioned routes and served from the server (e.g. `/api/docs`)
+- [x] 36. [API] [DOCS] Swagger / OpenAPI 3.1 documentation of the API, generated from swaggo/swag v2 annotations on the versioned routes and served from the server (e.g. `/api/docs`)
 - [x] 37. [CLI] [API] CLI client: subcommands hitting the versioned API (`strangle-cli run <target> <playbook>`, `strangle-cli runs|hosts|host <name>`, `strangle-cli hostkeys list/accept/reject`) with the auth token from config
 
 ## Additional (beyond TODO)

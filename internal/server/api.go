@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/cfg"
 	"github.com/kakwa/strangle/internal/store"
 )
 
@@ -40,9 +40,8 @@ type collectionInfo struct {
 	Playbooks []playbookInfo `json:"playbooks,omitempty"`
 }
 
-// routeRegistrar is the small part of http.ServeMux used for registration.
-// routeCatalog implements it as well so the OpenAPI document can be generated
-// from the very patterns that are actually registered.
+// routeRegistrar is the small registration surface shared by the flat and
+// versioned API routes. Echo adapts it with echoRegistrar.
 type routeRegistrar interface {
 	HandleFunc(pattern string, handler http.HandlerFunc)
 }
@@ -50,19 +49,19 @@ type routeRegistrar interface {
 // apiHandler registers h both under a versioned path and under the legacy
 // flat alias (e.g. GET /api/v1/runs and GET /api/runs). Patterns registered
 // only under the versioned tree, such as the org/collection resources, use
-// mux.HandleFunc directly instead.
-func apiHandler(mux routeRegistrar, method, path string, h http.HandlerFunc) {
-	mux.HandleFunc(method+" "+path, h)
+// registrar directly instead.
+func apiHandler(routes routeRegistrar, method, path string, h http.HandlerFunc) {
+	routes.HandleFunc(method+" "+path, h)
 	if strings.HasPrefix(path, apiPrefix) {
 		alias := "/api" + strings.TrimPrefix(path, apiPrefix)
-		mux.HandleFunc(method+" "+alias, h)
+		routes.HandleFunc(method+" "+alias, h)
 	}
 }
 
 // orgOf returns the organization a configured collection belongs to.
-func orgOf(t config.TargetConfig) string {
+func orgOf(t cfg.TargetConfig) string {
 	if t.Org == "" {
-		return config.DefaultOrg
+		return cfg.DefaultOrg
 	}
 	return t.Org
 }
@@ -283,13 +282,13 @@ func (s *Server) visibleOrganizations(r *http.Request) []orgInfo {
 // collectionIn resolves a collection by org and name. Collections are
 // configured targets; an org is the group named in collection.yml (or
 // "default" when omitted).
-func (s *Server) collectionIn(org, name string) (config.TargetConfig, bool) {
+func (s *Server) collectionIn(org, name string) (cfg.TargetConfig, bool) {
 	if s.applier == nil {
-		return config.TargetConfig{}, false
+		return cfg.TargetConfig{}, false
 	}
 	t, ok := s.applier.Target(name)
 	if !ok || orgOf(t) != org {
-		return config.TargetConfig{}, false
+		return cfg.TargetConfig{}, false
 	}
 	return t, true
 }
@@ -311,7 +310,7 @@ func (s *Server) collectionScope(r *http.Request) (string, bool) {
 
 // requireCollection resolves the org/collection of a route that must have
 // both path parameters, answering 404 when either is unknown.
-func (s *Server) requireCollection(w http.ResponseWriter, r *http.Request) (config.TargetConfig, bool) {
+func (s *Server) requireCollection(w http.ResponseWriter, r *http.Request) (cfg.TargetConfig, bool) {
 	t, ok := s.collectionIn(r.PathValue("org"), r.PathValue("collection"))
 	if !ok {
 		writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
@@ -321,14 +320,14 @@ func (s *Server) requireCollection(w http.ResponseWriter, r *http.Request) (conf
 
 // registerOrgRoutes adds the first-class org and collection resources. These
 // exist only in the versioned API: there is no flat alias for an org.
-func (s *Server) registerOrgRoutes(mux routeRegistrar) {
+func (s *Server) registerOrgRoutes(routes routeRegistrar) {
 	// GET /api/v1/orgs lists every organization and its collections.
-	mux.HandleFunc("GET "+apiPrefix+"/orgs", func(w http.ResponseWriter, r *http.Request) {
+	routes.HandleFunc("GET "+apiPrefix+"/orgs", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, s.visibleOrganizations(r))
 	})
 
 	// GET /api/v1/orgs/{org} returns one organization.
-	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}", func(w http.ResponseWriter, r *http.Request) {
+	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}", func(w http.ResponseWriter, r *http.Request) {
 		org := r.PathValue("org")
 		for _, o := range s.visibleOrganizations(r) {
 			if o.Name == org {
@@ -340,7 +339,7 @@ func (s *Server) registerOrgRoutes(mux routeRegistrar) {
 	})
 
 	// GET /api/v1/orgs/{org}/collections lists the collections of an org.
-	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections", func(w http.ResponseWriter, r *http.Request) {
+	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections", func(w http.ResponseWriter, r *http.Request) {
 		org := r.PathValue("org")
 		for _, o := range s.visibleOrganizations(r) {
 			if o.Name == org {
@@ -353,7 +352,7 @@ func (s *Server) registerOrgRoutes(mux routeRegistrar) {
 
 	// GET /api/v1/orgs/{org}/collections/{collection} describes one
 	// collection: its playbooks and the sub-resource paths available for it.
-	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}", func(w http.ResponseWriter, r *http.Request) {
+	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}", func(w http.ResponseWriter, r *http.Request) {
 		t, ok := s.requireCollection(w, r)
 		if !ok {
 			return
@@ -372,7 +371,7 @@ func (s *Server) registerOrgRoutes(mux routeRegistrar) {
 		}
 		base := apiPrefix + "/orgs/" + t.Org + "/collections/" + t.Name
 		if t.Org == "" {
-			base = apiPrefix + "/orgs/" + config.DefaultOrg + "/collections/" + t.Name
+			base = apiPrefix + "/orgs/" + cfg.DefaultOrg + "/collections/" + t.Name
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"name":      t.Name,

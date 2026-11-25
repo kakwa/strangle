@@ -12,7 +12,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/cfg"
 	"github.com/kakwa/strangle/internal/git"
 	"go.uber.org/zap"
 )
@@ -30,7 +30,7 @@ var (
 // targets that have an upstream repository.
 type Manager struct {
 	mu      sync.RWMutex
-	targets map[string]config.TargetConfig
+	targets map[string]cfg.TargetConfig
 	repos   map[string]*git.Repo
 	refs    map[string]string // effective tracked ref per git target
 	logger  *zap.Logger
@@ -38,9 +38,9 @@ type Manager struct {
 
 // New builds a Manager from the resolved targets. Git-backed targets get a
 // checkout pinned to their configured ref (branch shorthand honored).
-func New(targets []config.TargetConfig, logger *zap.Logger) *Manager {
+func New(targets []cfg.TargetConfig, logger *zap.Logger) *Manager {
 	m := &Manager{
-		targets: map[string]config.TargetConfig{},
+		targets: map[string]cfg.TargetConfig{},
 		repos:   map[string]*git.Repo{},
 		refs:    map[string]string{},
 		logger:  logger,
@@ -64,10 +64,10 @@ func (m *Manager) HasGit() bool {
 }
 
 // Targets returns the resolved target configs, sorted by name.
-func (m *Manager) Targets() []config.TargetConfig {
+func (m *Manager) Targets() []cfg.TargetConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	out := make([]config.TargetConfig, 0, len(m.targets))
+	out := make([]cfg.TargetConfig, 0, len(m.targets))
 	for _, t := range m.targets {
 		out = append(out, t)
 	}
@@ -76,7 +76,7 @@ func (m *Manager) Targets() []config.TargetConfig {
 }
 
 // Target returns the resolved config of one target.
-func (m *Manager) Target(name string) (config.TargetConfig, bool) {
+func (m *Manager) Target(name string) (cfg.TargetConfig, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	t, ok := m.targets[name]
@@ -205,9 +205,9 @@ func (m *Manager) Reload() error {
 
 // loadTargetLocked reads the target's strangle.yml from its checkout
 // directory, applying branch templating. The caller must hold m.mu.
-func (m *Manager) loadTargetLocked(name, ref string) (config.TargetConfig, error) {
+func (m *Manager) loadTargetLocked(name, ref string) (cfg.TargetConfig, error) {
 	previous := m.targets[name]
-	spec := config.TargetSpec{
+	spec := cfg.TargetSpec{
 		Name:        previous.Name,
 		Org:         previous.Org,
 		Path:        previous.Path,
@@ -215,16 +215,8 @@ func (m *Manager) loadTargetLocked(name, ref string) (config.TargetConfig, error
 		Retention:   previous.Retention,
 		HostCleanup: previous.HostCleanup,
 	}
-	t, err := config.LoadTarget(spec, previous.Path, map[string]string{
+	return cfg.LoadTarget(spec, previous.Path, map[string]string{
 		"Name":   previous.Name,
 		"Branch": ref,
 	})
-	if err != nil {
-		return config.TargetConfig{}, err
-	}
-	// Notification settings (and credentials) come from collection.yml, not
-	// from the repository, so a sync must not drop them when replacing the
-	// resolved target with the freshly loaded strangle.yml.
-	t.Notifications = previous.Notifications
-	return t, nil
 }

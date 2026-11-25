@@ -3,7 +3,7 @@ package sshpool
 import (
 	"fmt"
 
-	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/cfg"
 )
 
 // BuildMulti creates one SSH manager per playbook that enables the Go-managed
@@ -14,7 +14,7 @@ import (
 // connections themselves) build their own Multi from the same target
 // configuration; the host-key decisions are shared through the per-scope
 // files on disk.
-func BuildMulti(targets []config.TargetConfig) (*Multi, error) {
+func BuildMulti(targets []cfg.TargetConfig) (*Multi, error) {
 	managers := map[string]*Manager{}
 	for _, t := range targets {
 		for _, pb := range t.Playbooks {

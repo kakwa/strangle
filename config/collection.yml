@@ -22,21 +22,6 @@ targets:
   - name: homelab
     # org: default
     path: /home/kakwa/Geek/GitHub/home.tf/ansible
-    # Optional failure notifications (webhook, slack or email). Credentials
-    # stay here in collection.yml, never in a git-backed strangle.yml.
-    # notifications:
-    #   - type: webhook
-    #     url: https://example.com/strangle-hook
-    #     headers:
-    #       Authorization: Bearer secret
-    #   - type: slack
-    #     url: https://hooks.slack.com/services/T/B/X
-    #   - type: email
-    #     from: strangle@example.com
-    #     to: [ops@example.com]
-    #     smtp: smtp.example.com:587
-    #     username: strangle
-    #     password_file: /run/secrets/smtp
     # Optional run-history retention for this collection. Overrides the
     # server.yml limits when max_age or max_count is set.
     # retention:

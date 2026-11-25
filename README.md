@@ -24,14 +24,13 @@ protocol in `internal/worker` (no code generation).
 A master supervises the workers: health pings, automatic restarts with
 backoff, and `GET /api/workers` for observability.
 
-Each (target, playbook) job has its own schedule — a duration, a cron
-expression, or the global fallback interval — and the scheduler enqueues it
-when due. With a PostgreSQL DSN configured, runs flow through a
-postgres-backed [River](https://github.com/riverqueue/river) job queue and a
-River client in the master consumes them with at most as many concurrent runs
-as there are workers. Without a DSN, an in-memory store is used and runs
-execute directly. Failed runs can notify webhook, Slack or email endpoints
-configured per collection.
+Each (target, playbook) job has its own robfig/cron v3 schedule (or inherits
+the server fallback), and the scheduler enqueues it when due. PostgreSQL is
+mandatory: run history, accounts, tokens, collection memberships and the
+[River](https://github.com/riverqueue/river) job queue all live in the same
+database. A River client in the master consumes playbook jobs with at most as
+many concurrent runs as there are workers. River owns only queue metadata;
+the applier records every result through the store in the run-history tables.
 
 Git-backed targets are cloned into their configured directory and pinned to a
 tracked ref (branch, tag or commit); `POST /api/sync` is a webhook that
@@ -49,26 +48,24 @@ user certificates signed by a local CA or by Vault through AppRole.
 cmd/strangle-server/ server entrypoint: config, wiring, worker subcommand, graceful shutdown
 cmd/strangle-cli/    client entrypoint: API client and account/token/access commands
 internal/
-  ansible/           embedded CPython runner + Go-backed Ansible connection plugin
-  config/            YAML config: server.yml, collection.yml, per-target strangle.yml
-  applier/           dispatches each run to a worker, parses output, records results
+  applier/           embedded CPython runner, output parser and result recording
+  cfg/               YAML config: server.yml, collection.yml, per-target strangle.yml
   collection/        git-backed targets: clone, pin to tracked ref, sync, reload
   git/               in-process git operations (go-git), no system git binary
-  notify/            failure notifications (webhook, Slack, email)
-  parser/            parses ansible-playbook output (recap, task results, diffs)
-  schedule/          parses durations, cron expressions and aliases
+  schedule/          parses robfig/cron v3 expressions and descriptors
   scheduler/         runs each job on its own schedule (live job list)
   riverqueue/        postgres-backed River job queue for playbook runs
   server/            HTTP API, /metrics and the built web UI
   sshpool/           Go-managed persistent SSH connections with host-key policies
-  store/             run records and the Store interface (in-memory + PostgreSQL)
+  store/             run records and the Store interface
   db/                GORM/PostgreSQL implementation of the Store
   maintenance/       periodic run retention and stale-host cleanup
   worker/            worker pool, JSON-RPC transport and the worker service
+integration_test/     DB, API, queue and Ansible suites (external test packages)
 web/                 React (Vite) web UI, styled with Mantine; built assets are
                      embedded into the binary (go:embed)
 config/              base configuration, loaded by default
-  server.yml           process-level settings (listen address, interval, DSN)
+  server.yml           process-level settings (listen address, schedule, DSN)
   collection.yml       the list of Ansible projects (targets) to apply
 tests/               test/demo configurations and their Ansible playbooks
   config/
@@ -110,7 +107,7 @@ docs/                documentation: architecture, configuration, API, git collec
 
 - `GET /api/health`      — liveness (open, no auth)
 - `GET /metrics`         — Prometheus text exposition: aggregate run, host and worker stats (open)
-- `GET /api/v1/openapi.json` — generated OpenAPI 3 document (open)
+- `GET /api/v1/openapi.json` — generated OpenAPI 3.1 document (open)
 - `GET /api/docs`        — Swagger UI for the versioned API (open)
 - `POST /api/login`      — authenticate a local account, sets a 12 h session cookie
 - `POST /api/logout`     — end the session
@@ -145,7 +142,9 @@ docs/                documentation: architecture, configuration, API, git collec
   a queued or running run; the run detail view offers the same action
 
 Full request/response examples: [docs/api.md](docs/api.md), or the served
-Swagger UI at `/api/docs` backed by `/api/v1/openapi.json`.
+Swagger UI at `/api/docs` backed by `/api/v1/openapi.json`. The server routes
+requests with Echo, and the document is generated from swaggo/swag v2
+annotations by `make swag`.
 
 ## Web UI
 
@@ -184,9 +183,9 @@ strangle-server serve [-s config/server.yml] [-c config/collection.yml]
 |-----------------|-----------------|--------------------------------------|
 | `listen_addr`   | `:8080`         | HTTP listen address                  |
 | `log_level`     | `info`          | `debug`, `info`, `warn` or `error`   |
-| `interval`      | `15m`           | Fallback for jobs without their own `schedule`/`interval` in `strangle.yml` |
+| `schedule`      | `@every 15m`    | Fallback robfig/cron v3 schedule for jobs without their own `schedule` in `strangle.yml` |
 | `workers`       | `1`             | Worker child processes (one embedded interpreter each) |
-| `database.dsn`  | —               | PostgreSQL DSN; without a DSN an in-memory store is used |
+| `database.dsn`  | —               | PostgreSQL DSN; required for history, accounts and the job queue |
 | `auth.token`    | —               | Bearer token for `POST /api/sync` (webhook), independent of UI authentication |
 | `auth.cli_token` | —               | User API token (`st_…`) used by the CLI subcommands; override with `--token` |
 | `sandbox.enabled` | `false`       | Landlock isolation: one worker set per collection, read-only checkouts, private write scratch |
@@ -284,26 +283,12 @@ targets:
     # git:                        # optional: upstream repository
     #   url: https://example.com/repo.git
     #   branch: main              # tracked ref (branch, tag or commit)
-    # notifications:              # optional: sent when a run fails
-    #   - type: webhook
-    #     url: https://example.com/strangle-hook
-    #     headers:
-    #       Authorization: Bearer secret
-    #   - type: slack
-    #     url: https://hooks.slack.com/services/T/B/X
-    #   - type: email
-    #     from: strangle@example.com
-    #     to: [ops@example.com]
-    #     smtp: smtp.example.com:587
-    #     username: strangle
-    #     password_file: /run/secrets/smtp
+    # retention:                  # optional: overrides server.yml limits
+    #   max_age: 720h
+    #   max_count: 1000
+    # host_cleanup:               # optional: overrides server.yml delay
+    #   delay: 720h
 ```
-
-Notifiers are configured per collection (here), never in a git-backed
-`strangle.yml`. They run in parallel with a 10-second default timeout and
-include a bounded tail of the failed playbook's output. See
-[docs/configuration.md](docs/configuration.md#failure-notifications) for all
-fields.
 
 ### strangle.yml — one per target
 
@@ -320,11 +305,11 @@ playbooks:
   - name: base_infra
     playbook: infra.yml
     inventory: inventory
-    interval: 30m              # duration shorthand
+    schedule: "@every 30m"     # cron descriptor
 ```
 
-In git-backed targets, `working_dir`, `playbook`, `inventory`, `schedule` and
-`interval` may use `{{ .Branch }}` and `{{ .Name }}` templates, e.g.
+In git-backed targets, `working_dir`, `playbook`, `inventory` and `schedule`
+may use `{{ .Branch }}` and `{{ .Name }}` templates, e.g.
 `inventory: inventories/{{ .Branch }}.ini`.
 
 The full reference — schedule syntax, every option, the Go-managed SSH

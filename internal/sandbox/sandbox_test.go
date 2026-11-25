@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/cfg"
 )
 
 const (
@@ -88,7 +88,7 @@ func TestLandlockIsolation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	manifests, err := Build(config.SandboxConfig{Enabled: true}, []config.TargetConfig{{
+	manifests, err := Build(cfg.SandboxConfig{Enabled: true}, []cfg.TargetConfig{{
 		Name: "test", Path: collection, WorkingDir: collection,
 	}}, server, collCfg)
 	if err != nil {
@@ -135,17 +135,17 @@ func TestBuildAllowsCertificateSecretsReadOnly(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	target := config.TargetConfig{
+	target := cfg.TargetConfig{
 		Name: "home", Path: filepath.Join(root, "collection"), WorkingDir: filepath.Join(root, "collection"),
-		Playbooks: []config.PlaybookConfig{{
+		Playbooks: []cfg.PlaybookConfig{{
 			Name: "site",
-			Options: config.PlaybookOptions{SSH: config.SSHConfig{
+			Options: cfg.PlaybookOptions{SSH: cfg.SSHConfig{
 				Enabled:        true,
 				PrivateKeyFile: paths["key"],
-				Certificate: &config.CertificateConfig{
-					Backend:  config.CertificateVault,
-					Internal: config.InternalCAConfig{CAKeyFile: paths["ca"]},
-					Vault: config.VaultCertificateConfig{
+				Certificate: &cfg.CertificateConfig{
+					Backend:  cfg.CertificateVault,
+					Internal: cfg.InternalCAConfig{CAKeyFile: paths["ca"]},
+					Vault: cfg.VaultCertificateConfig{
 						CACertFile:   paths["vault-ca"],
 						RoleIDFile:   paths["role"],
 						SecretIDFile: paths["secret"],
@@ -154,7 +154,7 @@ func TestBuildAllowsCertificateSecretsReadOnly(t *testing.T) {
 			}},
 		}},
 	}
-	manifests, err := Build(config.SandboxConfig{Enabled: true}, []config.TargetConfig{target},
+	manifests, err := Build(cfg.SandboxConfig{Enabled: true}, []cfg.TargetConfig{target},
 		filepath.Join(root, "server.yml"), filepath.Join(root, "collection.yml"))
 	if err != nil {
 		t.Fatal(err)
@@ -177,20 +177,20 @@ func TestBuildKeepsCollectionsReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	keyFile := filepath.Join(collDir, "site.auto.json")
-	target := config.TargetConfig{
+	target := cfg.TargetConfig{
 		Name: "home", Path: collDir, WorkingDir: collDir,
-		Playbooks: []config.PlaybookConfig{{
+		Playbooks: []cfg.PlaybookConfig{{
 			Name: "site",
-			Options: config.PlaybookOptions{SSH: config.SSHConfig{
+			Options: cfg.PlaybookOptions{SSH: cfg.SSHConfig{
 				Enabled:        true,
 				AutoAcceptFile: keyFile,
 			}},
 		}},
 	}
-	manifests, err := Build(config.SandboxConfig{
+	manifests, err := Build(cfg.SandboxConfig{
 		Enabled:  true,
 		Writable: []string{collDir},
-	}, []config.TargetConfig{target}, filepath.Join(root, "server.yml"), filepath.Join(root, "collection.yml"))
+	}, []cfg.TargetConfig{target}, filepath.Join(root, "server.yml"), filepath.Join(root, "collection.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}

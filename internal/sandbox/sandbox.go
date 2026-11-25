@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/cfg"
 	"github.com/landlock-lsm/go-landlock/landlock"
 )
 
@@ -139,8 +139,8 @@ func Apply(m Manifest) error {
 
 // Build creates one base manifest per collection. The master adds a scratch
 // directory and socket rules for each worker slot before writing them out.
-func Build(cfg config.SandboxConfig, targets []config.TargetConfig, serverPath, collectionPath string) (map[string]Manifest, error) {
-	if !cfg.Enabled {
+func Build(conf cfg.SandboxConfig, targets []cfg.TargetConfig, serverPath, collectionPath string) (map[string]Manifest, error) {
+	if !conf.Enabled {
 		return nil, nil
 	}
 	out := make(map[string]Manifest, len(targets))
@@ -188,10 +188,10 @@ func Build(cfg config.SandboxConfig, targets []config.TargetConfig, serverPath, 
 		addRO(collAbs)
 		addRO(t.Path)
 		addRO(t.WorkingDir)
-		for _, p := range cfg.ReadOnly {
+		for _, p := range conf.ReadOnly {
 			addRO(p)
 		}
-		for _, p := range cfg.Writable {
+		for _, p := range conf.Writable {
 			addRW(p)
 		}
 

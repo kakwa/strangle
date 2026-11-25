@@ -10,32 +10,38 @@ import (
 	"io/fs"
 	"net/http"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/kakwa/strangle/internal/applier"
 	"github.com/kakwa/strangle/internal/auth"
+	"github.com/kakwa/strangle/internal/cfg"
 	"github.com/kakwa/strangle/internal/collection"
-	"github.com/kakwa/strangle/internal/config"
 	"github.com/kakwa/strangle/internal/sshpool"
 	"github.com/kakwa/strangle/internal/store"
 	"github.com/kakwa/strangle/internal/worker"
 	"github.com/kakwa/strangle/web"
+	"github.com/labstack/echo/v5"
+	echoSwagger "github.com/swaggo/echo-swagger/v2"
+	swag "github.com/swaggo/swag/v2"
 	"go.uber.org/zap"
+
+	// Register the swag-generated OpenAPI document via its init().
+	_ "github.com/kakwa/strangle/docs"
 )
 
-// RunEnqueuer accepts a request to run one playbook now. In production this
-// enqueues a river job; without a database it runs the playbook directly.
-// runID is the store record created for this run; the returned string is the
-// queue job ID (used by the cancel endpoint).
+// RunEnqueuer accepts a request to run one playbook now by enqueueing a River
+// job. runID is the store record created for this run; the returned string is
+// the queue job ID (used by the cancel endpoint).
 type RunEnqueuer interface {
 	EnqueueRun(ctx context.Context, target, playbook string, runID uint64, check bool) (string, error)
 }
 
 // RunCanceler cancels a queued or running playbook job. It is a separate
-// interface so enqueuers that cannot cancel (e.g. the direct, no-database
-// path) can still serve runs.
+// interface so an enqueuer that does not implement cancellation can still
+// serve runs.
 type RunCanceler interface {
 	CancelRun(ctx context.Context, jobID string) error
 }
@@ -53,7 +59,7 @@ type Syncer interface {
 	Sync(ctx context.Context, target, branch string) (string, bool, error)
 	// Targets reports the resolved target configs, so the applier's view
 	// can be refreshed after a sync.
-	Targets() []config.TargetConfig
+	Targets() []cfg.TargetConfig
 }
 
 // Server is the strangle HTTP server.
@@ -64,6 +70,13 @@ type Option func(*Server)
 // API does not restrict collections by user.
 func WithCollectionAccess(a auth.CollectionAccess) Option {
 	return func(s *Server) { s.access = a }
+}
+
+// WithWorkerReporter overrides the worker-pool status reporter used by
+// GET /api/workers. Production passes the worker manager to New; tests can
+// supply a canned reporter without starting real workers.
+func WithWorkerReporter(w WorkerReporter) Option {
+	return func(s *Server) { s.workers = w }
 }
 
 // WithTLS enables HTTPS on ListenAndServe. Both files must be set; a single
@@ -120,8 +133,8 @@ const SessionCookie = "strangle_session"
 // New returns a Server. The web UI is embedded in the binary; build it with
 // `make web` (or `make build`) before compiling. ssh may be nil when no
 // target uses the Go-managed SSH transport. run accepts manual playbook runs
-// (a river job in production, a direct run without a database). workers may
-// be nil when no worker pool is managed. syncer may be nil when no target
+// as River jobs. workers may be nil when no worker pool is managed. syncer may
+// be nil when no target
 // has a git upstream. users, when non-nil, is the store of UI accounts; UI
 // authentication is enforced as soon as it holds at least one user (see
 // Routes). tokens, when non-nil, is the store of user API tokens: a valid
@@ -154,38 +167,72 @@ func New(addr string, apr *applier.Ansible, st store.Store, ssh *sshpool.Multi, 
 // UI authentication is enforced when a user store is configured and holds
 // at least one user: every /api/* request then needs a valid session,
 // except the login endpoints, GET /api/health (liveness), GET /api/docs and
-// GET /api/v1/openapi.json. Without users the server runs open and logs a
+// its assets, and GET /api/v1/openapi.json. Without users the server runs open and logs a
 // warning pointing at `strangle-cli user add`.
 func (s *Server) Routes() http.Handler {
-	handler, _ := s.buildRoutes()
-	return handler
+	return s.buildRoutes()
 }
 
-// buildRoutes registers the handlers and returns both the HTTP handler and
-// the catalog of registered patterns. The catalog is the source used to
-// generate the served OpenAPI document.
-func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
+// echoRouterPath converts a net/http-style pattern parameter ({name}) to the
+// Echo v5 syntax (:name). Swagger annotations keep the standard OpenAPI
+// braces; only the router uses colons.
+var echoPathParam = regexp.MustCompile(`\{([^}]+)\}`)
+
+func echoRouterPath(path string) string {
+	return echoPathParam.ReplaceAllString(path, ":$1")
+}
+
+// echoRegistrar adapts Echo's router to the small registration interface used
+// by the API handlers. Handlers keep their http.HandlerFunc shape and are
+// wrapped with echo.WrapHandler, which also copies Echo path parameters into
+// the request so r.PathValue keeps working.
+type echoRegistrar struct {
+	e *echo.Echo
+}
+
+func (r echoRegistrar) HandleFunc(pattern string, h http.HandlerFunc) {
+	method, routePath, ok := strings.Cut(pattern, " ")
+	if !ok || method == "" || routePath == "" {
+		panic("server: invalid route pattern " + pattern)
+	}
+	r.e.Add(method, echoRouterPath(routePath), echo.WrapHandler(h))
+}
+
+// buildRoutes registers every route on an Echo instance and returns it. Echo
+// implements http.Handler, so tests and the net/http server can use it
+// directly.
+func (s *Server) buildRoutes() *echo.Echo {
 	s.initAuth()
 
-	mux := newRouteCatalog()
+	e := echo.New()
+	e.HTTPErrorHandler = func(c *echo.Context, err error) {
+		code := http.StatusInternalServerError
+		if httpErr, ok := err.(*echo.HTTPError); ok {
+			code = httpErr.Code
+		}
+		writeError(c.Response(), code, err)
+	}
+	e.Use(s.requireAuth)
 
-	apiHandler(mux, "GET", apiPrefix+"/health", func(w http.ResponseWriter, _ *http.Request) {
+	routes := echoRegistrar{e: e}
+
+	apiHandler(routes, "GET", apiPrefix+"/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	s.registerOrgRoutes(mux)
+	s.registerOrgRoutes(routes)
 
 	// Prometheus scrape endpoint. It is intentionally outside /api so it is
 	// reachable without a UI session; only aggregate counts are exposed.
-	mux.Handle("GET /metrics", metricsHandler(s.store, s.workers, s.logger))
+	e.GET("/metrics", echo.WrapHandler(metricsHandler(s.store, s.workers, s.logger)))
 
 	// Machine-readable API description and Swagger UI. Both are public: the
 	// spec describes the routes but exposes no collection data itself.
-	s.registerDocsRoutes(mux)
+	s.registerDocsRoutes(e)
 
 	// --- UI authentication -------------------------------------------------
 
 	// POST /api/login authenticates a local user and starts a session.
-	apiHandler(mux, "POST", apiPrefix+"/login", func(w http.ResponseWriter, r *http.Request) {
+	apiHandler(routes, "POST", apiPrefix+"/login", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Username string `json:"username"`
 			Password string `json:"password"`
@@ -220,7 +267,7 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 	})
 
 	// POST /api/logout ends the session carried by the request cookie.
-	apiHandler(mux, "POST", apiPrefix+"/logout", func(w http.ResponseWriter, r *http.Request) {
+	apiHandler(routes, "POST", apiPrefix+"/logout", func(w http.ResponseWriter, r *http.Request) {
 		if c, err := r.Cookie(SessionCookie); err == nil && s.sessions != nil {
 			s.sessions.Destroy(c.Value)
 		}
@@ -238,7 +285,7 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 	//   200 {authenticated: false}          auth off (open server)
 	//   200 {authenticated: true, username} valid session
 	//   401                                 auth on, no valid session
-	apiHandler(mux, "GET", apiPrefix+"/me", func(w http.ResponseWriter, r *http.Request) {
+	apiHandler(routes, "GET", apiPrefix+"/me", func(w http.ResponseWriter, r *http.Request) {
 		if !s.authOn {
 			writeJSON(w, http.StatusOK, meResponse{})
 			return
@@ -259,9 +306,9 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 
 	// GET /api/tokens lists the caller's tokens. Raw values are never
 	// returned; only a display prefix.
-	apiHandler(mux, "GET", apiPrefix+"/tokens", func(w http.ResponseWriter, r *http.Request) {
+	apiHandler(routes, "GET", apiPrefix+"/tokens", func(w http.ResponseWriter, r *http.Request) {
 		if s.tokens == nil {
-			writeError(w, http.StatusServiceUnavailable, errors.New("token storage is not configured (no database)"))
+			writeError(w, http.StatusServiceUnavailable, errors.New("token storage is not configured"))
 			return
 		}
 		owner, ok := s.userFrom(r)
@@ -280,9 +327,9 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 	// POST /api/tokens creates one. Body: {"name": "...", "ttl_hours": N}
 	// where ttl_hours is optional (absent or 0: no expiry). The raw value is
 	// returned exactly once, in the 201 response.
-	apiHandler(mux, "POST", apiPrefix+"/tokens", func(w http.ResponseWriter, r *http.Request) {
+	apiHandler(routes, "POST", apiPrefix+"/tokens", func(w http.ResponseWriter, r *http.Request) {
 		if s.tokens == nil {
-			writeError(w, http.StatusServiceUnavailable, errors.New("token storage is not configured (no database)"))
+			writeError(w, http.StatusServiceUnavailable, errors.New("token storage is not configured"))
 			return
 		}
 		owner, ok := s.userFrom(r)
@@ -312,9 +359,9 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 	})
 
 	// DELETE /api/tokens/{name} revokes one.
-	apiHandler(mux, "DELETE", apiPrefix+"/tokens/{name}", func(w http.ResponseWriter, r *http.Request) {
+	apiHandler(routes, "DELETE", apiPrefix+"/tokens/{name}", func(w http.ResponseWriter, r *http.Request) {
 		if s.tokens == nil {
-			writeError(w, http.StatusServiceUnavailable, errors.New("token storage is not configured (no database)"))
+			writeError(w, http.StatusServiceUnavailable, errors.New("token storage is not configured"))
 			return
 		}
 		owner, ok := s.userFrom(r)
@@ -352,8 +399,8 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 		}
 		writeJSON(w, http.StatusOK, stats)
 	}
-	apiHandler(mux, "GET", apiPrefix+"/stats", handleStats)
-	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/stats", s.withCollectionAccess(handleStats))
+	apiHandler(routes, "GET", apiPrefix+"/stats", handleStats)
+	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/stats", s.withCollectionAccess(handleStats))
 
 	handleRuns := func(w http.ResponseWriter, r *http.Request) {
 		coll, ok := s.collectionScope(r)
@@ -387,8 +434,8 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 		w.Header().Set("X-Total-Count", strconv.Itoa(total))
 		writeJSON(w, http.StatusOK, visible[start:end])
 	}
-	apiHandler(mux, "GET", apiPrefix+"/runs", handleRuns)
-	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/runs", s.withCollectionAccess(handleRuns))
+	apiHandler(routes, "GET", apiPrefix+"/runs", handleRuns)
+	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/runs", s.withCollectionAccess(handleRuns))
 
 	// Run detail: the only endpoint that includes the full captured output.
 	// On collection-scoped paths a run from a sibling collection is a 404, so
@@ -427,8 +474,8 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 		}
 		writeJSON(w, http.StatusOK, run)
 	}
-	apiHandler(mux, "GET", apiPrefix+"/runs/{id}", handleRunDetail)
-	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/runs/{id}", s.withCollectionAccess(handleRunDetail))
+	apiHandler(routes, "GET", apiPrefix+"/runs/{id}", handleRunDetail)
+	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/runs/{id}", s.withCollectionAccess(handleRunDetail))
 
 	// Task history is new collection-scoped data: no flat alias, and only
 	// reachable for a run belonging to the URL's collection.
@@ -471,7 +518,7 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 		}
 		writeJSON(w, http.StatusOK, tasks)
 	}
-	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/runs/{id}/tasks", s.withCollectionAccess(handleRunTasks))
+	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/runs/{id}/tasks", s.withCollectionAccess(handleRunTasks))
 
 	handleHosts := func(w http.ResponseWriter, r *http.Request) {
 		coll, ok := s.collectionScope(r)
@@ -496,8 +543,8 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 		}
 		writeJSON(w, http.StatusOK, filtered)
 	}
-	apiHandler(mux, "GET", apiPrefix+"/hosts", handleHosts)
-	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hosts", s.withCollectionAccess(handleHosts))
+	apiHandler(routes, "GET", apiPrefix+"/hosts", handleHosts)
+	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hosts", s.withCollectionAccess(handleHosts))
 
 	handleHostRuns := func(w http.ResponseWriter, r *http.Request) {
 		limit := intQuery(r, "limit", 10)
@@ -518,8 +565,8 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 		}
 		writeJSON(w, http.StatusOK, filtered)
 	}
-	apiHandler(mux, "GET", apiPrefix+"/hosts/{host}/runs", handleHostRuns)
-	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hosts/{host}/runs", s.withCollectionAccess(handleHostRuns))
+	apiHandler(routes, "GET", apiPrefix+"/hosts/{host}/runs", handleHostRuns)
+	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hosts/{host}/runs", s.withCollectionAccess(handleHostRuns))
 
 	handleHostChanges := func(w http.ResponseWriter, r *http.Request) {
 		limit := intQuery(r, "limit", 200)
@@ -540,8 +587,8 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 		}
 		writeJSON(w, http.StatusOK, filtered)
 	}
-	apiHandler(mux, "GET", apiPrefix+"/hosts/{host}/changes", handleHostChanges)
-	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hosts/{host}/changes", s.withCollectionAccess(handleHostChanges))
+	apiHandler(routes, "GET", apiPrefix+"/hosts/{host}/changes", handleHostChanges)
+	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hosts/{host}/changes", s.withCollectionAccess(handleHostChanges))
 
 	// /api/v1/playbooks maps each collection (target) to its configured
 	// jobs, with the latest run outcome of each job. The collection-level
@@ -600,12 +647,12 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 		}
 		writeJSON(w, http.StatusOK, out)
 	}
-	apiHandler(mux, "GET", apiPrefix+"/playbooks", handlePlaybooks)
-	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/playbooks", s.withCollectionAccess(handlePlaybooks))
+	apiHandler(routes, "GET", apiPrefix+"/playbooks", handlePlaybooks)
+	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/playbooks", s.withCollectionAccess(handlePlaybooks))
 
 	// /api/v1/workers reports the master's worker pool: one entry per worker
 	// process, with liveness probed over the worker JSON-RPC API.
-	apiHandler(mux, "GET", apiPrefix+"/workers", func(w http.ResponseWriter, r *http.Request) {
+	apiHandler(routes, "GET", apiPrefix+"/workers", func(w http.ResponseWriter, r *http.Request) {
 		if s.workers == nil {
 			writeJSON(w, http.StatusOK, []worker.WorkerStatus{})
 			return
@@ -689,8 +736,8 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 			"check":    req.Check,
 		})
 	}
-	apiHandler(mux, "POST", apiPrefix+"/run", handleRun)
-	mux.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/run", s.withCollectionAccess(handleRun))
+	apiHandler(routes, "POST", apiPrefix+"/run", handleRun)
+	routes.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/run", s.withCollectionAccess(handleRun))
 
 	// Cancel a queued or running playbook run. Only the versioned,
 	// collection-scoped route exists: a run belongs to one collection and
@@ -748,7 +795,7 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"id": id, "state": store.RunStateCancelled})
 	})
-	mux.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/runs/{id}/cancel", handleCancelRun)
+	routes.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/runs/{id}/cancel", handleCancelRun)
 
 	// /api/v1/sync is the webhook for git-backed collections: it moves the
 	// target's checkout to its tracked ref (or to the given branch, which
@@ -816,15 +863,15 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 			"changed": changed,
 		})
 	}
-	apiHandler(mux, "POST", apiPrefix+"/sync", handleSync)
-	mux.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/sync", s.withCollectionAccess(handleSync))
+	apiHandler(routes, "POST", apiPrefix+"/sync", handleSync)
+	routes.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/sync", s.withCollectionAccess(handleSync))
 
 	// SSH host keys and pool counters are collection-scoped resources: every
 	// endpoint below lives under /api/v1/orgs/{org}/collections/{collection},
 	// passes the membership check and validates the org/collection pair. An
 	// SSH scope is "<target>/<playbook name>", so its first component must be
 	// the collection in the URL.
-	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hostkeys", s.withCollectionAccess(func(w http.ResponseWriter, r *http.Request) {
+	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hostkeys", s.withCollectionAccess(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := s.requireCollection(w, r); !ok {
 			return
 		}
@@ -840,7 +887,7 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 		writeJSON(w, http.StatusOK, keys)
 	}))
 
-	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/ssh/stats", s.withCollectionAccess(func(w http.ResponseWriter, r *http.Request) {
+	routes.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/ssh/stats", s.withCollectionAccess(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := s.requireCollection(w, r); !ok {
 			return
 		}
@@ -896,15 +943,46 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 			decideHostKey(w, kind, req.Target, req.Host, req.Fingerprint)
 		})
 	}
-	mux.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/hostkeys/accept", registerScopedDecision("accept"))
-	mux.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/hostkeys/reject", registerScopedDecision("reject"))
+	routes.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/hostkeys/accept", registerScopedDecision("accept"))
+	routes.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/hostkeys/reject", registerScopedDecision("reject"))
 
-	mux.Handle("/", spaHandler(uiFS))
+	// The UI owns every path not claimed by an API route. Echo's Any wildcard
+	// also preserves the old fallback behaviour for unregistered POST/PUT/... API
+	// paths: they fall through to index.html rather than returning a bare 405.
+	e.Any("/*", echo.WrapHandler(spaHandler(uiFS)))
 
-	// When authentication is on, every /api/* request (except the login
-	// endpoints, health and the API docs) needs a valid session. Static UI
-	// files are served unconditionally: the app itself gates on GET /api/me.
-	return s.requireAuth(mux), mux
+	// Authentication is enforced by Echo middleware (requireAuth) above.
+	return e
+}
+
+// registerDocsRoutes serves the swag-generated OpenAPI 3.1 document and the
+// embedded Swagger UI. Both are public: the spec describes the routes but
+// exposes no collection data itself.
+func (s *Server) registerDocsRoutes(e *echo.Echo) {
+	// The spec itself lives under the versioned prefix; only the human-facing
+	// Swagger UI uses the conventional /api/docs path from the feature list.
+	e.GET(apiPrefix+"/openapi.json", func(c *echo.Context) error {
+		doc, err := swag.ReadDoc()
+		if err != nil {
+			writeError(c.Response(), http.StatusInternalServerError, err)
+			return nil
+		}
+		c.Response().Header().Set("Content-Type", jsonMedia)
+		_, err = c.Response().Write([]byte(doc))
+		return err
+	})
+
+	ui := echoSwagger.EchoWrapHandlerV3(echoSwagger.URL(apiPrefix + "/openapi.json"))
+	// echo-swagger expects /api/docs/index.html; /api/docs is the documented
+	// short form, so serve the same handler with a rewritten RequestURI.
+	e.GET("/api/docs", func(c *echo.Context) error {
+		r := c.Request()
+		saved := r.RequestURI
+		r.RequestURI = "/api/docs/index.html"
+		defer func() { r.RequestURI = saved }()
+		return ui(c)
+	})
+	e.GET("/api/docs/*", ui)
 }
 
 // initAuth sets up the session table and decides, once, whether UI
@@ -940,16 +1018,17 @@ type meResponse struct {
 // POST /api/sync. The open endpoints are GET /api/health (liveness),
 // POST /api/login, POST /api/logout, GET /api/me, GET /api/docs and
 // GET /api/v1/openapi.json.
-func (s *Server) requireAuth(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func (s *Server) requireAuth(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		r := c.Request()
 		if s.authOn && strings.HasPrefix(r.URL.Path, "/api/") {
 			if _, ok := s.userFrom(r); !ok && !s.authOpen(r) && !s.syncOK(r) {
-				writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
-				return
+				writeError(c.Response(), http.StatusUnauthorized, errors.New("not authenticated"))
+				return nil
 			}
 		}
-		next.ServeHTTP(w, r)
-	})
+		return next(c)
+	}
 }
 
 // syncOK reports whether r may use POST /api/sync: any valid identity works,
@@ -963,8 +1042,11 @@ func (s *Server) syncOK(r *http.Request) bool {
 // authOpen lists the API endpoints reachable without a session, under both
 // the versioned prefix and their flat aliases.
 func (s *Server) authOpen(r *http.Request) bool {
-	// API docs are public but have no legacy flat alias for the spec.
-	if r.Method == http.MethodGet && (r.URL.Path == "/api/docs" || r.URL.Path == apiPrefix+"/openapi.json") {
+	// API docs are public but have no legacy flat alias for the spec. The
+	// Swagger UI assets live under /api/docs/ and must be public too.
+	if r.Method == http.MethodGet && (r.URL.Path == "/api/docs" ||
+		strings.HasPrefix(r.URL.Path, "/api/docs/") ||
+		r.URL.Path == apiPrefix+"/openapi.json") {
 		return true
 	}
 	path := apiAliasPath(r.URL.Path)

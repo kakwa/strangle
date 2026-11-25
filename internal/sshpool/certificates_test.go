@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/cfg"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -55,17 +55,17 @@ func certificateFromSigner(t *testing.T, signer ssh.Signer) *ssh.Certificate {
 func TestInternalCAProvider(t *testing.T) {
 	_, subjectPath := testSignerFile(t, "id_ed25519")
 	authority, caPath := testSignerFile(t, "ca_ed25519")
-	cfg := config.SSHConfig{
+	conf := cfg.SSHConfig{
 		PrivateKeyFile: subjectPath,
-		Certificate: &config.CertificateConfig{
-			Backend:     config.CertificateInternal,
+		Certificate: &cfg.CertificateConfig{
+			Backend:     cfg.CertificateInternal,
 			TTL:         time.Minute,
 			Principals:  []string{"deploy"},
 			KeyIDPrefix: "unit",
-			Internal:    config.InternalCAConfig{CAKeyFile: caPath},
+			Internal:    cfg.InternalCAConfig{CAKeyFile: caPath},
 		},
 	}
-	provider, err := newSignerProvider(cfg, nil)
+	provider, err := newSignerProvider(conf, nil)
 	if err != nil {
 		t.Fatalf("newSignerProvider: %v", err)
 	}
@@ -184,14 +184,14 @@ func TestVaultProvider(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cfg := config.SSHConfig{
+	conf := cfg.SSHConfig{
 		PrivateKeyFile: subjectPath,
-		Certificate: &config.CertificateConfig{
-			Backend:     config.CertificateVault,
+		Certificate: &cfg.CertificateConfig{
+			Backend:     cfg.CertificateVault,
 			TTL:         2 * time.Minute,
 			Principals:  []string{"deploy"},
 			KeyIDPrefix: "vault-test",
-			Vault: config.VaultCertificateConfig{
+			Vault: cfg.VaultCertificateConfig{
 				Addr:      server.URL,
 				Namespace: "lab",
 				Mount:     "ssh-lab",
@@ -201,7 +201,7 @@ func TestVaultProvider(t *testing.T) {
 			},
 		},
 	}
-	provider, err := newSignerProvider(cfg, nil)
+	provider, err := newSignerProvider(conf, nil)
 	if err != nil {
 		t.Fatalf("newSignerProvider: %v", err)
 	}
@@ -237,12 +237,12 @@ func TestManagerExpiryAndEndpointNormalization(t *testing.T) {
 	host, port := startTestSSHServer(t)
 	signer, _ := testSignerFile(t, "id_ed25519")
 	provider := &fakeProvider{signers: []ssh.Signer{signer}, expires: time.Now().Add(time.Hour)}
-	hostKeys, err := NewHostKeyStore(config.SSHConfig{HostKeyPolicy: config.PolicyInsecure})
+	hostKeys, err := NewHostKeyStore(cfg.SSHConfig{HostKeyPolicy: cfg.PolicyInsecure})
 	if err != nil {
 		t.Fatalf("NewHostKeyStore: %v", err)
 	}
 	m := &Manager{
-		cfg:        config.SSHConfig{User: "deploy", Port: port},
+		conf:       cfg.SSHConfig{User: "deploy", Port: port},
 		provider:   provider,
 		clients:    map[string]*ssh.Client{},
 		retired:    map[string][]*ssh.Client{},
@@ -288,12 +288,12 @@ func TestManagerExpiryAndEndpointNormalization(t *testing.T) {
 func TestExpiryKeepsInFlightClientAlive(t *testing.T) {
 	host, port := startTestSSHServer(t)
 	signer, _ := testSignerFile(t, "id_ed25519")
-	hostKeys, err := NewHostKeyStore(config.SSHConfig{HostKeyPolicy: config.PolicyInsecure})
+	hostKeys, err := NewHostKeyStore(cfg.SSHConfig{HostKeyPolicy: cfg.PolicyInsecure})
 	if err != nil {
 		t.Fatalf("NewHostKeyStore: %v", err)
 	}
 	m := &Manager{
-		cfg:        config.SSHConfig{User: "deploy", Port: port},
+		conf:       cfg.SSHConfig{User: "deploy", Port: port},
 		provider:   &staticSignerProvider{signers: []ssh.Signer{signer}},
 		clients:    map[string]*ssh.Client{},
 		retired:    map[string][]*ssh.Client{},
@@ -352,12 +352,12 @@ func startTestSSHServer(t *testing.T) (string, int) {
 	if err != nil {
 		t.Fatalf("host signer: %v", err)
 	}
-	cfg := &ssh.ServerConfig{
+	conf := &ssh.ServerConfig{
 		PublicKeyCallback: func(ssh.ConnMetadata, ssh.PublicKey) (*ssh.Permissions, error) {
 			return &ssh.Permissions{}, nil
 		},
 	}
-	cfg.AddHostKey(signer)
+	conf.AddHostKey(signer)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -370,7 +370,7 @@ func startTestSSHServer(t *testing.T) (string, int) {
 			if err != nil {
 				return
 			}
-			go serveTestSSH(conn, cfg)
+			go serveTestSSH(conn, conf)
 		}
 	}()
 	t.Cleanup(func() {
@@ -389,8 +389,8 @@ func startTestSSHServer(t *testing.T) (string, int) {
 	return host, port
 }
 
-func serveTestSSH(conn net.Conn, cfg *ssh.ServerConfig) {
-	serverConn, channels, requests, err := ssh.NewServerConn(conn, cfg)
+func serveTestSSH(conn net.Conn, conf *ssh.ServerConfig) {
+	serverConn, channels, requests, err := ssh.NewServerConn(conn, conf)
 	if err != nil {
 		_ = conn.Close()
 		return

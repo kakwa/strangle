@@ -3,7 +3,7 @@ package maintenance
 import (
 	"context"
 
-	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/cfg"
 	"github.com/kakwa/strangle/internal/store"
 	"go.uber.org/zap"
 )
@@ -11,17 +11,17 @@ import (
 // NewHostCleanup returns a task that removes stale hosts, or nil when host
 // cleanup is disabled. targets is a provider rather than a snapshot so a
 // git-backed collection's reloaded policy is picked up on the next pass.
-func NewHostCleanup(st store.Store, cfg config.HostCleanupConfig, targets func() []config.TargetConfig, logger *zap.Logger) *Task {
-	enabled := cfg.Enabled()
+func NewHostCleanup(st store.Store, conf cfg.HostCleanupConfig, targets func() []cfg.TargetConfig, logger *zap.Logger) *Task {
+	enabled := conf.Enabled()
 	for _, t := range targets() {
 		if t.HostCleanup.Enabled() {
 			enabled = true
 			break
 		}
 	}
-	return newTask(cfg.Interval, enabled, func(ctx context.Context) {
+	return newTask(conf.Interval, enabled, func(ctx context.Context) {
 		for _, target := range targets() {
-			delay := cfg.Delay
+			delay := conf.Delay
 			if target.HostCleanup.Enabled() {
 				delay = target.HostCleanup.Delay
 			}

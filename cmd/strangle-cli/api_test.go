@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/cfg"
 	"github.com/spf13/cobra"
 )
 
@@ -28,7 +28,7 @@ func apiTestConfigs(t *testing.T) (string, string) {
 	dir := t.TempDir()
 	serverPath := filepath.Join(dir, "server.yml")
 	collectionPath := filepath.Join(dir, "collection.yml")
-	if err := os.WriteFile(serverPath, []byte("listen_addr: 127.0.0.1:1\nauth:\n  cli_token: st_testtoken\n"), 0o600); err != nil {
+	if err := os.WriteFile(serverPath, []byte("listen_addr: 127.0.0.1:1\ndatabase:\n  dsn: postgres://postgres@localhost/strangle\nauth:\n  cli_token: st_testtoken\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(collectionPath, []byte("targets:\n  - name: demo\n    org: lab\n    path: .\n"), 0o600); err != nil {
@@ -307,8 +307,8 @@ func TestAPIBaseURL(t *testing.T) {
 	}
 }
 
-func configForAddr(addr string) config.ServerConfig {
-	return config.ServerConfig{ListenAddr: addr}
+func configForAddr(addr string) cfg.ServerConfig {
+	return cfg.ServerConfig{ListenAddr: addr}
 }
 
 func TestScopePathEscapesSegments(t *testing.T) {

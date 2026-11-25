@@ -14,7 +14,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"go.uber.org/zap"
 
-	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/cfg"
 )
 
 var testSig = &object.Signature{
@@ -117,16 +117,11 @@ func newFixture(t *testing.T) (*Manager, string, map[string]string) {
 	t.Helper()
 	origin, revs := newOrigin(t)
 	checkoutDir := filepath.Join(t.TempDir(), "checkout")
-	targets := []config.TargetConfig{{
-		Name: "one",
-		Org:  "lab",
-		Path: checkoutDir,
-		Git:  config.GitConfig{URL: origin, Branch: "main"},
-		Notifications: []config.NotificationConfig{{
-			Type:    config.NotificationWebhook,
-			URL:     "https://example.com/hook",
-			Timeout: time.Second,
-		}},
+	targets := []cfg.TargetConfig{{
+		Name:       "one",
+		Org:        "lab",
+		Path:       checkoutDir,
+		Git:        cfg.GitConfig{URL: origin, Branch: "main"},
 		WorkingDir: checkoutDir,
 	}}
 	m := New(targets, zap.NewNop())
@@ -134,9 +129,9 @@ func newFixture(t *testing.T) (*Manager, string, map[string]string) {
 }
 
 func TestNewAndTargets(t *testing.T) {
-	m := New([]config.TargetConfig{
+	m := New([]cfg.TargetConfig{
 		{Name: "b", Path: "/b"},
-		{Name: "a", Path: "/a", Git: config.GitConfig{URL: "https://example.com/a.git"}},
+		{Name: "a", Path: "/a", Git: cfg.GitConfig{URL: "https://example.com/a.git"}},
 	}, zap.NewNop())
 
 	if !m.HasGit() {
@@ -153,7 +148,7 @@ func TestNewAndTargets(t *testing.T) {
 		t.Error("Target(nope) = found, want not found")
 	}
 
-	plain := New([]config.TargetConfig{{Name: "a", Path: "/a"}}, zap.NewNop())
+	plain := New([]cfg.TargetConfig{{Name: "a", Path: "/a"}}, zap.NewNop())
 	if plain.HasGit() {
 		t.Error("HasGit() = true for a non-git target")
 	}
@@ -162,8 +157,8 @@ func TestNewAndTargets(t *testing.T) {
 func TestInitialSync(t *testing.T) {
 	m, origin, revs := newFixture(t)
 	// A second git target whose repository does not exist.
-	extra := []config.TargetConfig{
-		{Name: "bad", Path: filepath.Join(t.TempDir(), "checkout"), Git: config.GitConfig{URL: filepath.Join(t.TempDir(), "missing.git"), Branch: "main"}, WorkingDir: t.TempDir()},
+	extra := []cfg.TargetConfig{
+		{Name: "bad", Path: filepath.Join(t.TempDir(), "checkout"), Git: cfg.GitConfig{URL: filepath.Join(t.TempDir(), "missing.git"), Branch: "main"}, WorkingDir: t.TempDir()},
 	}
 	m = New(append(m.Targets(), extra...), zap.NewNop())
 
@@ -183,9 +178,6 @@ func TestInitialSync(t *testing.T) {
 	if len(tgt.Playbooks) != 1 || tgt.Playbooks[0].Name != "site" {
 		t.Errorf("good target playbooks = %+v, want [site]", tgt.Playbooks)
 	}
-	if len(tgt.Notifications) != 1 || tgt.Notifications[0].URL != "https://example.com/hook" {
-		t.Errorf("good target notifications were lost on sync: %+v", tgt.Notifications)
-	}
 	if tgt.Org != "lab" {
 		t.Errorf("Org = %q, want lab (preserved across sync)", tgt.Org)
 	}
@@ -198,7 +190,7 @@ func TestInitialSync(t *testing.T) {
 
 func TestSyncUnknownAndNotGit(t *testing.T) {
 	m, _, _ := newFixture(t)
-	plain := New(append(m.Targets(), config.TargetConfig{Name: "local", Path: t.TempDir()}), zap.NewNop())
+	plain := New(append(m.Targets(), cfg.TargetConfig{Name: "local", Path: t.TempDir()}), zap.NewNop())
 
 	_, _, err := plain.Sync(context.Background(), "ghost", "")
 	if !errors.Is(err, ErrUnknownTarget) {

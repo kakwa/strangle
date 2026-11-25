@@ -66,13 +66,13 @@ reported — the checkout is not rolled back.
 
 After a successful sync, the master refreshes the applier's view of the
 target's playbooks. The scheduler reconciles its live job list every ten
-seconds, so new jobs and changed `schedule` / `interval` values take effect
-without a restart.
+seconds, so new jobs and changed `schedule` values take effect without a
+restart.
 
 ## Branch templating
 
 In a git-backed target's `strangle.yml`, the `working_dir`, `playbook`,
-`inventory`, `schedule` and `interval` fields are Go templates with two
+`inventory` and `schedule` fields are Go templates with two
 variables, so the content a job runs and its cadence are selected by the
 tracked ref:
 

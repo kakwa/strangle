@@ -1,8 +1,8 @@
 // Package scheduler starts playbook runs according to each job's schedule.
 //
-// A job with an explicit duration or cron schedule fires on that schedule; a
-// job without one keeps the original behaviour of running immediately at
-// startup and then on server.yml's global interval. The live target list is
+// Schedules use robfig/cron v3's standard format. A job with an explicit
+// schedule fires on that schedule; a job without one uses server.yml's
+// fallback schedule. Jobs with neither are manual-only. The live target list is
 // reconciled periodically, so a git sync can add, remove or reschedule jobs
 // without a restart.
 package scheduler
@@ -19,7 +19,7 @@ import (
 )
 
 // Job is one scheduled (target, playbook) pair. An empty Schedule means the
-// server-level fallback interval applies.
+// server-level fallback schedule applies.
 type Job struct {
 	Target   string
 	Playbook string
@@ -30,13 +30,12 @@ type Job struct {
 // tick so git-backed targets can change their schedules at runtime.
 type JobProvider func() []Job
 
-// RunFunc starts one playbook run. With a database it enqueues a River job;
-// without one it starts a goroutine in the master.
+// RunFunc starts one playbook run by enqueueing a River job.
 type RunFunc func(ctx context.Context, target, playbook string) error
 
 // Scheduler owns one timer per job.
 type Scheduler struct {
-	fallback          time.Duration
+	fallback          string
 	provider          JobProvider
 	run               RunFunc
 	logger            *zap.Logger
@@ -51,9 +50,9 @@ type entry struct {
 	cancel context.CancelFunc
 }
 
-// New returns a Scheduler. fallback is server.yml's interval for jobs that do
-// not define their own schedule.
-func New(fallback time.Duration, provider JobProvider, run RunFunc, logger *zap.Logger) *Scheduler {
+// New returns a Scheduler. fallback is server.yml's robfig/cron schedule for
+// jobs that do not define their own.
+func New(fallback string, provider JobProvider, run RunFunc, logger *zap.Logger) *Scheduler {
 	if provider == nil {
 		provider = func() []Job { return nil }
 	}
@@ -124,7 +123,7 @@ func (s *Scheduler) reconcile(ctx context.Context) {
 		if _, running := s.entries[key]; running {
 			continue
 		}
-		sch, startup, err := s.resolve(job.Schedule)
+		sch, err := s.resolve(job.Schedule)
 		if err != nil {
 			s.logger.Warn("invalid job schedule",
 				zap.String("target", job.Target),
@@ -133,38 +132,31 @@ func (s *Scheduler) reconcile(ctx context.Context) {
 				zap.Error(err))
 			continue
 		}
-		if !sch.Enabled() {
-			continue // manual runs only
+		if sch.IsZero() {
+			continue // no schedule and no fallback: manual runs only
 		}
 		jobCtx, cancel := context.WithCancel(ctx)
 		s.entries[key] = &entry{spec: job.Schedule, cancel: cancel}
-		go s.runJob(jobCtx, job, sch, startup)
+		go s.runJob(jobCtx, job, sch)
 	}
 }
 
-// resolve turns a job's schedule string into a Schedule. Empty schedules use
-// the fallback interval and keep the legacy startup run.
-func (s *Scheduler) resolve(spec string) (schedule.Schedule, bool, error) {
+// resolve turns a job's schedule string into a Schedule. An empty job schedule
+// uses the server fallback; if that is empty too the job is manual-only.
+func (s *Scheduler) resolve(spec string) (schedule.Schedule, error) {
 	if strings.TrimSpace(spec) == "" {
-		if s.fallback <= 0 {
-			return nil, false, errors.New("no default interval configured")
-		}
-		sch, err := schedule.Parse(s.fallback.String())
-		return sch, true, err
+		spec = s.fallback
 	}
-	sch, err := schedule.Parse(spec)
-	return sch, false, err
+	if strings.TrimSpace(spec) == "" {
+		return schedule.Schedule{}, nil
+	}
+	return schedule.Parse(spec)
 }
 
-func (s *Scheduler) runJob(ctx context.Context, job Job, sch schedule.Schedule, startup bool) {
-	next := time.Now()
-	if !startup {
-		// Cron-like schedules wait for their first matching time; only the
-		// legacy global interval runs immediately at startup.
-		next = sch.Next(next)
-		if next.IsZero() {
-			return
-		}
+func (s *Scheduler) runJob(ctx context.Context, job Job, sch schedule.Schedule) {
+	next := sch.Next(time.Now())
+	if next.IsZero() {
+		return
 	}
 	for {
 		wait := time.Until(next)

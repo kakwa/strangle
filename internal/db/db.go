@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/kakwa/strangle/internal/parser"
 	"github.com/kakwa/strangle/internal/store"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -184,6 +183,12 @@ func (d *DB) UpdateRun(ctx context.Context, in store.RunRecord) error {
 }
 
 func (d *DB) SaveRun(ctx context.Context, in store.RunInput) error {
+	// A run normally gets its ID from CreateRun before its queue job is
+	// inserted. Allocate one here too so inserting a completed run directly
+	// cannot collide with IDs assigned earlier in the same database.
+	if in.Run.ID == 0 {
+		in.Run.ID = runIDCounter.Add(1)
+	}
 	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		run := toRunModel(in.Run)
 		if in.Run.ID != 0 {
@@ -292,7 +297,7 @@ func (d *DB) SaveRun(ctx context.Context, in store.RunInput) error {
 		inRecap := map[string]struct{}{}
 		for _, h := range in.Hosts {
 			inRecap[h.Host] = struct{}{}
-			status := parser.Status(h.Ok, h.Changed, h.Failed, h.Unreachable)
+			status := store.HostStatus(h.Ok, h.Changed, h.Failed, h.Unreachable)
 			updates := map[string]any{
 				"last_seen_at":   run.FinishedAt,
 				"last_run_at":    run.FinishedAt,

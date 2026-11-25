@@ -31,12 +31,12 @@ func (c *callCounter) count(key string) int {
 
 func waitFor(t *testing.T, what string, check func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if check() {
 			return
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
 }
@@ -53,7 +53,7 @@ func startScheduler(t *testing.T, s *Scheduler) {
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(2 * time.Second):
+		case <-time.After(5 * time.Second):
 			t.Error("scheduler did not stop after cancellation")
 		}
 	})
@@ -61,11 +61,11 @@ func startScheduler(t *testing.T, s *Scheduler) {
 
 func TestExplicitSchedulesAreIndependent(t *testing.T) {
 	counter := newCallCounter()
-	s := New(time.Hour, func() []Job {
+	s := New("@every 1h", func() []Job {
 		return []Job{
-			{Target: "fast", Playbook: "pb", Schedule: "@every 20ms"},
-			{Target: "slow", Playbook: "pb", Schedule: "@every 2s"},
-			{Target: "off", Playbook: "pb", Schedule: "@off"},
+			{Target: "fast", Playbook: "pb", Schedule: "@every 1s"},
+			{Target: "slow", Playbook: "pb", Schedule: "@every 1h"},
+			{Target: "fallback", Playbook: "pb"}, // inherits the 1h fallback
 		}
 	}, counter.run, zap.NewNop())
 	// Tests can inspect the unexported reconcile interval because they live
@@ -74,29 +74,29 @@ func TestExplicitSchedulesAreIndependent(t *testing.T) {
 	startScheduler(t, s)
 
 	waitFor(t, "the fast job to run 3 times", func() bool { return counter.count("fast/pb") >= 3 })
-	if got := counter.count("off/pb"); got != 0 {
-		t.Errorf("disabled job ran %d times, want 0", got)
-	}
 	if got := counter.count("slow/pb"); got != 0 {
 		t.Errorf("slow job ran %d times before its first tick, want 0", got)
 	}
+	if got := counter.count("fallback/pb"); got != 0 {
+		t.Errorf("fallback job ran %d times before its first tick, want 0", got)
+	}
 }
 
-func TestFallbackRunsImmediately(t *testing.T) {
+func TestFallbackSchedule(t *testing.T) {
 	counter := newCallCounter()
-	s := New(20*time.Millisecond, func() []Job {
-		return []Job{{Target: "legacy", Playbook: "pb"}} // no explicit schedule
+	s := New("@every 1s", func() []Job {
+		return []Job{{Target: "inherits", Playbook: "pb"}} // no explicit schedule
 	}, counter.run, zap.NewNop())
 	s.reconcileInterval = 10 * time.Millisecond
 	startScheduler(t, s)
 
-	waitFor(t, "the fallback job to run twice", func() bool { return counter.count("legacy/pb") >= 2 })
+	waitFor(t, "the fallback job to run twice", func() bool { return counter.count("inherits/pb") >= 2 })
 }
 
 func TestLiveJobListIsReconciled(t *testing.T) {
 	counter := newCallCounter()
 	var mu sync.Mutex
-	jobs := []Job{{Target: "old", Playbook: "pb", Schedule: "@every 20ms"}}
+	jobs := []Job{{Target: "old", Playbook: "pb", Schedule: "@every 1s"}}
 	provider := func() []Job {
 		mu.Lock()
 		defer mu.Unlock()
@@ -108,15 +108,15 @@ func TestLiveJobListIsReconciled(t *testing.T) {
 		mu.Unlock()
 	}
 
-	s := New(time.Hour, provider, counter.run, zap.NewNop())
+	s := New("", provider, counter.run, zap.NewNop())
 	s.reconcileInterval = 10 * time.Millisecond
 	startScheduler(t, s)
 	waitFor(t, "the old job to run", func() bool { return counter.count("old/pb") >= 1 })
 
-	setJobs(Job{Target: "new", Playbook: "pb", Schedule: "@every 20ms"})
+	setJobs(Job{Target: "new", Playbook: "pb", Schedule: "@every 1s"})
 	waitFor(t, "the new job to run", func() bool { return counter.count("new/pb") >= 1 })
 	oldAtSwitch := counter.count("old/pb")
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(2 * time.Second)
 	if got := counter.count("old/pb"); got != oldAtSwitch {
 		t.Errorf("removed job ran %d more times (from %d to %d)", got-oldAtSwitch, oldAtSwitch, got)
 	}

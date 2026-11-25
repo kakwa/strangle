@@ -1,6 +1,5 @@
 // Package maintenance holds the master's periodic background passes: run
-// retention and stale-host cleanup. Both use the store directly, so they work
-// with PostgreSQL and with the in-memory fallback.
+// retention and stale-host cleanup. Both use the PostgreSQL store directly.
 package maintenance
 
 import (

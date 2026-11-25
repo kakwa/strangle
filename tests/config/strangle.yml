@@ -15,10 +15,10 @@
 #   user: kakwa
 #   become: true
 #
-# Schedules are per job (or per target here as a default). Use a duration
-# (`interval: 30m`), a five-field cron expression (`schedule: "0 3 * * 1"`),
-# an alias (`schedule: "@daily"`) or `schedule: "@off"` for manual-only jobs.
-# A job without one inherits server.yml's `interval` and runs at startup.
+# Schedules are per job (or per target here as a default) and use robfig/cron
+# v3 format: a five-field cron expression (`schedule: "0 3 * * 1"`), a
+# descriptor (`schedule: "@daily"` or `schedule: "@every 30m"`). A job with no
+# schedule inherits server.yml's `schedule`; a job with neither is manual-only.
 # schedule: "*/5 * * * *"
 
 playbooks:

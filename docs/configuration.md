@@ -24,9 +24,9 @@ Process-level settings for the master process.
 |-----|---------|-------------|
 | `listen_addr` | `:8080` | HTTP listen address (API and web UI). |
 | `log_level` | `info` | `debug`, `info`, `warn` or `error`. JSON logs on stderr. |
-| `interval` | `15m` | Fallback for jobs without their own schedule in `strangle.yml`. Such jobs run immediately at startup, then on every tick (the original behaviour). |
+| `schedule` | `@every 15m` | Fallback for jobs without their own schedule in `strangle.yml`, in robfig/cron v3 format. Jobs wait for their first scheduled time; there is no startup run. |
 | `workers` | `1` | Worker child processes. Each owns one embedded Ansible interpreter, so this is the maximum number of concurrent playbook runs. |
-| `database.dsn` | — | PostgreSQL DSN. Without a DSN an in-memory store is used (history is lost on restart) and runs execute directly instead of through the job queue. |
+| `database.dsn` | — | PostgreSQL DSN. Required: run history, accounts, tokens, collection memberships and the River job queue all use this database. |
 | `auth.token` | — | When set, `POST /api/sync` (without a UI session) requires the token, either as `Authorization: Bearer <token>` or as the webhook-friendly `X-Strangle-Token: <token>` header. Independent of the UI authentication below. |
 | `auth.cli_token` | — | User API token (`st_…`) sent by the CLI subcommands on every versioned API call; a client-side setting the server ignores. Can be overridden with `--token`. |
 | `sandbox.enabled` | `false` | Enables Landlock isolation: each collection gets dedicated workers, its checkout is read-only and Ansible writes go to a private scratch directory. |
@@ -119,8 +119,8 @@ strangle-cli token list [--user admin]                # all users' tokens withou
 strangle-cli token remove ci --user admin
 ```
 
-As with users, the command group needs a database, so `-s` (the
-server.yml) must point at a config with `database.dsn` set.
+As with users, the command group reads the DSN from `-s` (the server.yml), so
+that file must set `database.dsn`.
 
 - A token is `st_` plus 32 random bytes in hex (`st_` + 64 hex chars).
   Only its SHA-256 digest is stored; the raw value is printed once at
@@ -162,53 +162,11 @@ targets:
   and on every `POST /api/sync`. See
   [git-backed collections](git-collections.md).
 
-### Failure notifications
-
-A target can declare any number of notifiers. They fire when a run finishes
-with a non-zero Ansible exit code or a runner error; successful runs are
-silent. Notifications belong in collection.yml, never in a git-backed
-`strangle.yml`, so repository content cannot redirect credentials.
-
-```yaml
-targets:
-  - name: home
-    path: /path/to/ansible
-    notifications:
-      - type: webhook                       # any HTTP endpoint
-        url: https://example.com/strangle-hook
-        headers:                            # optional extra request headers
-          Authorization: Bearer secret
-        timeout: 5s                         # default: 10s
-      - type: slack                         # Slack incoming webhook
-        url: https://hooks.slack.com/services/T/B/X
-      - type: email
-        from: strangle@example.com
-        to: [ops@example.com, oncall@example.com]
-        smtp: smtp.example.com:587          # host:port
-        username: strangle                  # optional
-        password_file: /run/secrets/smtp    # or `password`, not both
-```
-
-| Field | Applies to | Meaning |
-|-------|-----------|---------|
-| `type` | all | `webhook`, `slack` or `email` |
-| `url` | webhook, slack | absolute `http`/`https` URL; notified with `POST` |
-| `headers` | webhook, slack | extra HTTP headers (e.g. a bearer token) |
-| `from`, `to`, `smtp` | email | sender, recipients and `host:port` of the SMTP server |
-| `username`, `password` / `password_file` | email | optional SMTP PLAIN auth; a relative `password_file` resolves against collection.yml |
-| `timeout` | all | per-notifier timeout, default `10s` |
-
-Webhooks receive a JSON object with `event` (`run_failed`), `org`,
-`collection`, `playbook`, timestamps, `duration_ms`, `exit_code`, host counts
-and a bounded tail of the playbook output (4 KB). Slack and email receive the
-same information in a human-readable message. Notifiers run in parallel and
-their failures are logged but never change the recorded run result.
-
 ### Per-collection retention
 
 A target can override the server's `retention.max_age` and
-`retention.max_count` limits. Like notifications, this belongs in
-collection.yml so it survives a git-backed target's `strangle.yml` reload.
+`retention.max_count` limits. This belongs in collection.yml so it survives a
+git-backed target's `strangle.yml` reload.
 
 ```yaml
 targets:
@@ -272,8 +230,8 @@ working_dir: playbooks             # optional; defaults to the target path
 
 ### Job schedules
 
-Each job can set its own cadence in `strangle.yml`, either as a duration
-(`interval`) or as a cron expression (`schedule`):
+Each job sets its cadence with a `schedule` in `strangle.yml`, using the
+[robfig/cron v3](https://github.com/robfig/cron) standard format:
 
 ```yaml
 # Optional default for jobs that do not set their own.
@@ -287,45 +245,40 @@ playbooks:
   - name: base_infra
     playbook: infra.yml
     inventory: inventory
-    interval: 30m              # duration shorthand
-  - name: manual_only
-    playbook: manual.yml
+    schedule: "@every 30m"     # descriptor
+  - name: inherited
+    playbook: inherited.yml
     inventory: inventory
-    schedule: "@off"           # never scheduled automatically
+    # no job or target schedule: uses server.yml's fallback
 ```
 
-Precedence is **job → target → server**: a job's `schedule`/`interval` wins,
-then the top-level `schedule`/`interval` in `strangle.yml`, then
-`server.yml`'s `interval`. Setting both `schedule` and `interval` at the same
-level is a configuration error.
+Precedence is **job → target → server**: a job's `schedule` wins, then the
+top-level `schedule` in `strangle.yml`, then `server.yml`'s `schedule` (default
+`@every 15m`). The old `interval` key is no longer accepted.
 
-A job with an explicit schedule waits for its first matching time after the
-master starts. A job with no explicit schedule keeps the legacy behaviour: it
-runs once at startup and then every `server.yml` interval. A git sync that
-changes a target's schedules is picked up by the scheduler within about ten
-seconds.
+Every job waits for its first scheduled time after the master starts; there is
+no startup run. A git sync that changes a target's schedules is picked up by
+the scheduler within about ten seconds.
 
-`schedule` accepts:
+`schedule` accepts exactly what robfig/cron v3's `ParseStandard` accepts:
 
-- a Go duration such as `30m`, `1h30m` or `30s` (also `@every 30s`);
 - a standard five-field cron expression: `minute hour day-of-month month
   day-of-week`, with `*`, `?`, lists (`1,15`), ranges (`mon-fri`) and steps
-  (`*/15`). Month and weekday names may be full or three-letter and are
-  case-insensitive; `0` and `7` both mean Sunday. When both day-of-month and
-  day-of-week are restricted, either one matches (Vixie cron semantics).
-- the aliases `@hourly`, `@daily` (or `@midnight`), `@weekly`, `@monthly`,
-  `@yearly` (or `@annually`);
-- `@off` (or quoted `"off"`) to disable automatic runs for that job.
+  (`*/15`). Month and weekday names may be full or three-letter (e.g. `JAN`,
+  `mon`) and are case-insensitive. When both day-of-month and day-of-week are
+  restricted, either one matches (Vixie cron semantics).
+- the descriptors `@hourly`, `@daily` (or `@midnight`), `@weekly`, `@monthly`,
+  `@yearly` (or `@annually`), and `@every <duration>` (minimum one second).
 
 Cron times use the master's local timezone (set `TZ` for the process if it
-should not be the host default). Durations are measured from when the previous
-run finishes.
+should not be the host default). `@every` intervals are measured from the
+scheduled time, not from when the previous run finishes.
 
 ### Template variables in git-backed targets
 
-For git-backed targets, `working_dir`, `playbook`, `inventory`, `schedule` and
-`interval` are interpreted as Go templates with two variables, so a branch can
-select different project content or cadence:
+For git-backed targets, `working_dir`, `playbook`, `inventory` and `schedule`
+are interpreted as Go templates with two variables, so a branch can select
+different project content or cadence:
 
 | Variable | Value |
 |----------|-------|

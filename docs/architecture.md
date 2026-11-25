@@ -76,17 +76,15 @@ configuration and is intentionally open like `/api/health`; see the
 
 ## Job flow
 
-### With a database (the production mode)
-
 Runs flow through a postgres-backed [River](https://github.com/riverqueue/river)
 queue (`internal/riverqueue`):
 
 - The scheduler (`internal/scheduler`) owns one timer per (target, playbook)
-  pair. A job's `schedule` (duration or cron) decides when it is enqueued; a
-  job without one runs at startup and then every `interval` from server.yml.
-  The live job list is reconciled every ten seconds, so a git sync can change
-  schedules without a restart. `POST /api/run` enqueues a single job the same
-  way.
+  pair. A job's `schedule` is a robfig/cron v3 expression (or descriptor), or
+  it inherits the server fallback; it waits for its first tick after the
+  master starts. The live job list is reconciled every ten seconds, so a git
+  sync can change schedules without a restart. `POST /api/run` enqueues a
+  single job the same way.
 - A River client in the master process consumes the `playbooks` queue with
   `MaxWorkers` = `workers`, so at most as many runs execute concurrently as
   there are worker processes.
@@ -96,38 +94,27 @@ queue (`internal/riverqueue`):
   immediate re-runs.
 - The River client runs on its own context: a `SIGTERM` must not hard-cancel
   in-flight runs; shutdown drains the queue instead (see below).
-
-### Without a database
-
-An in-memory store is used (history is lost on restart) and runs execute
-directly: the scheduler starts a background goroutine per due job, and
-`POST /api/run` does the same. Both use a 30-minute timeout.
+- River tables hold only queue metadata (job state, attempts, timestamps).
+  The applier writes every result through `store.Store` into the run-history
+  tables: `runs`, `host_runs`, `task_states` and `task_run_results`.
 
 ## The applier
 
-`internal/applier` receives the run (from a River worker or directly),
-dispatches it to the worker pool through the `Executor` interface, parses the
-captured output with `internal/parser` (recap, per-task status, diffs,
-errors), parses the target's inventory in `inventory.go`, and records
-everything through the `store.Store` interface.
+`internal/applier` receives the run from a River worker, dispatches it to the
+worker pool through the `Executor` interface, parses the captured output
+(recap, per-task status, diffs, errors), parses the target's inventory in
+`inventory.go`, and records everything through the `store.Store` interface.
 
 After a git sync, the master calls `UpdateTargets` with the reloaded targets,
 so a branch switch or a changed `strangle.yml` takes effect from the next run.
 
-When a run fails, `internal/notify` fans the result out to the notifiers
-configured on that collection in collection.yml: generic HTTP webhook, Slack
-incoming webhook or SMTP email. Notifiers are independent, time out
-individually and are best-effort — a broken endpoint cannot change the
-recorded run result. Notification settings are kept across git syncs because
-they are server-side configuration, not repository content.
-
 ## The store
 
-`store.Store` is the persistence interface with two implementations:
-
-- `internal/store` — in-memory; used when no DSN is configured.
-- `internal/db` — GORM on PostgreSQL; tables for runs, per-host recap lines,
-  append-only per-task results, per-task latest state and hosts.
+`store.Store` is the persistence interface. Its only production implementation
+is `internal/db` — GORM on PostgreSQL, with tables for runs, per-host recap
+lines, append-only per-task results, per-task latest state and hosts. There is
+no in-memory fallback; `internal/store` defines the interface and shared
+value types.
 
 Every task result parsed from a run is appended to task history, so the run
 detail can show all of its statuses, diffs and errors. The separate
@@ -143,7 +130,7 @@ It calls `PruneRuns` once at startup and then on the configured interval,
 using the server policy or a per-collection override. Only finished runs are
 eligible; queued and running runs stay so a job cannot recreate a purged
 record. Per-host recap and per-task history rows are deleted in the same
-transaction (or under the in-memory store's lock) as their run.
+transaction as their run.
 
 Host cleanup is the second maintenance task, with the same cadence pattern.
 A host becomes eligible once its collection's inventory snapshot no

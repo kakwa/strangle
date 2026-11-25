@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/cfg"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 )
@@ -35,7 +35,7 @@ type ExecResult struct {
 
 // Manager is a pool of persistent SSH clients.
 type Manager struct {
-	cfg      config.SSHConfig
+	conf     cfg.SSHConfig
 	provider SignerProvider
 	password string
 	hostKeys *HostKeyStore
@@ -56,14 +56,14 @@ type Stats struct {
 }
 
 // New builds a manager. A nil manager is returned when SSH is disabled.
-func New(cfg config.SSHConfig) (*Manager, error) {
-	if !cfg.Enabled {
+func New(conf cfg.SSHConfig) (*Manager, error) {
+	if !conf.Enabled {
 		return nil, nil
 	}
 
 	m := &Manager{
-		cfg:        cfg,
-		password:   cfg.Password,
+		conf:       conf,
+		password:   conf.Password,
 		clients:    map[string]*ssh.Client{},
 		retired:    map[string][]*ssh.Client{},
 		authExpiry: map[string]time.Time{},
@@ -75,16 +75,16 @@ func New(cfg config.SSHConfig) (*Manager, error) {
 	// key for the freshly issued certificate, and static <key>-cert.pub files
 	// or agent signers would otherwise allow long-lived authentication.
 	var static []ssh.Signer
-	if cfg.Certificate == nil {
-		if cfg.PrivateKeyFile != "" {
-			signer, err := loadSigner(cfg.PrivateKeyFile, cfg.PrivateKeyPassphrase)
+	if conf.Certificate == nil {
+		if conf.PrivateKeyFile != "" {
+			signer, err := loadSigner(conf.PrivateKeyFile, conf.PrivateKeyPassphrase)
 			if err != nil {
 				return nil, err
 			}
 			static = append(static, signer)
 		}
 
-		if cfg.UseAgent {
+		if conf.UseAgent {
 			sock := os.Getenv("SSH_AUTH_SOCK")
 			if sock == "" {
 				return nil, errors.New("ssh use_agent is enabled but SSH_AUTH_SOCK is unset")
@@ -100,18 +100,18 @@ func New(cfg config.SSHConfig) (*Manager, error) {
 			static = append(static, signers...)
 		}
 
-		if len(static) == 0 && cfg.Password == "" {
+		if len(static) == 0 && conf.Password == "" {
 			return nil, errors.New("ssh requires a private_key_file, use_agent, or password")
 		}
 	}
 
-	provider, err := newSignerProvider(cfg, static)
+	provider, err := newSignerProvider(conf, static)
 	if err != nil {
 		return nil, err
 	}
 	m.provider = provider
 
-	hostKeys, err := NewHostKeyStore(cfg)
+	hostKeys, err := NewHostKeyStore(conf)
 	if err != nil {
 		_ = provider.Close()
 		return nil, err
@@ -192,13 +192,13 @@ func (m *Manager) normalizeEndpoint(ep Endpoint) (Endpoint, string, error) {
 		return ep, "", errors.New("ssh: empty host")
 	}
 	if ep.User == "" {
-		ep.User = m.cfg.User
+		ep.User = m.conf.User
 	}
 	if ep.User == "" {
 		return ep, "", errors.New("ssh: empty user")
 	}
 	if ep.Port == 0 {
-		ep.Port = m.cfg.Port
+		ep.Port = m.conf.Port
 	}
 	addr := net.JoinHostPort(ep.Host, strconv.Itoa(ep.Port))
 	return ep, ep.User + "@" + addr, nil

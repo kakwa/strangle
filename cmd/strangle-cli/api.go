@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/cfg"
 	"github.com/spf13/cobra"
 )
 
@@ -382,17 +382,17 @@ func commandTarget(args []string, opts apiOptions) (string, error) {
 }
 
 func newAPIClient(opts apiOptions) (*apiClient, error) {
-	cfg, err := config.LoadServer(opts.serverConfig)
+	conf, err := cfg.LoadServer(opts.serverConfig)
 	if err != nil {
 		return nil, err
 	}
 	base := opts.url
 	if base == "" {
-		base = apiBaseURL(cfg)
+		base = apiBaseURL(conf)
 	}
 	token := opts.token
 	if token == "" {
-		token = cfg.Auth.CLIToken
+		token = conf.Auth.CLIToken
 	}
 	return &apiClient{
 		base:             strings.TrimRight(base, "/"),
@@ -404,8 +404,8 @@ func newAPIClient(opts apiOptions) (*apiClient, error) {
 
 // apiBaseURL turns a listen address into a URL a CLI can dial. Wildcard bind
 // addresses map to localhost, and TLS settings select HTTPS.
-func apiBaseURL(cfg config.ServerConfig) string {
-	addr := cfg.ListenAddr
+func apiBaseURL(conf cfg.ServerConfig) string {
+	addr := conf.ListenAddr
 	if addr == "" {
 		addr = ":8080"
 	}
@@ -417,14 +417,14 @@ func apiBaseURL(cfg config.ServerConfig) string {
 		host = "localhost"
 	}
 	scheme := "http"
-	if cfg.TLS.CertFile != "" && cfg.TLS.KeyFile != "" {
+	if conf.TLS.CertFile != "" && conf.TLS.KeyFile != "" {
 		scheme = "https"
 	}
 	return scheme + "://" + net.JoinHostPort(host, port)
 }
 
 // resolveScope finds the org of a target from collection.yml. --org is an
-// explicit alternative for remote use or stale local config.
+// explicit alternative for remote use or stale local cfg.
 func (c *apiClient) resolveScope(target, orgOverride string) (apiScope, error) {
 	if target == "" {
 		return apiScope{}, errors.New("target is required")
@@ -432,7 +432,7 @@ func (c *apiClient) resolveScope(target, orgOverride string) (apiScope, error) {
 	if orgOverride != "" {
 		return apiScope{org: orgOverride, collection: target}, nil
 	}
-	specs, err := config.LoadCollection(c.collectionConfig)
+	specs, err := cfg.LoadCollection(c.collectionConfig)
 	if err != nil {
 		return apiScope{}, fmt.Errorf("resolve org of target %q: %w (pass --org or --collection-config)", target, err)
 	}

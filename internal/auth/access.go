@@ -47,8 +47,7 @@ func collectionAccessKey(org, collection string) string {
 	return org + "\x00" + collection
 }
 
-// MemCollectionAccess is an in-memory CollectionAccess used in tests and
-// when no database is configured.
+// MemCollectionAccess is an in-memory CollectionAccess used in tests.
 type MemCollectionAccess struct {
 	mu   sync.RWMutex
 	byID map[string]map[string]struct{} // username -> set of collection keys

@@ -67,16 +67,29 @@ the target; a conflicting `target` field in the JSON body is rejected with
 
 ## OpenAPI / Swagger
 
-The machine-readable OpenAPI 3 document is generated from the routes the
-server actually registers, so a new versioned route appears automatically.
-The canonical paths (not the legacy flat aliases) are documented:
+The machine-readable OpenAPI 3.1 document is generated at build time by
+`swaggo/swag` v2 from annotations on the versioned API in
+`internal/server/openapi_annotations.go`. The canonical paths (not the legacy
+flat aliases) are documented:
 
-- `GET /api/v1/openapi.json` — the OpenAPI 3.0.3 JSON document.
+- `GET /api/v1/openapi.json` — the generated OpenAPI 3.1 JSON document.
 - `GET /api/docs` — Swagger UI, initialized from the document above.
 
-Both are public, even when UI authentication is on: they describe the API but
-expose no run, host or collection data themselves. Operation schemas are
-derived from the request/response Go types.
+Both are public, even when UI authentication is on (including the Swagger UI
+assets under `/api/docs/`): they describe the API but expose no run, host or
+collection data themselves. Operation schemas are
+derived from the request/response Go types referenced by the annotations.
+
+Regenerate the checked-in `docs/` output after changing a route or its
+annotations:
+
+```sh
+make swag        # swag init --v3.1 ...
+make swag-check  # regenerate and fail if docs/ is out of date
+```
+
+The web layer itself is served by `github.com/labstack/echo/v5`; the legacy
+flat `/api/*` aliases are registered in Echo alongside the versioned routes.
 
 The `strangle-cli` client (`strangle-cli run|runs|hosts|host|hostkeys`) is generated
 against the same versioned routes: it resolves a target's org from
@@ -93,7 +106,8 @@ There are two independent mechanisms:
 exists (see [configuration](configuration.md#ui-authentication)), every
 `/api/*` request needs a valid session cookie, except the open endpoints:
 `GET /api/health`, `POST /api/login`, `POST /api/logout`, `GET /api/me`,
-`GET /api/docs` and `GET /api/v1/openapi.json`. Sessions live 12 hours and are
+`GET /api/docs` (and its assets under `/api/docs/`) and
+`GET /api/v1/openapi.json`. Sessions live 12 hours and are
 held in the master's memory (a master restart logs everyone out). Static UI
 files are always served; the app
 itself gates on `GET /api/me`.
@@ -105,8 +119,8 @@ itself gates on `GET /api/me`.
 the comparison is constant-time). A valid UI session also works on
 `/api/sync`.
 
-**User API tokens (bearer).** When a database is configured, local accounts
-can create their own bearer tokens (in the web UI under *Tokens* or with
+**User API tokens (bearer).** Local accounts can create their own bearer
+tokens (in the web UI under *Tokens* or with
 `strangle-cli token`, see [configuration](configuration.md#api-tokens)). A
 valid token authenticates **every** `/api/*` request as its owner, sent as
 `Authorization: Bearer st_…` or, webhook-friendly,
@@ -191,8 +205,7 @@ authentication is on at all:
 
 These endpoints manage the caller's own bearer tokens. They require a user
 identity — a valid session cookie or a valid user token — so a request can
-also be made with a token. Without a database (`database.dsn` unset) all
-three return `503`. A request that is neither a user session nor a user
+also be made with a token. A request that is neither a user session nor a user
 token gets `403`.
 
 ### GET /api/tokens
@@ -509,9 +522,9 @@ curl -X POST localhost:8080/api/v1/orgs/default/collections/home/run \
 {"status": "queued", "target": "home", "playbook": "hypervisors", "run_id": 1234, "check": true}
 ```
 
-`status` is `queued` with a database configured (a River job) or `started`
-without (a direct run). Runs are now visible immediately in `/api/runs` with
-`state` `queued`, `running`, `completed` or `cancelled`.
+`status` is always `queued`: the API creates the run record and enqueues a
+River job. Runs are visible immediately in `/api/runs` with `state` `queued`,
+`running`, `completed` or `cancelled`.
 
 ## POST /api/sync
 

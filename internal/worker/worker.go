@@ -7,7 +7,7 @@ package worker
 import (
 	"sync"
 
-	"github.com/kakwa/strangle/internal/ansible"
+	"github.com/kakwa/strangle/internal/applier"
 	"github.com/kakwa/strangle/internal/sshpool"
 )
 
@@ -18,13 +18,13 @@ type Server struct {
 	// interpreter, and the SSH scope (SetActive) must stay fixed for the
 	// whole run, so scope selection and execution are one critical section.
 	mu     sync.Mutex
-	runner *ansible.Runner
+	runner *applier.Runner
 	multi  *sshpool.Multi
 }
 
 // NewServer returns the worker service backed by the given runner. multi may
 // be nil when no playbook uses the Go-managed SSH transport.
-func NewServer(runner *ansible.Runner, multi *sshpool.Multi) *Server {
+func NewServer(runner *applier.Runner, multi *sshpool.Multi) *Server {
 	return &Server{runner: runner, multi: multi}
 }
 

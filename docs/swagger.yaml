@@ -1,0 +1,2234 @@
+components:
+  schemas:
+    github_com_kakwa_strangle_internal_auth.Token:
+      properties:
+        created_at:
+          type: string
+        expires_at:
+          type: string
+        last_used_at:
+          type: string
+        name:
+          type: string
+        prefix:
+          description: first chars of the raw value, for display
+          type: string
+      type: object
+    github_com_kakwa_strangle_internal_sshpool.HostKey:
+      properties:
+        fingerprint:
+          type: string
+        first_seen:
+          type: string
+        host:
+          type: string
+        public_key:
+          type: string
+        status:
+          type: string
+        target:
+          description: |-
+            Target is the scope key (<target>/<playbook name>) that owns the
+            connection. It is set when host keys are aggregated across scopes (see Multi);
+            the per-scope persistence files leave it empty.
+          type: string
+      type: object
+    github_com_kakwa_strangle_internal_sshpool.Stats:
+      properties:
+        active_connections:
+          type: integer
+        total_dials:
+          type: integer
+      type: object
+    github_com_kakwa_strangle_internal_store.HostRecord:
+      properties:
+        active:
+          type: boolean
+        disappeared_at:
+          type: string
+        facts:
+          description: |-
+            Facts is the latest ansible_facts blob collected for this host. It is
+            replaced only by a later run that actually returned facts.
+          items:
+            type: integer
+          type: array
+          uniqueItems: false
+        first_seen_at:
+          type: string
+        groups:
+          items:
+            type: string
+          type: array
+          uniqueItems: false
+        in_inventory:
+          type: boolean
+        ip:
+          type: string
+        last_change_at:
+          type: string
+        last_run_at:
+          type: string
+        last_seen_at:
+          type: string
+        last_status:
+          description: ok | changed | failed | unreachable | ""
+          type: string
+        name:
+          type: string
+        target:
+          type: string
+        user:
+          type: string
+      type: object
+    github_com_kakwa_strangle_internal_store.HostRunRecord:
+      properties:
+        changed:
+          type: integer
+        duration_ms:
+          type: integer
+        exit_code:
+          type: integer
+        failed:
+          type: integer
+        host:
+          type: string
+        ignored:
+          type: integer
+        ok:
+          type: integer
+        playbook:
+          type: string
+        rescued:
+          type: integer
+        run_id:
+          type: integer
+        skipped:
+          type: integer
+        started_at:
+          type: string
+        status:
+          type: string
+        success:
+          type: boolean
+        target:
+          type: string
+        unreachable:
+          type: integer
+      type: object
+    github_com_kakwa_strangle_internal_store.HostsStats:
+      properties:
+        active:
+          type: integer
+        disappeared:
+          type: integer
+        in_inventory:
+          type: integer
+        total:
+          type: integer
+      type: object
+    github_com_kakwa_strangle_internal_store.PlaybookStats:
+      properties:
+        failed:
+          type: integer
+        last_run_at:
+          type: string
+        playbook:
+          type: string
+        target:
+          type: string
+        total:
+          type: integer
+      type: object
+    github_com_kakwa_strangle_internal_store.RunRecord:
+      properties:
+        canceled:
+          description: Canceled records when cancellation was requested for the run.
+          type: boolean
+        changed_hosts:
+          type: integer
+        check:
+          description: Check records a dry run triggered with --check.
+          type: boolean
+        duration_ms:
+          type: integer
+        exit_code:
+          type: integer
+        failed_hosts:
+          type: integer
+        finished_at:
+          type: string
+        hosts:
+          type: integer
+        id:
+          type: integer
+        job_id:
+          description: JobID is the queue job that executes this run, when available.
+          type: string
+        output:
+          type: string
+        playbook:
+          type: string
+        started_at:
+          type: string
+        state:
+          type: string
+        success:
+          type: boolean
+        target:
+          type: string
+      type: object
+    github_com_kakwa_strangle_internal_store.RunsStats:
+      properties:
+        avg_duration_ms:
+          type: integer
+        failed:
+          type: integer
+        last_run_at:
+          type: string
+        succeeded:
+          type: integer
+        total:
+          type: integer
+      type: object
+    github_com_kakwa_strangle_internal_store.Stats:
+      properties:
+        hosts:
+          $ref: '#/components/schemas/github_com_kakwa_strangle_internal_store.HostsStats'
+        per_playbook:
+          items:
+            $ref: '#/components/schemas/github_com_kakwa_strangle_internal_store.PlaybookStats'
+          type: array
+          uniqueItems: false
+        runs:
+          $ref: '#/components/schemas/github_com_kakwa_strangle_internal_store.RunsStats'
+      type: object
+    github_com_kakwa_strangle_internal_store.TaskRunRecord:
+      properties:
+        diff:
+          type: string
+        error:
+          type: string
+        finished_at:
+          type: string
+        host:
+          type: string
+        id:
+          type: integer
+        run_id:
+          type: integer
+        status:
+          type: string
+        target:
+          type: string
+        task:
+          type: string
+      type: object
+    github_com_kakwa_strangle_internal_store.TaskStateRecord:
+      properties:
+        host:
+          type: string
+        last_changed_at:
+          type: string
+        last_diff:
+          type: string
+        last_error:
+          type: string
+        last_run_at:
+          type: string
+        last_run_id:
+          type: integer
+        status:
+          type: string
+        target:
+          type: string
+        task:
+          type: string
+      type: object
+    github_com_kakwa_strangle_internal_worker.WorkerStatus:
+      properties:
+        alive:
+          type: boolean
+        collection:
+          type: string
+        id:
+          type: integer
+        jobs:
+          type: integer
+        pid:
+          type: integer
+        restarts:
+          type: integer
+        socket:
+          type: string
+      type: object
+    internal_server.apiErrorDoc:
+      properties:
+        error:
+          type: string
+      type: object
+    internal_server.cancelRunResponseDoc:
+      properties:
+        id:
+          type: integer
+        state:
+          type: string
+      type: object
+    internal_server.collectionDetailResponseDoc:
+      properties:
+        links:
+          additionalProperties:
+            type: string
+          type: object
+        name:
+          type: string
+        org:
+          type: string
+        playbooks:
+          items:
+            $ref: '#/components/schemas/internal_server.playbookInfo'
+          type: array
+          uniqueItems: false
+      type: object
+    internal_server.collectionInfo:
+      properties:
+        name:
+          type: string
+        org:
+          type: string
+        playbooks:
+          items:
+            $ref: '#/components/schemas/internal_server.playbookInfo'
+          type: array
+          uniqueItems: false
+      type: object
+    internal_server.hostKeyDecisionRequestDoc:
+      properties:
+        fingerprint:
+          type: string
+        host:
+          type: string
+        target:
+          type: string
+      type: object
+    internal_server.hostKeyDecisionResponseDoc:
+      properties:
+        host:
+          type: string
+        status:
+          type: string
+      type: object
+    internal_server.loginRequestDoc:
+      properties:
+        password:
+          type: string
+        username:
+          type: string
+      type: object
+    internal_server.meResponseDoc:
+      properties:
+        authenticated:
+          type: boolean
+        username:
+          type: string
+      type: object
+    internal_server.messageResponseDoc:
+      properties:
+        status:
+          type: string
+      type: object
+    internal_server.orgInfo:
+      properties:
+        collections:
+          items:
+            $ref: '#/components/schemas/internal_server.collectionInfo'
+          type: array
+          uniqueItems: false
+        name:
+          type: string
+      type: object
+    internal_server.playbookInfo:
+      properties:
+        inventory:
+          type: string
+        last_run_at:
+          type: string
+        last_status:
+          description: ok | failed | ""
+          type: string
+        name:
+          type: string
+        playbook:
+          type: string
+      type: object
+    internal_server.runAcceptedResponseDoc:
+      properties:
+        check:
+          type: boolean
+        playbook:
+          type: string
+        run_id:
+          type: integer
+        status:
+          type: string
+        target:
+          type: string
+      type: object
+    internal_server.runRequestDoc:
+      properties:
+        check:
+          type: boolean
+        playbook:
+          type: string
+        target:
+          type: string
+      type: object
+    internal_server.syncRequestDoc:
+      properties:
+        branch:
+          type: string
+        target:
+          type: string
+      type: object
+    internal_server.syncResponseDoc:
+      properties:
+        changed:
+          type: boolean
+        rev:
+          type: string
+        target:
+          type: string
+      type: object
+    internal_server.tokenCreateRequestDoc:
+      properties:
+        name:
+          type: string
+        ttl_hours:
+          type: integer
+      type: object
+    internal_server.tokenCreateResponseDoc:
+      properties:
+        raw:
+          type: string
+        token:
+          $ref: '#/components/schemas/github_com_kakwa_strangle_internal_auth.Token'
+      type: object
+  securitySchemes:
+    sessionCookie:
+      description: Session cookie returned by POST /api/v1/login.
+      in: cookie
+      name: strangle_session
+      type: apiKey
+    syncToken:
+      description: Static auth.token, accepted by the sync endpoints.
+      in: header
+      name: X-Strangle-Token
+      type: apiKey
+    userBearer:
+      bearerFormat: st_
+      description: Personal access token created through POST /api/v1/tokens.
+      scheme: bearer
+      type: http
+externalDocs:
+  description: ""
+  url: ""
+info:
+  description: HTTP API for running, inspecting and administering Ansible playbook
+    collections.
+  license:
+    name: GPL-3.0
+  title: Strangle API
+  version: v1
+openapi: 3.1.0
+paths:
+  /api/docs:
+    get:
+      operationId: get_api_docs
+      responses:
+        "200":
+          content:
+            text/html:
+              schema:
+                type: string
+          description: Swagger UI
+      summary: Swagger UI for the versioned API
+      tags:
+      - system
+  /api/v1/health:
+    get:
+      operationId: get_health
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.messageResponseDoc'
+          description: Server is up
+      summary: Liveness probe
+      tags:
+      - system
+  /api/v1/hosts:
+    get:
+      operationId: get_hosts
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/github_com_kakwa_strangle_internal_store.HostRecord'
+                type: array
+          description: Hosts
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: store error
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: List known hosts
+      tags:
+      - hosts
+  /api/v1/hosts/{host}/changes:
+    get:
+      operationId: get_hosts_host_changes
+      parameters:
+      - description: Inventory host name
+        in: path
+        name: host
+        required: true
+        schema:
+          type: string
+      - description: Maximum number of entries
+        in: query
+        name: limit
+        schema:
+          default: 200
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/github_com_kakwa_strangle_internal_store.TaskStateRecord'
+                type: array
+          description: Task changes
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: store error
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Latest changes of one host
+      tags:
+      - hosts
+  /api/v1/hosts/{host}/runs:
+    get:
+      operationId: get_hosts_host_runs
+      parameters:
+      - description: Inventory host name
+        in: path
+        name: host
+        required: true
+        schema:
+          type: string
+      - description: Maximum number of entries
+        in: query
+        name: limit
+        schema:
+          default: 10
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/github_com_kakwa_strangle_internal_store.HostRunRecord'
+                type: array
+          description: Host runs
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: store error
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Run history of one host
+      tags:
+      - hosts
+  /api/v1/login:
+    post:
+      operationId: post_login
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/internal_server.loginRequestDoc'
+              description: credentials
+              summary: request
+        description: credentials
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.meResponseDoc'
+          description: Authenticated; sets the strangle_session cookie
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: invalid JSON
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: invalid credentials
+      summary: Log in and start a session
+      tags:
+      - auth
+  /api/v1/logout:
+    post:
+      operationId: post_logout
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.messageResponseDoc'
+          description: Logged out
+      summary: Clear the session cookie
+      tags:
+      - auth
+  /api/v1/me:
+    get:
+      operationId: get_me
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.meResponseDoc'
+          description: Identity (or unauthenticated)
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+      summary: Current session identity
+      tags:
+      - auth
+  /api/v1/openapi.json:
+    get:
+      operationId: get_openapi_json
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties: {}
+                type: object
+          description: OpenAPI document
+      summary: OpenAPI 3 description of the versioned API
+      tags:
+      - system
+  /api/v1/orgs:
+    get:
+      operationId: get_orgs
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/internal_server.orgInfo'
+                type: array
+          description: Organizations
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: List visible organizations and their collections
+      tags:
+      - collections
+  /api/v1/orgs/{org}:
+    get:
+      operationId: get_orgs_org
+      parameters:
+      - description: Organization name
+        in: path
+        name: org
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.orgInfo'
+          description: Organization
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: unknown org
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Describe one organization
+      tags:
+      - collections
+  /api/v1/orgs/{org}/collections:
+    get:
+      operationId: get_orgs_org_collections
+      parameters:
+      - description: Organization name
+        in: path
+        name: org
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/internal_server.collectionInfo'
+                type: array
+          description: Collections
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: unknown org
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: List the collections of an organization
+      tags:
+      - collections
+  /api/v1/orgs/{org}/collections/{collection}:
+    get:
+      operationId: get_orgs_org_collections_collection
+      parameters:
+      - description: Organization name
+        in: path
+        name: org
+        required: true
+        schema:
+          type: string
+      - description: Collection (target) name
+        in: path
+        name: collection
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.collectionDetailResponseDoc'
+          description: Collection
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: access denied
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: unknown collection
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Describe one collection and its sub-resource links
+      tags:
+      - collections
+  /api/v1/orgs/{org}/collections/{collection}/hostkeys:
+    get:
+      operationId: get_orgs_org_collections_collection_hostkeys
+      parameters:
+      - description: Organization name
+        in: path
+        name: org
+        required: true
+        schema:
+          type: string
+      - description: Collection (target) name
+        in: path
+        name: collection
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/github_com_kakwa_strangle_internal_sshpool.HostKey'
+                type: array
+          description: Host keys
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: access denied
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: unknown collection
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Pending SSH host keys of this collection
+      tags:
+      - ssh
+  /api/v1/orgs/{org}/collections/{collection}/hostkeys/accept:
+    post:
+      operationId: post_orgs_org_collections_collection_hostkeys_accept
+      parameters:
+      - description: Organization name
+        in: path
+        name: org
+        required: true
+        schema:
+          type: string
+      - description: Collection (target) name
+        in: path
+        name: collection
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/internal_server.hostKeyDecisionRequestDoc'
+              description: host key decision
+              summary: request
+        description: host key decision
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.hostKeyDecisionResponseDoc'
+          description: Approved
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: invalid decision
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: access denied
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: unknown collection
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Approve a pending SSH host key
+      tags:
+      - ssh
+  /api/v1/orgs/{org}/collections/{collection}/hostkeys/reject:
+    post:
+      operationId: post_orgs_org_collections_collection_hostkeys_reject
+      parameters:
+      - description: Organization name
+        in: path
+        name: org
+        required: true
+        schema:
+          type: string
+      - description: Collection (target) name
+        in: path
+        name: collection
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/internal_server.hostKeyDecisionRequestDoc'
+              description: host key decision
+              summary: request
+        description: host key decision
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.hostKeyDecisionResponseDoc'
+          description: Rejected
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: invalid decision
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: access denied
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: unknown collection
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Reject a pending SSH host key
+      tags:
+      - ssh
+  /api/v1/orgs/{org}/collections/{collection}/hosts:
+    get:
+      operationId: get_orgs_org_collections_collection_hosts
+      parameters:
+      - description: Organization name
+        in: path
+        name: org
+        required: true
+        schema:
+          type: string
+      - description: Collection (target) name
+        in: path
+        name: collection
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/github_com_kakwa_strangle_internal_store.HostRecord'
+                type: array
+          description: Hosts
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: access denied
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: unknown collection
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: store error
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Hosts of this collection
+      tags:
+      - hosts
+  /api/v1/orgs/{org}/collections/{collection}/hosts/{host}/changes:
+    get:
+      operationId: get_orgs_org_collections_collection_hosts_host_changes
+      parameters:
+      - description: Organization name
+        in: path
+        name: org
+        required: true
+        schema:
+          type: string
+      - description: Collection (target) name
+        in: path
+        name: collection
+        required: true
+        schema:
+          type: string
+      - description: Inventory host name
+        in: path
+        name: host
+        required: true
+        schema:
+          type: string
+      - description: Maximum number of entries
+        in: query
+        name: limit
+        schema:
+          default: 200
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/github_com_kakwa_strangle_internal_store.TaskStateRecord'
+                type: array
+          description: Task changes
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: access denied
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: unknown collection
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: store error
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Latest changes of one host in this collection
+      tags:
+      - hosts
+  /api/v1/orgs/{org}/collections/{collection}/hosts/{host}/runs:
+    get:
+      operationId: get_orgs_org_collections_collection_hosts_host_runs
+      parameters:
+      - description: Organization name
+        in: path
+        name: org
+        required: true
+        schema:
+          type: string
+      - description: Collection (target) name
+        in: path
+        name: collection
+        required: true
+        schema:
+          type: string
+      - description: Inventory host name
+        in: path
+        name: host
+        required: true
+        schema:
+          type: string
+      - description: Maximum number of entries
+        in: query
+        name: limit
+        schema:
+          default: 10
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/github_com_kakwa_strangle_internal_store.HostRunRecord'
+                type: array
+          description: Host runs
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: access denied
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: unknown collection
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: store error
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Run history of one host in this collection
+      tags:
+      - hosts
+  /api/v1/orgs/{org}/collections/{collection}/playbooks:
+    get:
+      operationId: get_orgs_org_collections_collection_playbooks
+      parameters:
+      - description: Organization name
+        in: path
+        name: org
+        required: true
+        schema:
+          type: string
+      - description: Collection (target) name
+        in: path
+        name: collection
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  items:
+                    $ref: '#/components/schemas/internal_server.playbookInfo'
+                  type: array
+                type: object
+          description: Playbooks
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: access denied
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: unknown collection
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: store error
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Playbooks of this collection
+      tags:
+      - playbooks
+  /api/v1/orgs/{org}/collections/{collection}/run:
+    post:
+      operationId: post_orgs_org_collections_collection_run
+      parameters:
+      - description: Organization name
+        in: path
+        name: org
+        required: true
+        schema:
+          type: string
+      - description: Collection (target) name
+        in: path
+        name: collection
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/internal_server.runRequestDoc'
+              description: run request
+              summary: request
+        description: run request
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.runAcceptedResponseDoc'
+          description: Queued
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: invalid request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: access denied
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: unknown playbook
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: store error
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Queue a playbook run in this collection
+      tags:
+      - runs
+  /api/v1/orgs/{org}/collections/{collection}/runs:
+    get:
+      operationId: get_orgs_org_collections_collection_runs
+      parameters:
+      - description: Organization name
+        in: path
+        name: org
+        required: true
+        schema:
+          type: string
+      - description: Collection (target) name
+        in: path
+        name: collection
+        required: true
+        schema:
+          type: string
+      - description: Only runs of this playbook
+        in: query
+        name: playbook
+        schema:
+          type: string
+      - description: Only runs that mention this host
+        in: query
+        name: host
+        schema:
+          type: string
+      - description: Inclusive RFC3339 start time
+        in: query
+        name: from
+        schema:
+          type: string
+      - description: Exclusive RFC3339 end time
+        in: query
+        name: to
+        schema:
+          type: string
+      - description: Maximum number of runs
+        in: query
+        name: limit
+        schema:
+          default: 50
+          type: integer
+      - description: Number of matching runs to skip
+        in: query
+        name: offset
+        schema:
+          default: 0
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/github_com_kakwa_strangle_internal_store.RunRecord'
+                type: array
+          description: Runs
+          headers:
+            X-Total-Count:
+              description: Total matching runs before pagination
+              schema:
+                type: integer
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: invalid filter
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: access denied
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: unknown collection
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: store error
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: List runs of this collection
+      tags:
+      - runs
+  /api/v1/orgs/{org}/collections/{collection}/runs/{id}:
+    get:
+      operationId: get_orgs_org_collections_collection_runs_id
+      parameters:
+      - description: Organization name
+        in: path
+        name: org
+        required: true
+        schema:
+          type: string
+      - description: Collection (target) name
+        in: path
+        name: collection
+        required: true
+        schema:
+          type: string
+      - description: Numeric run identifier
+        in: path
+        name: id
+        required: true
+        schema:
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_kakwa_strangle_internal_store.RunRecord'
+          description: Run
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: invalid run id
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: access denied
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: run not found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: store error
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Run details for this collection
+      tags:
+      - runs
+  /api/v1/orgs/{org}/collections/{collection}/runs/{id}/cancel:
+    post:
+      operationId: post_orgs_org_collections_collection_runs_id_cancel
+      parameters:
+      - description: Organization name
+        in: path
+        name: org
+        required: true
+        schema:
+          type: string
+      - description: Collection (target) name
+        in: path
+        name: collection
+        required: true
+        schema:
+          type: string
+      - description: Numeric run identifier
+        in: path
+        name: id
+        required: true
+        schema:
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.cancelRunResponseDoc'
+          description: Cancellation requested
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: invalid run id
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: access denied
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: run not found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: run is not active
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: store error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: cancellation unavailable
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Cancel a queued or running job
+      tags:
+      - runs
+  /api/v1/orgs/{org}/collections/{collection}/runs/{id}/tasks:
+    get:
+      operationId: get_orgs_org_collections_collection_runs_id_tasks
+      parameters:
+      - description: Organization name
+        in: path
+        name: org
+        required: true
+        schema:
+          type: string
+      - description: Collection (target) name
+        in: path
+        name: collection
+        required: true
+        schema:
+          type: string
+      - description: Numeric run identifier
+        in: path
+        name: id
+        required: true
+        schema:
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/github_com_kakwa_strangle_internal_store.TaskRunRecord'
+                type: array
+          description: Task runs
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: invalid run id
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: access denied
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: run not found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: store error
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Per-task history of a run
+      tags:
+      - runs
+  /api/v1/orgs/{org}/collections/{collection}/ssh/stats:
+    get:
+      operationId: get_orgs_org_collections_collection_ssh_stats
+      parameters:
+      - description: Organization name
+        in: path
+        name: org
+        required: true
+        schema:
+          type: string
+      - description: Collection (target) name
+        in: path
+        name: collection
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  $ref: '#/components/schemas/github_com_kakwa_strangle_internal_sshpool.Stats'
+                type: object
+          description: Pool stats
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: access denied
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: unknown collection
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: SSH connection pool counters
+      tags:
+      - ssh
+  /api/v1/orgs/{org}/collections/{collection}/stats:
+    get:
+      operationId: get_orgs_org_collections_collection_stats
+      parameters:
+      - description: Organization name
+        in: path
+        name: org
+        required: true
+        schema:
+          type: string
+      - description: Collection (target) name
+        in: path
+        name: collection
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_kakwa_strangle_internal_store.Stats'
+          description: Statistics
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: access denied
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: unknown collection
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: store error
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Statistics for this collection
+      tags:
+      - stats
+  /api/v1/orgs/{org}/collections/{collection}/sync:
+    post:
+      operationId: post_orgs_org_collections_collection_sync
+      parameters:
+      - description: Organization name
+        in: path
+        name: org
+        required: true
+        schema:
+          type: string
+      - description: Collection (target) name
+        in: path
+        name: collection
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/internal_server.syncRequestDoc'
+              description: sync request
+              summary: request
+        description: sync request
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.syncResponseDoc'
+          description: Synchronized
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: invalid request or not a git collection
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: missing or invalid credentials
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: access denied
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: unknown target
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: git failure
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      - syncToken: []
+      summary: Synchronize this collection
+      tags:
+      - collections
+  /api/v1/playbooks:
+    get:
+      operationId: get_playbooks
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                additionalProperties:
+                  items:
+                    $ref: '#/components/schemas/internal_server.playbookInfo'
+                  type: array
+                type: object
+          description: Playbooks
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: store error
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Configured playbooks grouped by collection
+      tags:
+      - playbooks
+  /api/v1/run:
+    post:
+      operationId: post_run
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/internal_server.runRequestDoc'
+              description: run request
+              summary: request
+        description: run request
+        required: true
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.runAcceptedResponseDoc'
+          description: Queued
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: invalid request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: access denied
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: unknown playbook
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: store error
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Queue a playbook run (legacy alias for collection runs)
+      tags:
+      - runs
+  /api/v1/runs:
+    get:
+      operationId: get_runs
+      parameters:
+      - description: Only runs of this playbook
+        in: query
+        name: playbook
+        schema:
+          type: string
+      - description: Only runs that mention this host
+        in: query
+        name: host
+        schema:
+          type: string
+      - description: Inclusive RFC3339 start time
+        in: query
+        name: from
+        schema:
+          type: string
+      - description: Exclusive RFC3339 end time
+        in: query
+        name: to
+        schema:
+          type: string
+      - description: Maximum number of runs
+        in: query
+        name: limit
+        schema:
+          default: 50
+          type: integer
+      - description: Number of matching runs to skip
+        in: query
+        name: offset
+        schema:
+          default: 0
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/github_com_kakwa_strangle_internal_store.RunRecord'
+                type: array
+          description: Runs
+          headers:
+            X-Total-Count:
+              description: Total matching runs before pagination
+              schema:
+                type: integer
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: invalid filter
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: store error
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: List runs without captured output
+      tags:
+      - runs
+  /api/v1/runs/{id}:
+    get:
+      operationId: get_runs_id
+      parameters:
+      - description: Numeric run identifier
+        in: path
+        name: id
+        required: true
+        schema:
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_kakwa_strangle_internal_store.RunRecord'
+          description: Run
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: invalid run id
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: run not found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: store error
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Run details including captured output
+      tags:
+      - runs
+  /api/v1/stats:
+    get:
+      operationId: get_stats
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/github_com_kakwa_strangle_internal_store.Stats'
+          description: Statistics
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: store error
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Aggregate statistics for visible collections
+      tags:
+      - stats
+  /api/v1/sync:
+    post:
+      operationId: post_sync
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/internal_server.syncRequestDoc'
+              description: sync request
+              summary: request
+        description: sync request
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.syncResponseDoc'
+          description: Synchronized
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: invalid request or not a git collection
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: missing or invalid credentials
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: access denied
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: unknown target
+        "502":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: git failure
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      - syncToken: []
+      summary: Synchronize a git-backed collection
+      tags:
+      - collections
+  /api/v1/tokens:
+    get:
+      operationId: get_tokens
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/github_com_kakwa_strangle_internal_auth.Token'
+                type: array
+          description: Tokens
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: a user account is required
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: token storage is not configured
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: List personal access tokens
+      tags:
+      - auth
+    post:
+      operationId: post_tokens
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/internal_server.tokenCreateRequestDoc'
+              description: token details
+              summary: request
+        description: token details
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.tokenCreateResponseDoc'
+          description: Created; raw value is shown once
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: invalid request
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: a user account is required
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: token already exists
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: token storage is not configured
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Create a personal access token
+      tags:
+      - auth
+  /api/v1/tokens/{name}:
+    delete:
+      operationId: delete_tokens_name
+      parameters:
+      - description: Token name
+        in: path
+        name: name
+        required: true
+        schema:
+          type: string
+      responses:
+        "204":
+          content:
+            application/json:
+              schema:
+                type: string
+          description: Revoked
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: a user account is required
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: token not found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: store error
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: token storage is not configured
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Revoke a personal access token
+      tags:
+      - auth
+  /api/v1/workers:
+    get:
+      operationId: get_workers
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/github_com_kakwa_strangle_internal_worker.WorkerStatus'
+                type: array
+          description: Workers
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/internal_server.apiErrorDoc'
+          description: not authenticated
+      security:
+      - sessionCookie: []
+      - userBearer: []
+      summary: Worker pool status
+      tags:
+      - workers
+servers:
+- url: /
