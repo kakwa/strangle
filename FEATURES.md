@@ -13,7 +13,7 @@ command line · **[SCHED]** scheduling · **[GIT]** git-backed collections ·
 
 ## TODO
 
-- [x] 1. [INFRA] Child worker processes with unix-socket IPC between the server and the workers (gRPC)
+- [x] 1. [INFRA] Child worker processes with unix-socket IPC between the server and the workers (JSON-RPC)
 - [x] 2. [INFRA] [DB] Job queueing with river (postgres-backed job queue)
 - [x] 3. [INFRA] [SCHED] Master server / scheduler and basic worker manager (picks jobs through the postgres DB)
 - [x] 4. [GIT] [API] Git-backed collections: webhook + auth token for updates, branch handling and branch templating in strangle.yml

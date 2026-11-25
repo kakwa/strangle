@@ -1,7 +1,7 @@
 # Documentation
 
 - [Architecture](architecture.md) — the master/worker process model, the
-  gRPC runner service, worker supervision, the job queue, the store and
+  JSON-RPC worker protocol, worker supervision, the job queue, the store and
   shutdown.
 - [Configuration](configuration.md) — full reference for `server.yml`,
   `collection.yml` and the per-target `strangle.yml`, including per-job

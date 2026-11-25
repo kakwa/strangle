@@ -3,7 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
-	"net"
+	"net/rpc"
 	"os"
 	"os/signal"
 	"syscall"
@@ -11,10 +11,9 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-	"google.golang.org/grpc"
 
 	"github.com/kakwa/strangle/internal/sandbox"
-	runnerv1 "github.com/kakwa/strangle/proto/strangle/v1"
+	"github.com/kakwa/strangle/internal/workeripc"
 )
 
 // TestMain lets the test binary double as the fake worker process: the
@@ -27,10 +26,10 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// runFakeWorker serves the Runner gRPC service on the given socket. It runs
+// runFakeWorker serves the worker JSON-RPC API on the given socket. It runs
 // until SIGTERM, or for FAKE_WORKER_LIFETIME when set (crash-loop tests).
-// With FAKE_WORKER_HUNG the Runner service is not registered, so Ping fails
-// with Unimplemented while the connection stays up (a hung worker).
+// With FAKE_WORKER_HUNG no service is registered, so Ping fails while the
+// socket stays open (a hung worker).
 func runFakeWorker(args []string) int {
 	var socket string
 	for i := 0; i < len(args); i++ {
@@ -41,19 +40,15 @@ func runFakeWorker(args []string) int {
 	if socket == "" {
 		return 1
 	}
-
-	lis, err := net.Listen("unix", socket)
-	if err != nil {
-		os.Stderr.WriteString(err.Error() + "\n")
-		return 1
-	}
 	defer os.Remove(socket)
 
-	srv := grpc.NewServer()
+	srv := rpc.NewServer()
 	if os.Getenv("FAKE_WORKER_HUNG") == "" {
-		runnerv1.RegisterRunnerServer(srv, fakeRunner{})
+		srv = workeripc.NewRPCServer(fakeHandler{})
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	done := make(chan struct{})
 	go func() {
 		sig := make(chan os.Signal, 1)
@@ -67,31 +62,25 @@ func runFakeWorker(args []string) int {
 		}
 		select {
 		case <-sig:
-			srv.GracefulStop()
 		case <-lifetime:
-			srv.Stop()
 		}
+		cancel()
 		close(done)
 	}()
 
-	if err := srv.Serve(lis); err != nil {
+	if err := workeripc.Serve(ctx, socket, srv, zap.NewNop(), 0); err != nil {
+		os.Stderr.WriteString(err.Error() + "\n")
 		return 1
 	}
 	<-done
 	return 0
 }
 
-// fakeRunner answers the Runner service with canned results.
-type fakeRunner struct {
-	runnerv1.UnimplementedRunnerServer
-}
+// fakeHandler answers Worker.RunPlaybook with a canned result.
+type fakeHandler struct{}
 
-func (fakeRunner) Ping(context.Context, *runnerv1.PingRequest) (*runnerv1.PingResponse, error) {
-	return &runnerv1.PingResponse{Ok: true}, nil
-}
-
-func (fakeRunner) RunPlaybook(context.Context, *runnerv1.RunPlaybookRequest) (*runnerv1.RunPlaybookResponse, error) {
-	return &runnerv1.RunPlaybookResponse{ExitCode: 0, Output: "fake output"}, nil
+func (fakeHandler) RunPlaybook(workeripc.RunArgs) workeripc.RunReply {
+	return workeripc.RunReply{Output: "fake output"}
 }
 
 // newFakeManager starts a manager whose workers are fake (this test binary).

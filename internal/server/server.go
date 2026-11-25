@@ -605,7 +605,7 @@ func (s *Server) buildRoutes() (http.Handler, *routeCatalog) {
 	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/playbooks", s.withCollectionAccess(handlePlaybooks))
 
 	// /api/v1/workers reports the master's worker pool: one entry per worker
-	// process, with liveness probed over gRPC.
+	// process, with liveness probed over the worker JSON-RPC API.
 	apiHandler(mux, "GET", apiPrefix+"/workers", func(w http.ResponseWriter, r *http.Request) {
 		if s.workers == nil {
 			writeJSON(w, http.StatusOK, []worker.WorkerStatus{})

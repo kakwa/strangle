@@ -17,7 +17,7 @@ strangle-server serve (master)
 strangle-server worker --socket /tmp/.../worker-N.sock   (× N, N = workers)
   ├── one embedded CPython interpreter + Ansible (go.nhat.io/cpy/v3)
   ├── SSH managers (one per job using the Go-managed transport)
-  └── gRPC Runner service over a unix socket
+  └── JSON-RPC worker API over a unix socket
 ```
 
 The master never executes Ansible. It dispatches each run to a worker
@@ -28,22 +28,25 @@ interpreter.
 The socket directory is created in the system temp directory; each socket is
 named `worker-<id>.sock`. The directory and stale sockets are removed on stop.
 
-## The Runner service
+## The worker protocol
 
-Defined in `proto/strangle/v1/runner.proto` (generated code in the same
-package):
+`internal/workeripc` defines a two-method JSON-RPC service on the worker's
+unix socket. It uses only the standard library (`net/rpc` with the
+`net/rpc/jsonrpc` codec): there is no schema and no generated code.
 
-- `Ping` — liveness probe.
-- `RunPlaybook(scope, working_dir, args)` — executes one playbook in the
-  worker's interpreter and returns the exit code, the captured stdout/stderr
-  and an error for failures outside the interpreter (setup, I/O, a closed
-  worker).
+- `Worker.Ping` — liveness probe.
+- `Worker.RunPlaybook` — executes one playbook in the worker's interpreter and
+  returns the exit code, the captured stdout/stderr, per-host facts and an
+  error for failures outside the interpreter (setup, I/O, a closed worker).
 
+The request carries `collection`, `scope`, `working_dir` and `args`.
 `scope` is the SSH scope key `<target>/<playbook name>` whose manager should
 serve the Go-managed SSH transport for this run (empty when the playbook
 does not use the transport). `args` is the full `ansible-playbook` argument
 list built by the applier (`--diff`, optionally `--check` for a dry run,
-`-i <inventory>`, the become flags, the playbook path).
+`-i <inventory>`, the become flags, the playbook path). Cancelling the
+master's call stops the master from waiting; the worker keeps the interpreter
+busy until the run finishes, so the next run cannot overlap it.
 
 ## Worker supervision
 
@@ -154,7 +157,7 @@ A worker's embedded interpreter installs the `strangle_facts` Ansible callback
 alongside the Go-managed SSH connection plugin. The callback accumulates every
 `ansible_facts` dictionary returned for a host (including the implicit
 `Gathering Facts` task) in JSON form; the runner passes that per-host map back
-over gRPC with the run output. `SaveRun` refreshes the host's `facts` jsonb
+with the run output. `SaveRun` refreshes the host's `facts` jsonb
 column only when the new run returned facts, so runs with `gather_facts: false`
 never erase the last known snapshot. Facts are exposed on the authenticated
 host endpoints and rendered in the host detail view.

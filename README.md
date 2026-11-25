@@ -19,8 +19,8 @@ duration, change/failed counts — are derived from the stored history.
 The server binary (`strangle-server serve`) owns the configuration, the HTTP API
 and the schedule. It spawns a pool of worker child processes
 (`strangle-server worker`), each owning one embedded Ansible interpreter, and
-dispatches playbook runs to them
-over unix sockets (a small gRPC service, `proto/strangle/v1/runner.proto`).
+dispatches playbook runs to them over unix sockets using a small JSON-RPC
+protocol (`internal/workeripc`, no code generation).
 A master supervises the workers: health pings, automatic restarts with
 backoff, and `GET /api/workers` for observability.
 
@@ -64,8 +64,8 @@ internal/
   sshpool/           Go-managed persistent SSH connections with host-key policies
   store/             run records and the Store interface (in-memory + PostgreSQL)
   db/                GORM/PostgreSQL implementation of the Store
-  worker/            worker pool: spawning, gRPC client, supervision and restarts
-proto/               the gRPC Runner service between master and workers
+  worker/            worker pool: spawning, dispatch, supervision and restarts
+  workeripc/         JSON-RPC protocol and transport between master and workers
 web/                 React (Vite) web UI, styled with Mantine; built assets are
                      embedded into the binary (go:embed)
 config/              base configuration, loaded by default

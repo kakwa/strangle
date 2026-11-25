@@ -34,11 +34,10 @@ import (
 	"github.com/kakwa/strangle/internal/sshpool"
 	"github.com/kakwa/strangle/internal/store"
 	"github.com/kakwa/strangle/internal/worker"
-	"github.com/kakwa/strangle/proto/strangle/v1"
+	"github.com/kakwa/strangle/internal/workeripc"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"google.golang.org/grpc"
 )
 
 var (
@@ -87,14 +86,14 @@ func serveCmd() *cobra.Command {
 }
 
 // workerCmd is the subcommand run inside a worker child process: it serves
-// the Runner gRPC service over a unix socket.
+// the worker JSON-RPC API over a unix socket.
 func workerCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "worker",
 		Short: "Run as a worker child process (started by the master, not for direct use).",
 		RunE:  runWorker,
 	}
-	cmd.Flags().StringVar(&socketPath, "socket", "", "unix socket path to serve the Runner gRPC service on (required)")
+	cmd.Flags().StringVar(&socketPath, "socket", "", "unix socket path to serve the worker JSON-RPC API on (required)")
 	cmd.Flags().StringVarP(&serverConfigPath, "server-config", "s", "config/server.yml", "path to the server configuration file")
 	cmd.Flags().StringVarP(&collectionConfigPath, "collection-config", "c", "config/collection.yml", "path to the collection configuration file")
 	cmd.Flags().StringVar(&sandboxManifestPath, "sandbox", "", "Landlock manifest written by the master (internal use)")
@@ -358,7 +357,7 @@ func queueMode(queue *riverqueue.Client) string {
 	return "direct"
 }
 
-// runWorker serves the Runner gRPC service inside a worker child process.
+// runWorker serves the worker JSON-RPC API inside a worker child process.
 func runWorker(cmd *cobra.Command, args []string) error {
 	if socketPath == "" {
 		return errors.New("--socket is required")
@@ -429,15 +428,13 @@ func runWorker(cmd *cobra.Command, args []string) error {
 	}
 	defer runner.Close()
 
-	srv := worker.NewServer(runner, multi)
-	grpcServer := grpc.NewServer(grpc.MaxRecvMsgSize(worker.MaxRecvBytes))
-	v1.RegisterRunnerServer(grpcServer, srv)
+	srv := workeripc.NewRPCServer(worker.NewServer(runner, multi))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	logger.Info("starting worker", zap.Int("pid", os.Getpid()), zap.String("socket", socketPath))
-	return worker.Run(ctx, socketPath, grpcServer, logger, 10*time.Second)
+	return workeripc.Serve(ctx, socketPath, srv, logger, 10*time.Second)
 }
 
 // newLogger builds a JSON logger on stderr at the given level.

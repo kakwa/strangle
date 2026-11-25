@@ -1,6 +1,7 @@
-// Package worker runs strangle playbook jobs: the worker process serves the
-// Runner gRPC service over a unix socket (worker.go), and the master side
+// Package worker runs strangle playbook jobs: the worker process executes
+// playbooks in its embedded interpreter (worker.go), while the master side
 // spawns, supervises and dispatches to worker child processes (manager.go).
+// Master/worker communication lives in internal/workeripc (JSON-RPC).
 package worker
 
 import (
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/internal/sandbox"
+	"github.com/kakwa/strangle/internal/workeripc"
 	"go.uber.org/zap"
 )
 
@@ -68,7 +70,7 @@ type slot struct {
 	collection string    // non-empty for sandboxed workers pinned to a collection
 	manifest   string    // sandbox manifest path, empty when sandboxing is off
 	cmd        *exec.Cmd // current process, nil while (re)spawning or dead
-	cli        *Client
+	cli        *workeripc.Client
 	fails      int // consecutive failures since the last clean run
 	restarts   int
 	lastStart  time.Time // when the current process came up
@@ -259,7 +261,7 @@ func (m *Manager) start(s *slot) error {
 		return fmt.Errorf("start process: %w", err)
 	}
 
-	cli, err := Dial(m.ctx, s.socket)
+	cli, err := workeripc.Dial(m.ctx, s.socket)
 	if err != nil {
 		// Kill the whole group: the process is ours (Setpgid) and may
 		// have started children of its own.
@@ -496,7 +498,7 @@ func (m *Manager) RunPlaybook(ctx context.Context, collection, scope, workingDir
 	}
 	n := len(m.slots)
 	var s *slot
-	var cli *Client
+	var cli *workeripc.Client
 	for i := 0; i < n; i++ {
 		c := m.slots[(m.rr+i)%n]
 		if c.dead || c.cli == nil {
@@ -528,11 +530,11 @@ func (m *Manager) RunPlaybook(ctx context.Context, collection, scope, workingDir
 	if err != nil {
 		return 0, output, facts, err
 	}
-	return int(code), output, facts, nil
+	return code, output, facts, nil
 }
 
 // WorkerStatuses returns one entry per worker slot, with liveness probed
-// over gRPC.
+// over the worker's JSON-RPC API.
 func (m *Manager) WorkerStatuses(ctx context.Context) []WorkerStatus {
 	m.mu.Lock()
 	slots := make([]*slot, len(m.slots))
@@ -574,7 +576,7 @@ func (m *Manager) Down() <-chan struct{} {
 	return m.down
 }
 
-// Stop terminates every worker child process, closes the gRPC connections
+// Stop terminates every worker child process, closes the client connections
 // and removes the socket directory. It is safe to call more than once.
 func (m *Manager) Stop() error {
 	m.mu.Lock()
@@ -587,7 +589,7 @@ func (m *Manager) Stop() error {
 	close(m.stopCh)
 
 	m.mu.Lock()
-	var clients []*Client
+	var clients []*workeripc.Client
 	var procs []*exec.Cmd
 	for _, s := range m.slots {
 		if s.cli != nil {

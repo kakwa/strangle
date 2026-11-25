@@ -38,7 +38,7 @@ const (
 )
 
 // Rule is one path allowed by a sandbox. ResolveUnix is needed for pathname
-// unix sockets such as the worker's gRPC socket. Refer allows renames and
+// unix sockets such as the worker's API socket. Refer allows renames and
 // links between directories inside the scratch tree.
 type Rule struct {
 	Path          string `json:"path"`
