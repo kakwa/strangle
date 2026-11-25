@@ -71,15 +71,18 @@ serialized inside that worker, so extra jobs queue behind the in-flight one.
 Runs flow through a postgres-backed [River](https://github.com/riverqueue/river)
 queue (`internal/riverqueue`):
 
-- The scheduler (`internal/scheduler`) runs a cycle immediately at startup and
-  then every `interval`. Each cycle enqueues one job per (target, playbook)
-  pair. `POST /api/run` enqueues a single job the same way.
+- The scheduler (`internal/scheduler`) owns one timer per (target, playbook)
+  pair. A job's `schedule` (duration or cron) decides when it is enqueued; a
+  job without one runs at startup and then every `interval` from server.yml.
+  The live job list is reconciled every ten seconds, so a git sync can change
+  schedules without a restart. `POST /api/run` enqueues a single job the same
+  way.
 - A River client in the master process consumes the `playbooks` queue with
   `MaxWorkers` = `workers`, so at most as many runs execute concurrently as
   there are worker processes.
 - A run that outlives 30 minutes is canceled (its result is still recorded by
   the applier). A failed job gets up to 3 attempts in total; the next
-  scheduler cycle re-enqueues the playbook regardless, so this only bounds
+  scheduled run re-enqueues the playbook regardless, so this only bounds
   immediate re-runs.
 - The River client runs on its own context: a `SIGTERM` must not hard-cancel
   in-flight runs; shutdown drains the queue instead (see below).
@@ -87,8 +90,8 @@ queue (`internal/riverqueue`):
 ### Without a database
 
 An in-memory store is used (history is lost on restart) and runs execute
-directly: the scheduler calls the applier's cycle, and `POST /api/run` starts
-a background goroutine with a 30-minute timeout.
+directly: the scheduler starts a background goroutine per due job, and
+`POST /api/run` does the same. Both use a 30-minute timeout.
 
 ## The applier
 
@@ -143,7 +146,7 @@ On `SIGINT`/`SIGTERM` the master shuts down in an order that protects the
 history of in-flight runs (they execute inside workers and write to the
 store as they finish):
 
-1. Stop the scheduler (no new cycles, no new enqueues).
+1. Stop the scheduler (no new jobs are enqueued).
 2. Drain the River queue (up to 10 minutes), letting in-flight runs finish.
 3. Stop the workers (terminate the child processes).
 4. Close the store.

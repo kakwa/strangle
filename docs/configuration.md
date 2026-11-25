@@ -24,7 +24,7 @@ Process-level settings for the master process.
 |-----|---------|-------------|
 | `listen_addr` | `:8080` | HTTP listen address (API and web UI). |
 | `log_level` | `info` | `debug`, `info`, `warn` or `error`. JSON logs on stderr. |
-| `interval` | `15m` | How often a full cycle over every target's playbooks is run. A cycle runs immediately at startup, then on every tick. |
+| `interval` | `15m` | Fallback for jobs without their own schedule in `strangle.yml`. Such jobs run immediately at startup, then on every tick (the original behaviour). |
 | `workers` | `1` | Worker child processes. Each owns one embedded Ansible interpreter, so this is the maximum number of concurrent playbook runs. |
 | `database.dsn` | — | PostgreSQL DSN. Without a DSN an in-memory store is used (history is lost on restart) and runs execute directly instead of through the job queue. |
 | `auth.token` | — | When set, `POST /api/sync` (without a UI session) requires the token, either as `Authorization: Bearer <token>` or as the webhook-friendly `X-Strangle-Token: <token>` header. Independent of the UI authentication below. |
@@ -160,11 +160,62 @@ working_dir: playbooks             # optional; defaults to the target path
   block.
 - Playbook names must match `[A-Za-z0-9._-]`.
 
+### Job schedules
+
+Each job can set its own cadence in `strangle.yml`, either as a duration
+(`interval`) or as a cron expression (`schedule`):
+
+```yaml
+# Optional default for jobs that do not set their own.
+schedule: "*/5 * * * *"        # every five minutes
+
+playbooks:
+  - name: hypervisors
+    playbook: hypervisor.yml
+    inventory: inventory
+    schedule: "0 3 * * 1"      # Mondays at 03:00
+  - name: base_infra
+    playbook: infra.yml
+    inventory: inventory
+    interval: 30m              # duration shorthand
+  - name: manual_only
+    playbook: manual.yml
+    inventory: inventory
+    schedule: "@off"           # never scheduled automatically
+```
+
+Precedence is **job → target → server**: a job's `schedule`/`interval` wins,
+then the top-level `schedule`/`interval` in `strangle.yml`, then
+`server.yml`'s `interval`. Setting both `schedule` and `interval` at the same
+level is a configuration error.
+
+A job with an explicit schedule waits for its first matching time after the
+master starts. A job with no explicit schedule keeps the legacy behaviour: it
+runs once at startup and then every `server.yml` interval. A git sync that
+changes a target's schedules is picked up by the scheduler within about ten
+seconds.
+
+`schedule` accepts:
+
+- a Go duration such as `30m`, `1h30m` or `30s` (also `@every 30s`);
+- a standard five-field cron expression: `minute hour day-of-month month
+  day-of-week`, with `*`, `?`, lists (`1,15`), ranges (`mon-fri`) and steps
+  (`*/15`). Month and weekday names may be full or three-letter and are
+  case-insensitive; `0` and `7` both mean Sunday. When both day-of-month and
+  day-of-week are restricted, either one matches (Vixie cron semantics).
+- the aliases `@hourly`, `@daily` (or `@midnight`), `@weekly`, `@monthly`,
+  `@yearly` (or `@annually`);
+- `@off` (or quoted `"off"`) to disable automatic runs for that job.
+
+Cron times use the master's local timezone (set `TZ` for the process if it
+should not be the host default). Durations are measured from when the previous
+run finishes.
+
 ### Template variables in git-backed targets
 
-For git-backed targets, `working_dir`, `playbook` and `inventory` are
-interpreted as Go templates with two variables, so a branch can select
-different project content:
+For git-backed targets, `working_dir`, `playbook`, `inventory`, `schedule` and
+`interval` are interpreted as Go templates with two variables, so a branch can
+select different project content or cadence:
 
 | Variable | Value |
 |----------|-------|

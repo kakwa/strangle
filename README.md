@@ -22,11 +22,13 @@ over unix sockets (a small gRPC service, `proto/strangle/v1/runner.proto`).
 A master supervises the workers: health pings, automatic restarts with
 backoff, and `GET /api/workers` for observability.
 
-With a PostgreSQL DSN configured, playbook runs flow through a postgres-backed
-[River](https://github.com/riverqueue/river) job queue: each scheduler cycle
-enqueues one job per (target, playbook) pair, and a River client in the master
-consumes them with at most as many concurrent runs as there are workers.
-Without a DSN, an in-memory store is used and runs execute directly.
+Each (target, playbook) job has its own schedule — a duration, a cron
+expression, or the global fallback interval — and the scheduler enqueues it
+when due. With a PostgreSQL DSN configured, runs flow through a
+postgres-backed [River](https://github.com/riverqueue/river) job queue and a
+River client in the master consumes them with at most as many concurrent runs
+as there are workers. Without a DSN, an in-memory store is used and runs
+execute directly.
 
 Git-backed targets are cloned into their configured directory and pinned to a
 tracked ref (branch, tag or commit); `POST /api/sync` is a webhook that
@@ -49,7 +51,8 @@ internal/
   git/               in-process git operations (go-git), no system git binary
   inventory/         parses YAML inventory files into host groups and members
   parser/            parses ansible-playbook output (recap, task results, diffs)
-  scheduler/         runs a cycle immediately and on an interval
+  schedule/          parses durations, cron expressions and aliases
+  scheduler/         runs each job on its own schedule (live job list)
   riverqueue/        postgres-backed River job queue for playbook runs
   server/            HTTP API + serves the built web UI
   sshpool/           Go-managed persistent SSH connections with host-key policies
@@ -155,7 +158,7 @@ strangle serve [-s config/server.yml] [-c config/collection.yml]
 |-----------------|-----------------|--------------------------------------|
 | `listen_addr`   | `:8080`         | HTTP listen address                  |
 | `log_level`     | `info`          | `debug`, `info`, `warn` or `error`   |
-| `interval`      | `15m`           | How often a full cycle over every target is run |
+| `interval`      | `15m`           | Fallback for jobs without their own `schedule`/`interval` in `strangle.yml` |
 | `workers`       | `1`             | Worker child processes (one embedded interpreter each) |
 | `database.dsn`  | —               | PostgreSQL DSN; without a DSN an in-memory store is used |
 | `auth.token`    | —               | Bearer token for `POST /api/sync` (webhook), independent of UI authentication |
@@ -232,12 +235,28 @@ targets:
 ### strangle.yml — one per target
 
 Lives at the root of the target directory. Each entry of `playbooks` is a
-named job with its own playbook file, inventory and options. In git-backed
-targets, `working_dir`, `playbook` and `inventory` may use `{{ .Branch }}` and
-`{{ .Name }}` templates, e.g. `inventory: inventories/{{ .Branch }}.ini`.
+named job with its own playbook file, inventory, schedule and options:
 
-The full reference — every option, the Go-managed SSH transport and its
-host-key policies — is in [docs/configuration.md](docs/configuration.md).
+```yaml
+schedule: "*/5 * * * *"        # optional target-level default
+playbooks:
+  - name: hypervisors
+    playbook: hypervisor.yml
+    inventory: inventory
+    schedule: "0 3 * * 1"      # cron: Mondays at 03:00
+  - name: base_infra
+    playbook: infra.yml
+    inventory: inventory
+    interval: 30m              # duration shorthand
+```
+
+In git-backed targets, `working_dir`, `playbook`, `inventory`, `schedule` and
+`interval` may use `{{ .Branch }}` and `{{ .Name }}` templates, e.g.
+`inventory: inventories/{{ .Branch }}.ini`.
+
+The full reference — schedule syntax, every option, the Go-managed SSH
+transport and its host-key policies — is in
+[docs/configuration.md](docs/configuration.md).
 
 ## Running
 

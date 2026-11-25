@@ -14,11 +14,18 @@
 # options:
 #   user: kakwa
 #   become: true
+#
+# Schedules are per job (or per target here as a default). Use a duration
+# (`interval: 30m`), a five-field cron expression (`schedule: "0 3 * * 1"`),
+# an alias (`schedule: "@daily"`) or `schedule: "@off"` for manual-only jobs.
+# A job without one inherits server.yml's `interval` and runs at startup.
+# schedule: "*/5 * * * *"
 
 playbooks:
   - name: hypervisors
     playbook: ./hypervisor.yml
     inventory: ./inventory/hypervisor.yml
+    # schedule: "0 3 * * 1"   # overrides the target-level schedule above
     options:
       user: kakwa
       become: true

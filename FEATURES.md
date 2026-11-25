@@ -35,7 +35,7 @@ command line · **[SCHED]** scheduling · **[GIT]** git-backed collections ·
 - [x] 20. [API] [UI] Run detail: `GET /api/v1/orgs/{org}/collections/{collection}/runs/{id}` and a run view with the full captured output; stop inlining the full output of the last 50 runs into the collection's runs listing on every poll
 - [x] 21. [API] Filter a collection's runs (`/api/v1/orgs/{org}/collections/{collection}/runs`) by playbook, host and time range (+ pagination)
 - [x] 22. [UI] [SSH] UI for pending SSH host keys (approve/reject) and SSH pool stats — collection-scoped versioned endpoints under `/api/v<>/orgs/{org}/collections/{collection}`
-- [ ] 23. [SCHED] Per-target or per-playbook interval instead of the single global interval (ideally cron-like)
+- [x] 23. [SCHED] Per-target or per-playbook interval instead of the single global interval (ideally cron-like)
 - [ ] 24. [NOTIFY] Notify on run failure (webhook, email, slack or similar), configured per collection
 - [ ] 25. [DB] Task history: keep the per-task results of every run
 - [ ] 26. [DB] [UI] ansible_facts: collect, save and display them — a jsonb blob per host, refreshed by runs

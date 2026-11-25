@@ -7,7 +7,9 @@ listen_addr: ":8080"
 # Log level: debug, info, warn or error. Defaults to info.
 log_level: info
 
-# How often a full cycle over every target is run. Defaults to 15m.
+# Fallback for jobs that do not define their own schedule/interval in
+# strangle.yml. Those jobs run at startup and then on every tick.
+# Defaults to 15m.
 interval: 2m
 
 # PostgreSQL DSN for run history. Without a DSN strangle falls back to an

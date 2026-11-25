@@ -1,6 +1,6 @@
 // Package riverqueue runs playbook jobs through a postgres-backed River job
 // queue. The master enqueues one job per (target, playbook) pair - from the
-// scheduler cycle and from manual API triggers - and a River client in the
+// scheduler and from manual API triggers - and a River client in the
 // master process consumes them, dispatching each run to the worker pool with
 // at most as many concurrent runs as there are worker processes.
 package riverqueue
@@ -31,7 +31,7 @@ const (
 	jobTimeout = 30 * time.Minute
 
 	// maxAttempts is how many times a failed run is retried before River
-	// discards the job. The next scheduler cycle enqueues the playbook again
+	// discards the job. The next scheduled run enqueues the playbook again
 	// regardless, so this only bounds immediate re-runs.
 	maxAttempts = 3
 )

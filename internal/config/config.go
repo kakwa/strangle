@@ -1,14 +1,15 @@
 // Package config loads strangle's runtime configuration from three kinds of
 // YAML files:
 //
-//   - server.yml: process-level settings (listen address, log level, run
-//     interval, database, auth placeholder).
+//   - server.yml: process-level settings (listen address, log level, default
+//     run interval, database, auth placeholder).
 //   - collection.yml: the inventory of Ansible projects (targets) that
 //     strangle applies; a target may carry a git upstream that strangle
 //     clones and keeps in sync.
 //   - strangle.yml: one per target, at the root of the project directory.
 //     Each entry of its `playbooks` list is a named job with its own
-//     playbook file, inventory and Ansible/SSH options.
+//     playbook file, inventory, schedule (duration or cron) and Ansible/SSH
+//     options.
 //
 // Configuration is file-only: there are no environment variables.
 package config
@@ -24,6 +25,7 @@ import (
 	"text/template"
 	"time"
 
+	sched "github.com/kakwa/strangle/internal/schedule"
 	"gopkg.in/yaml.v3"
 )
 
@@ -59,7 +61,8 @@ type ServerConfig struct {
 	// LogLevel is the log level: debug, info, warn or error. Defaults to
 	// "info".
 	LogLevel string `yaml:"log_level,omitempty"`
-	// Interval is how often the applier runs a full cycle over every target.
+	// Interval is the fallback schedule for jobs that do not set one in
+	// strangle.yml. It preserves the original single-interval behaviour.
 	// Defaults to 15m.
 	Interval time.Duration `yaml:"interval,omitempty"`
 	// Database configures the run-history database.
@@ -176,6 +179,9 @@ type TargetConfig struct {
 	// Path.
 	WorkingDir string
 
+	// Schedule is the target-level default for jobs that do not set their
+	// own. Empty means jobs inherit server.yml's interval.
+	Schedule string
 	// Playbooks are the resolved, ordered jobs of this target.
 	Playbooks []PlaybookConfig
 }
@@ -196,6 +202,8 @@ func (t TargetConfig) Playbook(name string) (PlaybookConfig, bool) {
 type targetFile struct {
 	WorkingDir string         `yaml:"working_dir,omitempty"`
 	Options    OptionsSpec    `yaml:"options,omitempty"`
+	Schedule   string         `yaml:"schedule,omitempty"`
+	Interval   string         `yaml:"interval,omitempty"`
 	Playbooks  []PlaybookSpec `yaml:"playbooks"`
 }
 
@@ -209,6 +217,11 @@ type PlaybookSpec struct {
 	// Inventory is the inventory file or directory, relative to working_dir
 	// (or absolute).
 	Inventory string `yaml:"inventory"`
+	// Schedule is a duration or cron expression for this job. It overrides
+	// the target-level schedule.
+	Schedule string `yaml:"schedule,omitempty"`
+	// Interval is a duration shorthand for Schedule.
+	Interval string `yaml:"interval,omitempty"`
 	// Options override the target-level `options` defaults for this job.
 	Options OptionsSpec `yaml:"options,omitempty"`
 }
@@ -270,6 +283,10 @@ type PlaybookConfig struct {
 	Inventory string
 	// WorkingDir is the absolute directory the job runs from.
 	WorkingDir string
+	// Schedule is the resolved duration or cron expression for this job.
+	// Empty means it inherits server.yml's interval (and runs at startup,
+	// like the original global cycle).
+	Schedule string
 	// Options are the merged target-level and per-playbook options.
 	Options PlaybookOptions
 }
@@ -510,15 +527,21 @@ func LoadTarget(spec TargetSpec, path string, vars map[string]string) (TargetCon
 		file.WorkingDir = wd
 	}
 
+	targetSchedule, err := resolveSchedule(file.Schedule, file.Interval, td, fmt.Sprintf("target %q", spec.Name))
+	if err != nil {
+		return TargetConfig{}, err
+	}
+
 	org := spec.Org
 	if org == "" {
 		org = DefaultOrg
 	}
 	t := TargetConfig{
-		Name: spec.Name,
-		Org:  org,
-		Path: path,
-		Git:  spec.Git,
+		Name:     spec.Name,
+		Org:      org,
+		Path:     path,
+		Git:      spec.Git,
+		Schedule: targetSchedule,
 	}
 	if file.WorkingDir == "" {
 		t.WorkingDir = path
@@ -553,6 +576,14 @@ func LoadTarget(spec TargetSpec, path string, vars map[string]string) (TargetCon
 			return TargetConfig{}, fmt.Errorf("target %q: playbook %q needs an inventory", spec.Name, ps.Name)
 		}
 
+		pbSchedule, err := resolveSchedule(ps.Schedule, ps.Interval, td,
+			fmt.Sprintf("target %q: playbook %q", spec.Name, ps.Name))
+		if err != nil {
+			return TargetConfig{}, err
+		}
+		if pbSchedule == "" {
+			pbSchedule = targetSchedule
+		}
 		options, err := resolveOptions(mergeOptions(file.Options, ps.Options), path, ps.Name)
 		if err != nil {
 			return TargetConfig{}, fmt.Errorf("target %q: playbook %q: %w", spec.Name, ps.Name, err)
@@ -563,6 +594,7 @@ func LoadTarget(spec TargetSpec, path string, vars map[string]string) (TargetCon
 			TargetPath: path,
 			Playbook:   ps.Playbook,
 			Inventory:  ps.Inventory,
+			Schedule:   pbSchedule,
 			WorkingDir: t.WorkingDir,
 			Options:    options,
 		})
@@ -592,6 +624,41 @@ func (d templateData) render(s string) (string, error) {
 		return "", err
 	}
 	return buf.String(), nil
+}
+
+// resolveSchedule normalizes a target or playbook level schedule. `schedule`
+// accepts durations, cron expressions and aliases; `interval` is a duration
+// shorthand for the common case. Either one may be templated in git-backed
+// targets, so a branch can select a different cadence.
+func resolveSchedule(scheduleSpec, interval string, td templateData, where string) (string, error) {
+	if scheduleSpec != "" && interval != "" {
+		return "", fmt.Errorf("%s: set either schedule or interval, not both", where)
+	}
+	raw := scheduleSpec
+	if interval != "" {
+		rendered, err := td.render(interval)
+		if err != nil {
+			return "", fmt.Errorf("%s: interval: %w", where, err)
+		}
+		d, err := time.ParseDuration(rendered)
+		if err != nil || d <= 0 {
+			return "", fmt.Errorf("%s: interval %q must be a positive duration", where, interval)
+		}
+		raw = rendered
+	} else if raw != "" {
+		rendered, err := td.render(raw)
+		if err != nil {
+			return "", fmt.Errorf("%s: schedule: %w", where, err)
+		}
+		raw = rendered
+	}
+	if raw == "" {
+		return "", nil
+	}
+	if _, err := sched.Parse(raw); err != nil {
+		return "", fmt.Errorf("%s: %w", where, err)
+	}
+	return raw, nil
 }
 
 // validOrgName rejects path separators and other characters that would make

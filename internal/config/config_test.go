@@ -223,6 +223,9 @@ playbooks:
 		t.Errorf("WorkingDir = %q, want default %q", got, want)
 	}
 	pb := tr.Playbooks[0]
+	if pb.Schedule != "" {
+		t.Errorf("Schedule = %q, want empty (server interval)", pb.Schedule)
+	}
 	if pb.Options.SSH.Enabled || pb.Options.Become || pb.Options.User != "" {
 		t.Errorf("options should keep zero values: %+v", pb.Options)
 	}
@@ -234,6 +237,109 @@ playbooks:
 	}
 	if got := pb.Args(); !slices.Equal(got, []string{"--diff", "-i", "/abs/inventory", "/abs/site.yml"}) {
 		t.Errorf("Args() = %v", got)
+	}
+}
+
+func TestLoadSchedules(t *testing.T) {
+	serverPath, collectionPath := writeTree(t, "interval: 10m\n", collOne, `
+schedule: "*/5 * * * *"        # target-level default for every job
+playbooks:
+  - name: cron
+    playbook: site.yml
+    inventory: inventory
+  - name: interval
+    playbook: site.yml
+    inventory: inventory
+    interval: 30s              # duration shorthand overrides the default
+  - name: weekly
+    playbook: site.yml
+    inventory: inventory
+    schedule: "0 3 * * 1"
+  - name: manual
+    playbook: site.yml
+    inventory: inventory
+    schedule: "@off"
+`)
+	cfg, err := Load(serverPath, collectionPath)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	tr := cfg.Targets[0]
+	if tr.Schedule != "*/5 * * * *" {
+		t.Errorf("target Schedule = %q", tr.Schedule)
+	}
+	want := map[string]string{
+		"cron":     "*/5 * * * *",
+		"interval": "30s",
+		"weekly":   "0 3 * * 1",
+		"manual":   "@off",
+	}
+	for _, pb := range tr.Playbooks {
+		if got := want[pb.Name]; got != pb.Schedule {
+			t.Errorf("playbook %q Schedule = %q, want %q", pb.Name, pb.Schedule, got)
+		}
+	}
+}
+
+func TestLoadScheduleErrors(t *testing.T) {
+	cases := []struct {
+		name     string
+		strangle string
+		want     string
+	}{
+		{
+			name: "both fields",
+			strangle: `schedule: 5m
+interval: 5m
+playbooks:
+  - name: site
+    playbook: site.yml
+    inventory: inventory
+`,
+			want: "set either schedule or interval",
+		},
+		{
+			name: "invalid cron field",
+			strangle: `schedule: "60 * * * *"
+playbooks:
+  - name: site
+    playbook: site.yml
+    inventory: inventory
+`,
+			want: "minute",
+		},
+		{
+			name: "invalid interval",
+			strangle: `interval: nope
+playbooks:
+  - name: site
+    playbook: site.yml
+    inventory: inventory
+`,
+			want: "positive duration",
+		},
+		{
+			name: "invalid playbook schedule",
+			strangle: `playbooks:
+  - name: site
+    playbook: site.yml
+    inventory: inventory
+    schedule: "bogus"
+`,
+			want: "schedule",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			serverPath, collectionPath := writeTree(t, "", collOne, tc.strangle)
+			_, err := Load(serverPath, collectionPath)
+			if err == nil {
+				t.Fatal("Load() error = nil, want a schedule error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("Load() error = %q, want it to contain %q", err, tc.want)
+			}
+		})
 	}
 }
 

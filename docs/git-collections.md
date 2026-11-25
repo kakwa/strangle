@@ -65,14 +65,16 @@ A bad push is visible but cannot freeze the target: when the reloaded
 reported — the checkout is not rolled back.
 
 After a successful sync, the master refreshes the applier's view of the
-target's playbooks, so the effect (new playbooks, new branch) is visible from
-the next scheduler cycle.
+target's playbooks. The scheduler reconciles its live job list every ten
+seconds, so new jobs and changed `schedule` / `interval` values take effect
+without a restart.
 
 ## Branch templating
 
-In a git-backed target's `strangle.yml`, the `working_dir`, `playbook` and
-`inventory` fields are Go templates with two variables, so the content a job
-runs is selected by the tracked ref:
+In a git-backed target's `strangle.yml`, the `working_dir`, `playbook`,
+`inventory`, `schedule` and `interval` fields are Go templates with two
+variables, so the content a job runs and its cadence are selected by the
+tracked ref:
 
 | Variable | Value |
 |----------|-------|

@@ -549,12 +549,11 @@ func run(cmd *cobra.Command, args []string) error {
 	apr := applier.NewAnsible(collMgr.Targets(), mgr, st, logger)
 
 	// With a database, playbook runs flow through a postgres-backed River
-	// queue: each cycle enqueues one job per (target, playbook) pair and a
-	// River client in this process consumes them and dispatches runs to the
-	// worker pool. Without a database, playbooks run directly.
+	// queue and a River client in this process dispatches them to the worker
+	// pool. Without a database, playbooks run directly. The scheduler below
+	// decides when each individual (target, playbook) pair runs.
 	var queue *riverqueue.Client
 	var enqueue server.RunEnqueuer
-	var enqueueCycle func(ctx context.Context) error
 	if cfg.Server.Database.DSN != "" {
 		var err error
 		queue, err = riverqueue.Open(ctx, cfg.Server.Database.DSN, cfg.Server.Workers, apr.Trigger, logger)
@@ -563,32 +562,30 @@ func run(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to initialize job queue: %w", err)
 		}
 		enqueue = queue
-		enqueueCycle = func(ctx context.Context) error {
-			// Read the live target list: git-backed targets gain their
-			// playbooks only after a sync.
-			var firstErr error
-			for _, t := range collMgr.Targets() {
-				for _, pb := range t.Playbooks {
-					if _, err := queue.EnqueueRun(ctx, t.Name, pb.Name); err != nil {
-						logger.Error("failed to enqueue playbook",
-							zap.String("target", t.Name),
-							zap.String("playbook", pb.Name),
-							zap.Error(err),
-						)
-						if firstErr == nil {
-							firstErr = err
-						}
-					}
-				}
-			}
-			return firstErr
-		}
 	} else {
 		enqueue = directEnqueuer{apr: apr, logger: logger}
-		enqueueCycle = apr.RunCycle
 	}
 
-	sched := scheduler.New(cfg.Server.Interval, enqueueCycle, logger)
+	// Read the live target list on every reconcile: git-backed targets gain
+	// (or change) their playbooks and schedules only after a sync.
+	jobProvider := func() []scheduler.Job {
+		var jobs []scheduler.Job
+		for _, t := range collMgr.Targets() {
+			for _, pb := range t.Playbooks {
+				jobs = append(jobs, scheduler.Job{
+					Target:   t.Name,
+					Playbook: pb.Name,
+					Schedule: pb.Schedule,
+				})
+			}
+		}
+		return jobs
+	}
+	runScheduled := func(ctx context.Context, target, playbook string) error {
+		_, err := enqueue.EnqueueRun(ctx, target, playbook)
+		return err
+	}
+	sched := scheduler.New(cfg.Server.Interval, jobProvider, runScheduled, logger)
 	var syncer server.Syncer
 	if collMgr.HasGit() {
 		syncer = collMgr
@@ -616,7 +613,8 @@ func run(cmd *cobra.Command, args []string) error {
 
 	logger.Info("starting strangle",
 		zap.String("addr", cfg.Server.ListenAddr),
-		zap.Duration("interval", cfg.Server.Interval),
+		zap.Duration("default_interval", cfg.Server.Interval),
+		zap.Int("scheduled_jobs", len(jobProvider())),
 		zap.Int("workers", cfg.Server.Workers),
 		zap.String("queue", queueMode(queue)),
 		zap.Strings("targets", apr.TargetNames()),
@@ -643,7 +641,7 @@ func (d directEnqueuer) EnqueueRun(_ context.Context, target, playbook string) (
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
 		if err := d.apr.Trigger(ctx, target, playbook); err != nil {
-			d.logger.Error("manual run failed",
+			d.logger.Error("run failed",
 				zap.String("target", target),
 				zap.String("playbook", playbook),
 				zap.Error(err),
