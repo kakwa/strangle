@@ -51,16 +51,16 @@ type Host struct {
 
 // HostRun is a host's recap line for one run.
 type HostRun struct {
-	RunID         uint64 `gorm:"primaryKey"`
-	HostID        uint64 `gorm:"primaryKey"`
-	Status        string
-	Ok            int
-	Changed       int
-	Failed        int
-	Unreachable   int
-	Skipped       int
-	Rescued       int
-	Ignored       int
+	RunID       uint64 `gorm:"primaryKey"`
+	HostID      uint64 `gorm:"primaryKey"`
+	Status      string
+	Ok          int
+	Changed     int
+	Failed      int
+	Unreachable int
+	Skipped     int
+	Rescued     int
+	Ignored     int
 }
 
 // TaskState is the latest known state of one task on one host.
@@ -101,7 +101,7 @@ func Open(ctx context.Context, dsn string) (*DB, error) {
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
 
-	if err := gdb.WithContext(ctx).AutoMigrate(&Run{}, &Host{}, &HostRun{}, &TaskState{}, &UserRecord{}, &TokenRecord{}); err != nil {
+	if err := gdb.WithContext(ctx).AutoMigrate(&Run{}, &Host{}, &HostRun{}, &TaskState{}, &UserRecord{}, &TokenRecord{}, &CollectionMemberRecord{}); err != nil {
 		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
 
@@ -168,10 +168,10 @@ func (d *DB) SaveRun(ctx context.Context, in store.RunInput) error {
 		// Inventory snapshot: update known fields and membership.
 		for _, ih := range in.Inventory {
 			updates := map[string]any{
-				"ip":            ih.IP,
-				"user":          ih.User,
-				"groups":        strings.Join(ih.Groups, ","),
-				"in_inventory":  true,
+				"ip":           ih.IP,
+				"user":         ih.User,
+				"groups":       strings.Join(ih.Groups, ","),
+				"in_inventory": true,
 			}
 			if err := tx.Model(&Host{}).Where("target = ? AND name = ?", target, ih.Name).Updates(updates).Error; err != nil {
 				return err
@@ -257,9 +257,9 @@ func (d *DB) SaveRun(ctx context.Context, in store.RunInput) error {
 			}
 
 			updates := map[string]any{
-				"last_run_id":  run.ID,
-				"last_run_at":  run.FinishedAt,
-				"last_status":  t.Status,
+				"last_run_id": run.ID,
+				"last_run_at": run.FinishedAt,
+				"last_status": t.Status,
 			}
 			if t.Status == "changed" {
 				updates["last_changed_at"] = run.FinishedAt
@@ -341,22 +341,22 @@ func (d *DB) HostRuns(ctx context.Context, host string, limit int) ([]store.Host
 	out := make([]store.HostRunRecord, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, store.HostRunRecord{
-			RunID:        r.RunID,
-			Target:       r.HostTarget,
-			Host:         r.HostName,
-			Playbook:     r.Playbook,
-			StartedAt:    r.StartedAt,
-			DurationMS:   r.DurationMS,
-			ExitCode:     r.ExitCode,
-			Success:      r.Success,
-			Status:       r.Status,
-			Ok:           r.Ok,
-			Changed:      r.Changed,
-			Failed:       r.Failed,
-			Unreachable:  r.Unreachable,
-			Skipped:      r.Skipped,
-			Rescued:      r.Rescued,
-			Ignored:      r.Ignored,
+			RunID:       r.RunID,
+			Target:      r.HostTarget,
+			Host:        r.HostName,
+			Playbook:    r.Playbook,
+			StartedAt:   r.StartedAt,
+			DurationMS:  r.DurationMS,
+			ExitCode:    r.ExitCode,
+			Success:     r.Success,
+			Status:      r.Status,
+			Ok:          r.Ok,
+			Changed:     r.Changed,
+			Failed:      r.Failed,
+			Unreachable: r.Unreachable,
+			Skipped:     r.Skipped,
+			Rescued:     r.Rescued,
+			Ignored:     r.Ignored,
 		})
 	}
 	return out, nil
@@ -438,10 +438,10 @@ func (d *DB) Stats(ctx context.Context) (*store.Stats, error) {
 			Last      *time.Time
 		}{}
 		if err := d.db.WithContext(ctx).Model(&Run{}).
-			Select("COUNT(*) AS total, "+
-				"COUNT(*) FILTER (WHERE success) AS succeeded, "+
-				"COUNT(*) FILTER (WHERE NOT success) AS failed, "+
-				"AVG(duration_ms) AS avg_dur, "+
+			Select("COUNT(*) AS total, " +
+				"COUNT(*) FILTER (WHERE success) AS succeeded, " +
+				"COUNT(*) FILTER (WHERE NOT success) AS failed, " +
+				"AVG(duration_ms) AS avg_dur, " +
 				"MAX(finished_at) AS last").
 			Scan(&row).Error; err != nil {
 			return nil, err
@@ -465,8 +465,8 @@ func (d *DB) Stats(ctx context.Context) (*store.Stats, error) {
 		// expects an array here).
 		pbs := make([]store.PlaybookStats, 0)
 		err := d.db.WithContext(ctx).Model(&Run{}).
-			Select("target, playbook, COUNT(*) AS total, "+
-				"COUNT(*) FILTER (WHERE NOT success) AS failed, "+
+			Select("target, playbook, COUNT(*) AS total, " +
+				"COUNT(*) FILTER (WHERE NOT success) AS failed, " +
 				"MAX(finished_at) AS last_run_at").
 			Group("target, playbook").
 			Order("target, playbook").
@@ -560,5 +560,3 @@ func fromHostModel(h Host) store.HostRecord {
 		DisappearedAt: h.DisappearedAt,
 	}
 }
-
-

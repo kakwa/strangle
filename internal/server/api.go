@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -82,10 +83,15 @@ func (s *Server) collectionRuns(ctx context.Context, collection string, limit in
 	return out, nil
 }
 
-// collectionStats returns aggregate stats, restricted to one collection on
-// a collection-scoped route.
+// collectionStats returns aggregate stats for one collection.
 func (s *Server) collectionStats(ctx context.Context, collection string) (*store.Stats, error) {
-	if collection == "" {
+	return s.statsForTargets(ctx, map[string]bool{collection: true})
+}
+
+// statsForTargets computes aggregate stats over the given collections. A nil
+// set means all collections and uses the store's native aggregate query.
+func (s *Server) statsForTargets(ctx context.Context, allowed map[string]bool) (*store.Stats, error) {
+	if allowed == nil {
 		return s.store.Stats(ctx)
 	}
 	runs, err := s.store.ListRuns(ctx, allRuns)
@@ -99,7 +105,7 @@ func (s *Server) collectionStats(ctx context.Context, collection string) (*store
 	st := &store.Stats{PerPlaybook: []store.PlaybookStats{}}
 	var totalDuration int64
 	for _, run := range runs {
-		if run.Target != collection {
+		if !allowed[run.Target] {
 			continue
 		}
 		st.Runs.Total++
@@ -117,7 +123,7 @@ func (s *Server) collectionStats(ctx context.Context, collection string) (*store
 		st.Runs.AvgDurationMS = totalDuration / int64(st.Runs.Total)
 	}
 	for _, h := range hosts {
-		if h.Target != collection {
+		if !allowed[h.Target] {
 			continue
 		}
 		st.Hosts.Total++
@@ -134,7 +140,7 @@ func (s *Server) collectionStats(ctx context.Context, collection string) (*store
 	type key struct{ target, playbook string }
 	byBook := map[key]*store.PlaybookStats{}
 	for _, run := range runs {
-		if run.Target != collection {
+		if !allowed[run.Target] {
 			continue
 		}
 		k := key{run.Target, run.Playbook}
@@ -204,6 +210,30 @@ func (s *Server) organizations() []orgInfo {
 	return out
 }
 
+// visibleOrganizations filters the configured orgs to the collections the
+// caller is allowed to see. When restrictions are off it returns everything.
+func (s *Server) visibleOrganizations(r *http.Request) []orgInfo {
+	all := s.organizations()
+	allowed := s.accessibleTargets(r.Context(), r)
+	if allowed == nil {
+		return all
+	}
+	out := make([]orgInfo, 0, len(all))
+	for _, o := range all {
+		colls := make([]collectionInfo, 0, len(o.Collections))
+		for _, c := range o.Collections {
+			if allowed[c.Name] {
+				colls = append(colls, c)
+			}
+		}
+		if len(colls) > 0 {
+			o.Collections = colls
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
 // collectionIn resolves a collection by org and name. Collections are
 // configured targets; an org is the group named in collection.yml (or
 // "default" when omitted).
@@ -247,14 +277,14 @@ func (s *Server) requireCollection(w http.ResponseWriter, r *http.Request) (conf
 // exist only in the versioned API: there is no flat alias for an org.
 func (s *Server) registerOrgRoutes(mux *http.ServeMux) {
 	// GET /api/v1/orgs lists every organization and its collections.
-	mux.HandleFunc("GET "+apiPrefix+"/orgs", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, s.organizations())
+	mux.HandleFunc("GET "+apiPrefix+"/orgs", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, s.visibleOrganizations(r))
 	})
 
 	// GET /api/v1/orgs/{org} returns one organization.
 	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}", func(w http.ResponseWriter, r *http.Request) {
 		org := r.PathValue("org")
-		for _, o := range s.organizations() {
+		for _, o := range s.visibleOrganizations(r) {
 			if o.Name == org {
 				writeJSON(w, http.StatusOK, o)
 				return
@@ -266,7 +296,7 @@ func (s *Server) registerOrgRoutes(mux *http.ServeMux) {
 	// GET /api/v1/orgs/{org}/collections lists the collections of an org.
 	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections", func(w http.ResponseWriter, r *http.Request) {
 		org := r.PathValue("org")
-		for _, o := range s.organizations() {
+		for _, o := range s.visibleOrganizations(r) {
 			if o.Name == org {
 				writeJSON(w, http.StatusOK, o.Collections)
 				return
@@ -280,6 +310,10 @@ func (s *Server) registerOrgRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}", func(w http.ResponseWriter, r *http.Request) {
 		t, ok := s.requireCollection(w, r)
 		if !ok {
+			return
+		}
+		if !s.mayUse(r.Context(), r, r.PathValue("org"), t.Name) {
+			writeError(w, http.StatusForbidden, errors.New("access to this collection is denied"))
 			return
 		}
 		pbs := make([]playbookInfo, 0, len(t.Playbooks))

@@ -22,6 +22,10 @@ import (
 // ErrNotFound is returned by user stores when a user does not exist.
 var ErrNotFound = errors.New("auth: user not found")
 
+// ErrInvalidMembership is returned when a collection grant lacks a user,
+// org or collection name.
+var ErrInvalidMembership = errors.New("auth: membership needs a user, org and collection")
+
 // User is a local UI account. Hash is the argon2id PHC string; it is never
 // serialized (JSON tags exclude it), so returning a User in an API response
 // is safe.

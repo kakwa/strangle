@@ -50,6 +50,15 @@ type Syncer interface {
 }
 
 // Server is the strangle HTTP server.
+// Option customises a Server at construction time.
+type Option func(*Server)
+
+// WithCollectionAccess enables per-collection authorization. Without it the
+// API does not restrict collections by user.
+func WithCollectionAccess(a auth.CollectionAccess) Option {
+	return func(s *Server) { s.access = a }
+}
+
 type Server struct {
 	addr      string
 	applier   *applier.Ansible
@@ -63,6 +72,7 @@ type Server struct {
 	sessions  *auth.Sessions
 	authOn    bool
 	authToken string
+	access    auth.CollectionAccess
 	logger    *zap.Logger
 }
 
@@ -101,8 +111,8 @@ const SessionCookie = "strangle_session"
 // for user-linked CLIs and webhooks). authToken, when non-empty, is a
 // static bearer token accepted on the sync endpoint only (legacy
 // machine-to-machine webhook protection, not tied to a user).
-func New(addr string, apr *applier.Ansible, st store.Store, ssh *sshpool.Multi, run RunEnqueuer, workers WorkerReporter, syncer Syncer, users auth.UserStore, tokens auth.TokenStore, authToken string, logger *zap.Logger) *Server {
-	return &Server{
+func New(addr string, apr *applier.Ansible, st store.Store, ssh *sshpool.Multi, run RunEnqueuer, workers WorkerReporter, syncer Syncer, users auth.UserStore, tokens auth.TokenStore, authToken string, logger *zap.Logger, opts ...Option) *Server {
+	s := &Server{
 		addr:      addr,
 		applier:   apr,
 		store:     st,
@@ -115,6 +125,10 @@ func New(addr string, apr *applier.Ansible, st store.Store, ssh *sshpool.Multi, 
 		authToken: authToken,
 		logger:    logger,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Routes builds the HTTP handler: the /api endpoints plus the web UI.
@@ -286,19 +300,25 @@ func (s *Server) Routes() http.Handler {
 
 	// --- data endpoints ----------------------------------------------------
 
-	apiHandler(mux, "GET", apiPrefix+"/stats", func(w http.ResponseWriter, r *http.Request) {
+	handleStats := func(w http.ResponseWriter, r *http.Request) {
 		coll, ok := s.collectionScope(r)
 		if !ok {
 			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
 			return
 		}
-		stats, err := s.collectionStats(r.Context(), coll)
+		allowed := s.accessibleTargets(r.Context(), r)
+		if coll != "" {
+			allowed = map[string]bool{coll: true}
+		}
+		stats, err := s.statsForTargets(r.Context(), allowed)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, stats)
-	})
+	}
+	apiHandler(mux, "GET", apiPrefix+"/stats", handleStats)
+	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/stats", s.withCollectionAccess(handleStats))
 
 	handleRuns := func(w http.ResponseWriter, r *http.Request) {
 		coll, ok := s.collectionScope(r)
@@ -312,10 +332,20 @@ func (s *Server) Routes() http.Handler {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, runs)
+		allowed := s.accessibleTargets(r.Context(), r)
+		if coll != "" {
+			allowed = map[string]bool{coll: true}
+		}
+		visible := make([]store.RunRecord, 0, len(runs))
+		for _, run := range runs {
+			if targetVisible(allowed, run.Target) {
+				visible = append(visible, run)
+			}
+		}
+		writeJSON(w, http.StatusOK, visible)
 	}
 	apiHandler(mux, "GET", apiPrefix+"/runs", handleRuns)
-	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/runs", handleRuns)
+	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/runs", s.withCollectionAccess(handleRuns))
 
 	handleHosts := func(w http.ResponseWriter, r *http.Request) {
 		coll, ok := s.collectionScope(r)
@@ -328,35 +358,20 @@ func (s *Server) Routes() http.Handler {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		allowed := s.accessibleTargets(r.Context(), r)
 		if coll != "" {
-			filtered := make([]store.HostRecord, 0, len(hosts))
-			for _, h := range hosts {
-				if h.Target == coll {
-					filtered = append(filtered, h)
-				}
-			}
-			hosts = filtered
+			allowed = map[string]bool{coll: true}
 		}
-		writeJSON(w, http.StatusOK, hosts)
+		filtered := make([]store.HostRecord, 0, len(hosts))
+		for _, h := range hosts {
+			if (coll == "" || h.Target == coll) && targetVisible(allowed, h.Target) {
+				filtered = append(filtered, h)
+			}
+		}
+		writeJSON(w, http.StatusOK, filtered)
 	}
 	apiHandler(mux, "GET", apiPrefix+"/hosts", handleHosts)
-	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hosts", handleHosts)
-
-	// Collection-level stats: the same handler as the master-level one, but
-	// with the org/collection path parameters present.
-	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/stats", func(w http.ResponseWriter, r *http.Request) {
-		coll, ok := s.collectionScope(r)
-		if !ok {
-			writeError(w, http.StatusNotFound, unknownCollection(r.PathValue("org"), r.PathValue("collection")))
-			return
-		}
-		stats, err := s.collectionStats(r.Context(), coll)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, stats)
-	})
+	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hosts", s.withCollectionAccess(handleHosts))
 
 	handleHostRuns := func(w http.ResponseWriter, r *http.Request) {
 		limit := intQuery(r, "limit", 10)
@@ -365,19 +380,20 @@ func (s *Server) Routes() http.Handler {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		allowed := s.accessibleTargets(r.Context(), r)
 		if coll := r.PathValue("collection"); coll != "" {
-			filtered := make([]store.HostRunRecord, 0, len(runs))
-			for _, run := range runs {
-				if run.Target == coll {
-					filtered = append(filtered, run)
-				}
-			}
-			runs = filtered
+			allowed = map[string]bool{coll: true}
 		}
-		writeJSON(w, http.StatusOK, runs)
+		filtered := make([]store.HostRunRecord, 0, len(runs))
+		for _, run := range runs {
+			if targetVisible(allowed, run.Target) {
+				filtered = append(filtered, run)
+			}
+		}
+		writeJSON(w, http.StatusOK, filtered)
 	}
 	apiHandler(mux, "GET", apiPrefix+"/hosts/{host}/runs", handleHostRuns)
-	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hosts/{host}/runs", handleHostRuns)
+	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hosts/{host}/runs", s.withCollectionAccess(handleHostRuns))
 
 	handleHostChanges := func(w http.ResponseWriter, r *http.Request) {
 		limit := intQuery(r, "limit", 200)
@@ -386,19 +402,20 @@ func (s *Server) Routes() http.Handler {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		allowed := s.accessibleTargets(r.Context(), r)
 		if coll := r.PathValue("collection"); coll != "" {
-			filtered := make([]store.TaskStateRecord, 0, len(changes))
-			for _, c := range changes {
-				if c.Target == coll {
-					filtered = append(filtered, c)
-				}
-			}
-			changes = filtered
+			allowed = map[string]bool{coll: true}
 		}
-		writeJSON(w, http.StatusOK, changes)
+		filtered := make([]store.TaskStateRecord, 0, len(changes))
+		for _, c := range changes {
+			if targetVisible(allowed, c.Target) {
+				filtered = append(filtered, c)
+			}
+		}
+		writeJSON(w, http.StatusOK, filtered)
 	}
 	apiHandler(mux, "GET", apiPrefix+"/hosts/{host}/changes", handleHostChanges)
-	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hosts/{host}/changes", handleHostChanges)
+	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/hosts/{host}/changes", s.withCollectionAccess(handleHostChanges))
 
 	// /api/v1/playbooks maps each collection (target) to its configured
 	// jobs, with the latest run outcome of each job. The collection-level
@@ -430,7 +447,14 @@ func (s *Server) Routes() http.Handler {
 		if coll != "" {
 			targets = []string{coll}
 		}
+		allowed := s.accessibleTargets(r.Context(), r)
+		visibleTargets := make([]string, 0, len(targets))
 		for _, target := range targets {
+			if targetVisible(allowed, target) {
+				visibleTargets = append(visibleTargets, target)
+			}
+		}
+		for _, target := range visibleTargets {
 			configs := s.applier.PlaybookConfigs(target)
 			pbs := make([]playbookInfo, 0, len(configs))
 			for _, pb := range configs {
@@ -451,7 +475,7 @@ func (s *Server) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, out)
 	}
 	apiHandler(mux, "GET", apiPrefix+"/playbooks", handlePlaybooks)
-	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/playbooks", handlePlaybooks)
+	mux.HandleFunc("GET "+apiPrefix+"/orgs/{org}/collections/{collection}/playbooks", s.withCollectionAccess(handlePlaybooks))
 
 	// /api/v1/workers reports the master's worker pool: one entry per worker
 	// process, with liveness probed over gRPC.
@@ -490,6 +514,12 @@ func (s *Server) Routes() http.Handler {
 			writeError(w, http.StatusBadRequest, errors.New("target is required"))
 			return
 		}
+		// Unknown targets are reported as 404 by the playbook check below;
+		// only known collections are subject to membership checks.
+		if org, known := s.collectionTarget(req.Target); known && !s.mayUse(r.Context(), r, org, req.Target) {
+			writeError(w, http.StatusForbidden, errors.New("access to this collection is denied"))
+			return
+		}
 		if req.Playbook == "" {
 			writeError(w, http.StatusBadRequest, errors.New("playbook is required"))
 			return
@@ -514,7 +544,7 @@ func (s *Server) Routes() http.Handler {
 		})
 	}
 	apiHandler(mux, "POST", apiPrefix+"/run", handleRun)
-	mux.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/run", handleRun)
+	mux.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/run", s.withCollectionAccess(handleRun))
 
 	// /api/v1/sync is the webhook for git-backed collections: it moves the
 	// target's checkout to its tracked ref (or to the given branch, which
@@ -554,6 +584,12 @@ func (s *Server) Routes() http.Handler {
 			writeError(w, http.StatusBadRequest, errors.New("target is required"))
 			return
 		}
+		// An unknown target is diagnosed by the syncer itself; membership
+		// checks only apply to collections known to the configuration.
+		if org, known := s.collectionTarget(req.Target); known && !s.mayUse(r.Context(), r, org, req.Target) {
+			writeError(w, http.StatusForbidden, errors.New("access to this collection is denied"))
+			return
+		}
 		rev, changed, err := s.syncer.Sync(r.Context(), req.Target, req.Branch)
 		if err != nil {
 			switch {
@@ -577,7 +613,7 @@ func (s *Server) Routes() http.Handler {
 		})
 	}
 	apiHandler(mux, "POST", apiPrefix+"/sync", handleSync)
-	mux.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/sync", handleSync)
+	mux.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/sync", s.withCollectionAccess(handleSync))
 
 	// Host-key endpoints identify an SSH scope as "<target>/<playbook name>"
 	// in their `target` field (or the JSON response's `target` key).

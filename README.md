@@ -183,6 +183,20 @@ once, at creation. A token is sent as `Authorization: Bearer st_…` or
 `X-Strangle-Token: st_…`. The static `auth.token` above is a separate
 mechanism: it only opens `POST /api/sync` and is not a user account.
 
+#### Per-collection access
+
+The canonical API is versioned (`/api/v1`) and groups collections into orgs:
+`/api/v1/orgs/{org}/collections/{collection}`. The old flat routes remain as
+aliases. An org comes from the optional `org` field of a collection.yml entry
+(default: `default`). Once a membership exists, users only see and can use
+their own collections:
+
+```sh
+strangle collection grant alice lab edge
+strangle collection revoke alice lab edge
+strangle collection list [--user alice]
+```
+
 ### collection.yml — the targets
 
 The inventory of Ansible projects (targets) that strangle applies. Every

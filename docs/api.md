@@ -4,6 +4,23 @@ All endpoints are served by the master process, next to the web UI, on the
 address from `server.yml` (`listen_addr`, default `:8080`). Responses are
 JSON; errors are `{"error": "<message>"}` with the corresponding status code.
 
+**Per-collection restrictions.** Once at least one membership exists, a user
+can only see and use collections they are a member of; the org/collection
+pair from the URL is checked on scoped routes and the records returned by the
+flat list endpoints are filtered. Provision memberships from the command
+line (a database is required):
+
+```
+strangle collection grant <user> <org> <collection>
+strangle collection revoke <user> <org> <collection>
+strangle collection list [--user <user>]
+```
+
+While no membership is configured every authenticated user can access every
+collection, so adding the first UI account does not lock the UI down.
+Groups and collection ownership can be layered on the same membership table
+later.
+
 ## Versioned layout and aliases
 
 The canonical API is versioned under `/api/v1`. Every old flat `/api/*` route

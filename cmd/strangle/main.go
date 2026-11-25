@@ -63,6 +63,7 @@ func main() {
 	root.AddCommand(workerCmd())
 	root.AddCommand(userCmd())
 	root.AddCommand(tokenCmd())
+	root.AddCommand(collectionCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -371,6 +372,94 @@ func openTokenStores() (auth.UserStore, auth.TokenStore, error) {
 	return d.Users(), d.Tokens(), nil
 }
 
+// collectionCmd manages user-to-collection memberships. Once the first
+// membership exists, only members can see and use their collections;
+// until then every authenticated user has access (see internal/auth/access.go).
+func collectionCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "collection",
+		Short: "Manage user access to org/collection pairs.",
+	}
+	cmd.PersistentFlags().StringVarP(&serverConfigPath, "server-config", "s",
+		"config/server.yml", "path to the server configuration file")
+
+	grant := &cobra.Command{
+		Use:   "grant <user> <org> <collection>",
+		Short: "Allow a user to use one collection.",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a, err := openAccessStore()
+			if err != nil {
+				return err
+			}
+			if err := a.Add(context.Background(), args[0], args[1], args[2]); err != nil {
+				return err
+			}
+			fmt.Printf("granted %s access to %s/%s\n", args[0], args[1], args[2])
+			return nil
+		},
+	}
+
+	revoke := &cobra.Command{
+		Use:   "revoke <user> <org> <collection>",
+		Short: "Remove a user's access to one collection.",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a, err := openAccessStore()
+			if err != nil {
+				return err
+			}
+			if err := a.Remove(context.Background(), args[0], args[1], args[2]); err != nil {
+				return err
+			}
+			fmt.Printf("revoked %s access to %s/%s\n", args[0], args[1], args[2])
+			return nil
+		},
+	}
+
+	var user string
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List collection memberships, for one user or all users.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			a, err := openAccessStore()
+			if err != nil {
+				return err
+			}
+			items, err := a.List(context.Background(), user)
+			if err != nil {
+				return err
+			}
+			for _, m := range items {
+				fmt.Printf("%s\t%s/%s\n", m.Username, m.Org, m.Collection)
+			}
+			return nil
+		},
+	}
+	list.Flags().StringVar(&user, "user", "", "only list this user's memberships")
+
+	cmd.AddCommand(grant, revoke, list)
+	return cmd
+}
+
+// openAccessStore opens the collection_members table from the configured
+// server file. Memberships only exist when a database is configured.
+func openAccessStore() (auth.CollectionAccess, error) {
+	cfg, err := config.LoadServer(serverConfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+	if cfg.Database.DSN == "" {
+		return nil, errors.New("no database.dsn in server.yml: collection memberships are stored in the database")
+	}
+	d, err := db.Open(context.Background(), cfg.Database.DSN)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+	return d.Access(), nil
+}
+
 func run(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load(serverConfigPath, collectionConfigPath)
 	if err != nil {
@@ -424,6 +513,7 @@ func run(cmd *cobra.Command, args []string) error {
 	var st store.Store
 	var users auth.UserStore
 	var tokens auth.TokenStore
+	var access auth.CollectionAccess
 	if cfg.Server.Database.DSN != "" {
 		dctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		d, err := db.Open(dctx, cfg.Server.Database.DSN)
@@ -435,6 +525,7 @@ func run(cmd *cobra.Command, args []string) error {
 		st = d
 		users = d.Users()
 		tokens = d.Tokens()
+		access = d.Access()
 		logger.Info("using PostgreSQL store")
 	} else {
 		st = store.NewMem()
@@ -488,7 +579,8 @@ func run(cmd *cobra.Command, args []string) error {
 	if collMgr.HasGit() {
 		syncer = collMgr
 	}
-	srv := server.New(cfg.Server.ListenAddr, apr, st, multi, enqueue, mgr, syncer, users, tokens, cfg.Server.Auth.Token, logger)
+	srv := server.New(cfg.Server.ListenAddr, apr, st, multi, enqueue, mgr, syncer, users, tokens, cfg.Server.Auth.Token, logger,
+		server.WithCollectionAccess(access))
 
 	done := make(chan struct{})
 	go func() {
