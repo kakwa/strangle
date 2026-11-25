@@ -650,6 +650,70 @@ func (d *DB) PruneRuns(ctx context.Context, target string, policy store.Retentio
 	return out, nil
 }
 
+// PruneHosts removes hosts that are no longer in a collection's inventory
+// and whose last sight is older than delay. Per-host history is deleted in
+// the same transaction as the host rows.
+func (d *DB) PruneHosts(ctx context.Context, target string, delay time.Duration) (int64, error) {
+	if delay <= 0 {
+		return 0, nil
+	}
+
+	type candidate struct {
+		ID          uint64
+		FirstSeenAt time.Time
+		LastSeenAt  time.Time
+	}
+	var rows []candidate
+	if err := d.db.WithContext(ctx).Model(&Host{}).
+		Select("id", "first_seen_at", "last_seen_at").
+		Where("target = ? AND in_inventory = ?", target, false).
+		Scan(&rows).Error; err != nil {
+		return 0, fmt.Errorf("list hosts for cleanup: %w", err)
+	}
+
+	cutoff := time.Now().UTC().Add(-delay)
+	ids := make([]uint64, 0, len(rows))
+	for _, h := range rows {
+		lastSeen := h.LastSeenAt
+		if lastSeen.IsZero() {
+			lastSeen = h.FirstSeenAt
+		}
+		if !lastSeen.IsZero() && lastSeen.Before(cutoff) {
+			ids = append(ids, h.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	tx := d.db.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return 0, fmt.Errorf("begin host cleanup transaction: %w", tx.Error)
+	}
+	for _, table := range []struct {
+		name  string
+		model any
+	}{
+		{"host runs", &HostRun{}},
+		{"task results", &TaskRunResult{}},
+		{"task states", &TaskState{}},
+	} {
+		if err := tx.Where("host_id IN ?", ids).Delete(table.model).Error; err != nil {
+			tx.Rollback()
+			return 0, fmt.Errorf("delete %s: %w", table.name, err)
+		}
+	}
+	res := tx.Where("id IN ?", ids).Delete(&Host{})
+	if res.Error != nil {
+		tx.Rollback()
+		return 0, fmt.Errorf("delete hosts: %w", res.Error)
+	}
+	if err := tx.Commit().Error; err != nil {
+		return 0, fmt.Errorf("commit host cleanup transaction: %w", err)
+	}
+	return res.RowsAffected, nil
+}
+
 func (d *DB) Stats(ctx context.Context) (*store.Stats, error) {
 	st := &store.Stats{PerPlaybook: []store.PlaybookStats{}}
 

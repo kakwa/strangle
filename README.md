@@ -177,6 +177,7 @@ strangle serve [-s config/server.yml] [-c config/collection.yml]
 | `auth.token`    | —               | Bearer token for `POST /api/sync` (webhook), independent of UI authentication |
 | `sandbox.enabled` | `false`       | Landlock isolation: one worker set per collection, read-only checkouts, private write scratch |
 | `retention.max_age` / `retention.max_count` | — | Purge finished runs older than the duration and/or beyond the newest N per collection; `retention.interval` defaults to `1h` |
+| `host_cleanup.delay` | — | Remove hosts absent from a collection's inventory and unseen for this duration; `host_cleanup.interval` defaults to `1h` |
 
 ### Collection sandboxing
 

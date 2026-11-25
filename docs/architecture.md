@@ -135,6 +135,14 @@ eligible; queued and running runs stay so a job cannot recreate a purged
 record. Per-host recap and per-task history rows are deleted in the same
 transaction (or under the in-memory store's lock) as their run.
 
+`internal/hostcleanup` is a second maintenance loop with the same cadence
+pattern. A host becomes eligible once its collection's inventory snapshot no
+longer contains it and its last sight is older than the configured delay; its
+per-host recap, latest task state and history rows are deleted with it. Host
+identity includes the target, so same-named hosts in other collections are
+unaffected. Like retention settings, the delay can be overridden per
+collection and survives git syncs.
+
 A worker's embedded interpreter installs the `strangle_facts` Ansible callback
 alongside the Go-managed SSH connection plugin. The callback accumulates every
 `ansible_facts` dictionary returned for a host (including the implicit
@@ -175,7 +183,7 @@ history of in-flight runs (they execute inside workers and write to the
 store as they finish):
 
 1. Stop the scheduler (no new jobs are enqueued).
-2. Stop the retention loop (no purge starts during shutdown).
+2. Stop the retention and host clean-up loops (no purge starts during shutdown).
 3. Drain the River queue (up to 10 minutes), letting in-flight runs finish.
 4. Stop the workers (terminate the child processes).
 5. Close the store.

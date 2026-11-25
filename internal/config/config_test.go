@@ -235,6 +235,41 @@ targets:
 	}
 }
 
+func TestLoadHostCleanup(t *testing.T) {
+	serverPath, collectionPath := writeTree(t, `
+host_cleanup:
+  interval: 3h
+  delay: 168h
+`, `
+targets:
+  - name: one
+    path: __TARGET__
+    host_cleanup:
+      delay: 24h
+`, strangleMinimal)
+	cfg, err := Load(serverPath, collectionPath)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Server.HostCleanup.Interval != 3*time.Hour || cfg.Server.HostCleanup.Delay != 168*time.Hour {
+		t.Fatalf("server host cleanup = %+v", cfg.Server.HostCleanup)
+	}
+	if len(cfg.Targets) != 1 || cfg.Targets[0].HostCleanup.Delay != 24*time.Hour {
+		t.Fatalf("target host cleanup = %+v", cfg.Targets)
+	}
+}
+
+func TestLoadRejectsNegativeHostCleanup(t *testing.T) {
+	serverPath, collectionPath := writeTree(t, `
+host_cleanup:
+  delay: -1h
+`, collOne, strangleMinimal)
+	if _, err := Load(serverPath, collectionPath); err == nil ||
+		!strings.Contains(err.Error(), "host_cleanup.delay") {
+		t.Fatalf("Load() error = %v, want a negative delay error", err)
+	}
+}
+
 func TestLoadRejectsNegativeRetention(t *testing.T) {
 	serverPath, collectionPath := writeTree(t, `
 retention:

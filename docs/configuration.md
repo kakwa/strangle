@@ -34,6 +34,8 @@ Process-level settings for the master process.
 | `retention.interval` | `1h` | How often the master prunes old runs. Only used when `max_age` or `max_count` is set. |
 | `retention.max_age` | — | Delete finished runs older than this duration (Go duration syntax, e.g. `720h`). |
 | `retention.max_count` | — | Keep only the newest N finished runs per collection. Can be combined with `max_age`. |
+| `host_cleanup.interval` | `1h` | How often stale hosts are removed. Only used when `delay` is set. |
+| `host_cleanup.delay` | — | Remove a host once it is no longer in its collection's inventory and its last sight is older than this duration. |
 
 ### Run retention
 
@@ -44,6 +46,16 @@ and per-task rows are deleted with it. Queued and running runs are never
 purged, so an in-flight job cannot recreate a deleted record when it
 finishes. A collection-level block overrides both limits, but the cadence
 stays process-wide.
+
+### Host auto clean-up
+
+With `host_cleanup.delay` set, the master periodically removes hosts that are
+no longer targeted by a collection (absent from the latest inventory snapshot)
+and whose last sight is older than the delay. Their per-host recap lines,
+latest task states and per-task history are removed with them. Host names are
+scoped by collection, so a same-named host in another collection is kept. The
+delay can be overridden per collection in collection.yml; the cadence stays
+process-wide.
 
 ### Collection sandboxing
 
@@ -191,6 +203,20 @@ targets:
     retention:
       max_age: 168h      # 7 days
       max_count: 200
+```
+
+### Per-collection host clean-up
+
+Likewise, a target can override `host_cleanup.delay` (but not the maintenance
+interval) in collection.yml. This setting is server-side and survives a
+git-backed target's `strangle.yml` reload.
+
+```yaml
+targets:
+  - name: home
+    path: /path/to/ansible
+    host_cleanup:
+      delay: 168h        # 7 days
 ```
 
 ## strangle.yml (one per target)

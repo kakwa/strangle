@@ -227,6 +227,10 @@ type Store interface {
 	// policy. Queued and running runs are never removed. It also removes the
 	// per-run host and task rows that would otherwise become orphans.
 	PruneRuns(ctx context.Context, target string, policy RetentionPolicy) (PruneResult, error)
+	// PruneHosts deletes hosts of one collection that are no longer in its
+	// inventory and have not been seen for delay. It returns the number of
+	// hosts removed and deletes their per-host history rows with them.
+	PruneHosts(ctx context.Context, target string, delay time.Duration) (int64, error)
 	// Stats returns aggregate statistics.
 	Stats(ctx context.Context) (*Stats, error)
 	// Close releases underlying resources.

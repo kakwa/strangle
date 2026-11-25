@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -415,6 +416,64 @@ func (s *Mem) PruneRuns(_ context.Context, target string, policy RetentionPolicy
 		}
 	}
 	return out, nil
+}
+
+// PruneHosts removes hosts that are no longer targeted by a collection and
+// whose last sight is older than delay. Hosts are scoped by target, so the
+// same name in another collection is unaffected.
+func (s *Mem) PruneHosts(_ context.Context, target string, delay time.Duration) (int64, error) {
+	if delay <= 0 {
+		return 0, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cutoff := time.Now().UTC().Add(-delay)
+	removed := map[string]bool{}
+	for key, host := range s.hosts {
+		if host.Target != target || host.InInventory {
+			continue
+		}
+		lastSeen := host.LastSeenAt
+		if lastSeen.IsZero() {
+			lastSeen = host.FirstSeenAt
+		}
+		if !lastSeen.IsZero() && lastSeen.Before(cutoff) {
+			removed[host.Name] = true
+			delete(s.hosts, key)
+		}
+	}
+	if len(removed) == 0 {
+		return 0, nil
+	}
+
+	hostRuns := s.hostRuns[:0]
+	for _, hr := range s.hostRuns {
+		if hr.Target == target && removed[hr.Host] {
+			continue
+		}
+		hostRuns = append(hostRuns, hr)
+	}
+	s.hostRuns = hostRuns
+
+	taskRuns := s.taskRuns[:0]
+	for _, tr := range s.taskRuns {
+		if tr.Target == target && removed[tr.Host] {
+			continue
+		}
+		taskRuns = append(taskRuns, tr)
+	}
+	s.taskRuns = taskRuns
+
+	for key := range s.tasks {
+		// Keys are target + NUL + host + NUL + task.
+		parts := strings.Split(key, "\x00")
+		if len(parts) == 3 && parts[0] == target && removed[parts[1]] {
+			delete(s.tasks, key)
+		}
+	}
+	return int64(len(removed)), nil
 }
 
 func (s *Mem) Stats(_ context.Context) (*Stats, error) {

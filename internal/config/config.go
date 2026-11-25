@@ -85,7 +85,22 @@ type ServerConfig struct {
 	// Retention is the default run-history policy for collections that do
 	// not declare their own. Disabled when both limits are zero.
 	Retention RetentionConfig `yaml:"retention,omitempty"`
+	// HostCleanup is the default policy for removing hosts that are no
+	// longer in a collection's inventory and have not been seen for a while.
+	HostCleanup HostCleanupConfig `yaml:"host_cleanup,omitempty"`
 }
+
+// HostCleanupConfig controls automatic host removal. Delay is the minimum
+// age of the host's last sight before it may be removed; Interval is the
+// maintenance cadence and is only read from server.yml. Disabled when Delay
+// is zero.
+type HostCleanupConfig struct {
+	Interval time.Duration `yaml:"interval,omitempty"`
+	Delay    time.Duration `yaml:"delay,omitempty"`
+}
+
+// Enabled reports whether automatic host cleanup is configured.
+func (h HostCleanupConfig) Enabled() bool { return h.Delay > 0 }
 
 // RetentionConfig purges finished run history. MaxAge removes runs older
 // than the duration; MaxCount keeps only the newest N runs. Both limits are
@@ -200,6 +215,9 @@ type TargetSpec struct {
 	// collection. Only MaxAge and MaxCount are used here; the maintenance
 	// interval is process-wide.
 	Retention RetentionConfig `yaml:"retention,omitempty"`
+	// HostCleanup overrides the server's host-cleanup delay for this
+	// collection. Only Delay is used here.
+	HostCleanup HostCleanupConfig `yaml:"host_cleanup,omitempty"`
 }
 
 // GitConfig describes the upstream git repository of a target. When set,
@@ -246,6 +264,8 @@ type TargetConfig struct {
 	// Retention is this collection's run-history policy, overriding the
 	// server default when it enables either rule.
 	Retention RetentionConfig
+	// HostCleanup overrides the server's host-cleanup delay when enabled.
+	HostCleanup HostCleanupConfig
 
 	// WorkingDir is the directory the playbooks run from. Ansible resolves
 	// ansible.cfg, relative paths and roles relative to it. Defaults to
@@ -516,6 +536,10 @@ func Load(serverPath, collectionPath string) (Config, error) {
 			return Config{}, err
 		}
 		coll.Targets[i].Retention = spec.Retention
+		if err := validateHostCleanup(fmt.Sprintf("collection: target %q", spec.Name), &spec.HostCleanup); err != nil {
+			return Config{}, err
+		}
+		coll.Targets[i].HostCleanup = spec.HostCleanup
 		if _, err := resolveNotifications(spec.Notifications,
 			fmt.Sprintf("collection: target %q", spec.Name), collDir); err != nil {
 			return Config{}, err
@@ -553,6 +577,7 @@ func Load(serverPath, collectionPath string) (Config, error) {
 				Git:           spec.Git,
 				Notifications: notifications,
 				Retention:     spec.Retention,
+				HostCleanup:   spec.HostCleanup,
 				WorkingDir:    path,
 			})
 			continue
@@ -645,6 +670,7 @@ func LoadTarget(spec TargetSpec, path string, vars map[string]string) (TargetCon
 		Git:           spec.Git,
 		Notifications: notifications,
 		Retention:     spec.Retention,
+		HostCleanup:   spec.HostCleanup,
 		Schedule:      targetSchedule,
 	}
 	if file.WorkingDir == "" {
@@ -1076,7 +1102,10 @@ func (s *ServerConfig) validate() error {
 	if s.Workers <= 0 {
 		s.Workers = 1
 	}
-	return validateRetention("server", &s.Retention)
+	if err := validateRetention("server", &s.Retention); err != nil {
+		return err
+	}
+	return validateHostCleanup("server", &s.HostCleanup)
 }
 
 // validateRetention rejects negative limits and gives an enabled policy a
@@ -1093,6 +1122,21 @@ func validateRetention(where string, r *RetentionConfig) error {
 	}
 	if r.Enabled() && r.Interval == 0 {
 		r.Interval = time.Hour
+	}
+	return nil
+}
+
+// validateHostCleanup rejects negative delays and gives an enabled policy a
+// default maintenance interval.
+func validateHostCleanup(where string, h *HostCleanupConfig) error {
+	if h.Interval < 0 {
+		return fmt.Errorf("%s: host_cleanup.interval must not be negative", where)
+	}
+	if h.Delay < 0 {
+		return fmt.Errorf("%s: host_cleanup.delay must not be negative", where)
+	}
+	if h.Enabled() && h.Interval == 0 {
+		h.Interval = time.Hour
 	}
 	return nil
 }

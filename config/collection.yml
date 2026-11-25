@@ -42,6 +42,9 @@ targets:
     # retention:
     #   max_age: 168h       # 7 days
     #   max_count: 200
+    # Optional host auto clean-up for this collection. Overrides server.yml.
+    # host_cleanup:
+    #   delay: 168h         # 7 days
 
   # Optional Landlock validation collection (see sandbox/validate/README.md):
   # - name: sandbox-validate

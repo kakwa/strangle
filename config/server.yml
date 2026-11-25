@@ -51,3 +51,10 @@ workers: 2
 #   interval: 1h
 #   max_age: 720h       # 30 days
 #   max_count: 1000     # keep the newest 1000 runs per collection
+
+# Host auto clean-up. Disabled until delay is set. A host is removed once it
+# is no longer in its collection's inventory and its last sight is older than
+# the delay. Collections can override the delay in collection.yml.
+# host_cleanup:
+#   interval: 1h
+#   delay: 720h         # 30 days

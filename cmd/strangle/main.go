@@ -26,6 +26,7 @@ import (
 	"github.com/kakwa/strangle/internal/collection"
 	"github.com/kakwa/strangle/internal/config"
 	"github.com/kakwa/strangle/internal/db"
+	"github.com/kakwa/strangle/internal/hostcleanup"
 	"github.com/kakwa/strangle/internal/notify"
 	"github.com/kakwa/strangle/internal/retention"
 	"github.com/kakwa/strangle/internal/riverqueue"
@@ -626,6 +627,16 @@ func run(cmd *cobra.Command, args []string) error {
 		close(retentionDone)
 	}
 
+	cleanupDone := make(chan struct{})
+	if cleanupMgr := hostcleanup.New(st, cfg.Server.HostCleanup, collMgr.Targets, logger); cleanupMgr != nil {
+		go func() {
+			cleanupMgr.Run(ctx)
+			close(cleanupDone)
+		}()
+	} else {
+		close(cleanupDone)
+	}
+
 	if queue != nil {
 		// The queue runs on its own context, not the signal context: a
 		// SIGTERM must not hard-cancel in-flight runs; Stop drains them.
@@ -648,10 +659,10 @@ func run(cmd *cobra.Command, args []string) error {
 	)
 	if err := srv.ListenAndServe(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("server failed", zap.Error(err))
-		shutdown(stop, done, retentionDone, mgr, st, queue, logger)
+		shutdown(stop, done, retentionDone, cleanupDone, mgr, st, queue, logger)
 		return err
 	}
-	shutdown(stop, done, retentionDone, mgr, st, queue, logger)
+	shutdown(stop, done, retentionDone, cleanupDone, mgr, st, queue, logger)
 	logger.Info("strangle stopped")
 	return nil
 }
@@ -819,10 +830,11 @@ func newLogger(level string) (*zap.Logger, error) {
 // playbook runs to finish and be recorded), then terminates the workers and
 // closes the store in that order: in-progress runs may still be writing to
 // the store while they finish, and they run inside the worker processes.
-func shutdown(stop context.CancelFunc, done, retentionDone <-chan struct{}, mgr *worker.Manager, st store.Store, queue *riverqueue.Client, logger *zap.Logger) {
+func shutdown(stop context.CancelFunc, done, retentionDone, cleanupDone <-chan struct{}, mgr *worker.Manager, st store.Store, queue *riverqueue.Client, logger *zap.Logger) {
 	stop()
 	<-done
 	<-retentionDone
+	<-cleanupDone
 	if queue != nil {
 		qctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		if err := queue.Stop(qctx); err != nil {
