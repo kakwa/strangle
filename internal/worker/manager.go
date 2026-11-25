@@ -9,10 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/kakwa/strangle/internal/sandbox"
 	"go.uber.org/zap"
 )
 
@@ -20,12 +23,13 @@ import (
 // fixed place in the pool of a worker process: the process (and its PID) may
 // be replaced by a restart, but the slot keeps its id and job counters.
 type WorkerStatus struct {
-	ID       int    `json:"id"`
-	PID      int    `json:"pid"`
-	Socket   string `json:"socket"`
-	Alive    bool   `json:"alive"`
-	Jobs     int64  `json:"jobs"`
-	Restarts int    `json:"restarts"`
+	ID         int    `json:"id"`
+	PID        int    `json:"pid"`
+	Socket     string `json:"socket"`
+	Collection string `json:"collection,omitempty"`
+	Alive      bool   `json:"alive"`
+	Jobs       int64  `json:"jobs"`
+	Restarts   int    `json:"restarts"`
 }
 
 // Supervision tuning. Package variables so tests can shorten the intervals.
@@ -58,15 +62,27 @@ func restartDelay(fails int) time.Duration {
 // slot is one fixed place in the worker pool: its socket path, the current
 // process and connection, and its supervision state.
 type slot struct {
-	id        int
-	socket    string
-	cmd       *exec.Cmd // current process, nil while (re)spawning or dead
-	cli       *Client
-	fails     int // consecutive failures since the last clean run
-	restarts  int
-	lastStart time.Time // when the current process came up
-	pingFails int
-	dead      bool // gave up after maxConsecutiveFailures consecutive failures
+	id         int
+	socket     string
+	collection string    // non-empty for sandboxed workers pinned to a collection
+	manifest   string    // sandbox manifest path, empty when sandboxing is off
+	cmd        *exec.Cmd // current process, nil while (re)spawning or dead
+	cli        *Client
+	fails      int // consecutive failures since the last clean run
+	restarts   int
+	lastStart  time.Time // when the current process came up
+	pingFails  int
+	dead       bool // gave up after maxConsecutiveFailures consecutive failures
+}
+
+// ManagerOption customises a worker pool at construction time.
+type ManagerOption func(*Manager)
+
+// WithSandbox pins workers to collections and applies a Landlock manifest to
+// each worker process. The map is keyed by collection name; when set, the
+// manager spawns count workers per collection instead of one shared pool.
+func WithSandbox(manifests map[string]sandbox.Manifest) ManagerOption {
+	return func(m *Manager) { m.sandbox = manifests }
 }
 
 // Manager owns the worker child processes of the master: it spawns them,
@@ -90,6 +106,8 @@ type Manager struct {
 	downOnce sync.Once
 	stopCh   chan struct{}
 
+	sandbox map[string]sandbox.Manifest // nil when sandboxing is disabled
+
 	dir string
 	wg  sync.WaitGroup // watch and supervise goroutines
 }
@@ -97,7 +115,7 @@ type Manager struct {
 // NewManager spawns count worker child processes (binPath worker ...) and
 // dials each of their unix sockets. The socket directory is created in the
 // system temp dir and removed by Stop.
-func NewManager(ctx context.Context, binPath, serverConfig, collConfig string, count int, logger *zap.Logger) (*Manager, error) {
+func NewManager(ctx context.Context, binPath, serverConfig, collConfig string, count int, logger *zap.Logger, opts ...ManagerOption) (*Manager, error) {
 	dir, err := os.MkdirTemp("", "strangle-workers-")
 	if err != nil {
 		return nil, fmt.Errorf("create socket directory: %w", err)
@@ -114,23 +132,109 @@ func NewManager(ctx context.Context, binPath, serverConfig, collConfig string, c
 		down:         make(chan struct{}),
 		stopCh:       make(chan struct{}),
 	}
+	for _, opt := range opts {
+		opt(m)
+	}
 
-	for i := 0; i < count; i++ {
-		s := &slot{id: i, socket: filepath.Join(dir, fmt.Sprintf("worker-%d.sock", i))}
-		m.slots = append(m.slots, s)
-		if err := m.start(s); err != nil {
-			_ = m.Stop()
-			return nil, fmt.Errorf("spawn worker %d: %w", i, err)
+	// Without sandboxing there is one shared pool. With sandboxing each
+	// collection gets count dedicated workers, each with its own manifest
+	// and scratch directory, so a playbook cannot see a sibling collection's
+	// files or credentials.
+	if m.sandbox == nil {
+		for i := 0; i < count; i++ {
+			if err := m.addSlot(&slot{id: i, socket: filepath.Join(dir, fmt.Sprintf("worker-%d.sock", i))}); err != nil {
+				_ = m.Stop()
+				return nil, err
+			}
 		}
-		m.mu.Lock()
-		pid := s.cmd.Process.Pid
-		m.mu.Unlock()
-		m.wg.Add(1)
-		go m.watch(s)
-		m.logger.Info("worker started", zap.Int("id", i), zap.Int("pid", pid), zap.String("socket", s.socket))
+	} else {
+		names := make([]string, 0, len(m.sandbox))
+		for name := range m.sandbox {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			for i := 0; i < count; i++ {
+				scratch := filepath.Join(dir, "scratch-"+safeName(name)+"-"+strconv.Itoa(i))
+				s := &slot{
+					id:         len(m.slots),
+					collection: name,
+					socket:     filepath.Join(scratch, "worker.sock"),
+				}
+				manifest, err := m.slotManifest(name, scratch)
+				if err != nil {
+					_ = m.Stop()
+					return nil, err
+				}
+				path := filepath.Join(dir, fmt.Sprintf("sandbox-%s-%d.json", safeName(name), i))
+				if err := manifest.WriteFile(path); err != nil {
+					_ = m.Stop()
+					return nil, fmt.Errorf("write sandbox manifest: %w", err)
+				}
+				s.manifest = path
+				if err := m.addSlot(s); err != nil {
+					_ = m.Stop()
+					return nil, err
+				}
+			}
+		}
 	}
 
 	return m, nil
+}
+
+// addSlot starts one worker and its supervision goroutine.
+func (m *Manager) addSlot(s *slot) error {
+	m.slots = append(m.slots, s)
+	if err := m.start(s); err != nil {
+		return fmt.Errorf("spawn worker %d: %w", s.id, err)
+	}
+	m.mu.Lock()
+	pid := s.cmd.Process.Pid
+	m.mu.Unlock()
+	m.wg.Add(1)
+	go m.watch(s)
+	m.logger.Info("worker started",
+		zap.Int("id", s.id), zap.Int("pid", pid), zap.String("socket", s.socket),
+		zap.String("collection", s.collection))
+	return nil
+}
+
+// slotManifest clones the collection's base policy, adding this worker's
+// private scratch directory. The unix socket lives inside it, so granting
+// access to it does not expose another worker's scratch or socket.
+func (m *Manager) slotManifest(name, scratch string) (sandbox.Manifest, error) {
+	base := m.sandbox[name]
+	for _, dir := range []string{scratch, filepath.Join(scratch, "tmp"), filepath.Join(scratch, "home"), filepath.Join(scratch, "cache")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return base, fmt.Errorf("create sandbox scratch dir %q: %w", dir, err)
+		}
+	}
+	base.Rules = append(base.Rules,
+		sandbox.Rule{Path: scratch, Mode: sandbox.ModeRW, Kind: sandbox.KindDir, Refer: true, ResolveUnix: true},
+	)
+	env := map[string]string{
+		"TMPDIR":              filepath.Join(scratch, "tmp"),
+		"HOME":                filepath.Join(scratch, "home"),
+		"ANSIBLE_LOCAL_TEMP":  filepath.Join(scratch, "tmp"),
+		"ANSIBLE_HOME":        filepath.Join(scratch, "cache"),
+		"PYTHONPYCACHEPREFIX": filepath.Join(scratch, "cache"),
+	}
+	for k, v := range base.Env {
+		env[k] = v
+	}
+	base.Env = env
+	return base, nil
+}
+
+func safeName(name string) string {
+	out := []rune(name)
+	for i, r := range out {
+		if r != '.' && r != '_' && r != '-' && (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
+			out[i] = '_'
+		}
+	}
+	return string(out)
 }
 
 // start spawns one worker process, dials its socket and publishes the pair
@@ -141,7 +245,11 @@ func (m *Manager) start(s *slot) error {
 	// replacement listens on the same path.
 	_ = os.Remove(s.socket)
 
-	cmd := exec.Command(m.binPath, "worker", "--socket", s.socket, "-s", m.serverConfig, "-c", m.collConfig)
+	args := []string{"worker", "--socket", s.socket, "-s", m.serverConfig, "-c", m.collConfig}
+	if s.manifest != "" {
+		args = append(args, "--sandbox", s.manifest)
+	}
+	cmd := exec.Command(m.binPath, args...)
 	// Worker logs go to the master's stderr, tagged by process.
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
@@ -376,8 +484,9 @@ func (m *Manager) checkHealth() {
 
 // RunPlaybook dispatches one playbook to the next live worker (round-robin,
 // skipping dead or respawning slots) and returns its exit code and captured
-// output. Runs on one worker are serialized inside that worker.
-func (m *Manager) RunPlaybook(ctx context.Context, scope, workingDir string, args ...string) (int, string, error) {
+// output. With sandboxing enabled only workers dedicated to collection are
+// considered. Runs on one worker are serialized inside that worker.
+func (m *Manager) RunPlaybook(ctx context.Context, collection, scope, workingDir string, args ...string) (int, string, error) {
 	m.mu.Lock()
 	if m.stopping || len(m.slots) == 0 {
 		m.mu.Unlock()
@@ -391,6 +500,9 @@ func (m *Manager) RunPlaybook(ctx context.Context, scope, workingDir string, arg
 		if c.dead || c.cli == nil {
 			continue
 		}
+		if m.sandbox != nil && c.collection != collection {
+			continue
+		}
 		s = c
 		cli = c.cli
 		m.rr = (m.rr + i + 1) % n
@@ -399,6 +511,9 @@ func (m *Manager) RunPlaybook(ctx context.Context, scope, workingDir string, arg
 	}
 	m.mu.Unlock()
 	if cli == nil {
+		if m.sandbox != nil {
+			return 0, "", fmt.Errorf("no worker available for collection %q", collection)
+		}
 		return 0, "", fmt.Errorf("no workers available")
 	}
 	defer func() {
@@ -407,7 +522,7 @@ func (m *Manager) RunPlaybook(ctx context.Context, scope, workingDir string, arg
 		m.mu.Unlock()
 	}()
 
-	code, output, err := cli.RunPlaybook(ctx, scope, workingDir, args...)
+	code, output, err := cli.RunPlaybook(ctx, collection, scope, workingDir, args...)
 	if err != nil {
 		return 0, output, err
 	}
@@ -439,12 +554,13 @@ func (m *Manager) WorkerStatuses(ctx context.Context) []WorkerStatus {
 
 		alive := cli != nil && cli.Ping(ctx) == nil
 		out = append(out, WorkerStatus{
-			ID:       s.id,
-			PID:      pid,
-			Socket:   s.socket,
-			Alive:    alive,
-			Jobs:     jobs[s.id],
-			Restarts: restarts,
+			ID:         s.id,
+			PID:        pid,
+			Socket:     s.socket,
+			Collection: s.collection,
+			Alive:      alive,
+			Jobs:       jobs[s.id],
+			Restarts:   restarts,
 		})
 	}
 	return out

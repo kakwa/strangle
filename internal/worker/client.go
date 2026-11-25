@@ -87,8 +87,9 @@ func (c *Client) Ping(ctx context.Context) error {
 
 // RunPlaybook dispatches one playbook to the worker and returns its exit
 // code and captured output.
-func (c *Client) RunPlaybook(ctx context.Context, scope, workingDir string, args ...string) (int32, string, error) {
+func (c *Client) RunPlaybook(ctx context.Context, collection, scope, workingDir string, args ...string) (int32, string, error) {
 	res, err := c.cli.RunPlaybook(ctx, &runnerv1.RunPlaybookRequest{
+		Collection: collection,
 		Scope:      scope,
 		WorkingDir: workingDir,
 		Args:       args,

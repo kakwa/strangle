@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
+	"github.com/kakwa/strangle/internal/sandbox"
 	runnerv1 "github.com/kakwa/strangle/proto/strangle/v1"
 )
 
@@ -213,7 +214,7 @@ func TestManagerRunPlaybook(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < 4; i++ {
-		code, out, err := m.RunPlaybook(ctx, "", ".", "-m", "debug")
+		code, out, err := m.RunPlaybook(ctx, "", "", ".", "-m", "debug")
 		if err != nil {
 			t.Fatalf("RunPlaybook() error: %v", err)
 		}
@@ -230,11 +231,49 @@ func TestManagerRunPlaybook(t *testing.T) {
 	}
 }
 
+func TestManagerRoutesSandboxedRunsByCollection(t *testing.T) {
+	manifests := map[string]sandbox.Manifest{
+		"home": {Collection: "home"},
+		"edge": {Collection: "edge"},
+	}
+	m, err := NewManager(context.Background(), os.Args[0], "/dev/null", "/dev/null", 1, zap.NewNop(),
+		WithSandbox(manifests))
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	t.Cleanup(func() { _ = m.Stop() })
+	ctx := context.Background()
+
+	statuses := m.WorkerStatuses(ctx)
+	if len(statuses) != 2 {
+		t.Fatalf("worker slots = %d, want one per collection", len(statuses))
+	}
+	seen := map[string]bool{}
+	for _, st := range statuses {
+		seen[st.Collection] = true
+		if st.Socket == "" {
+			t.Error("sandboxed worker has no socket")
+		}
+	}
+	if !seen["home"] || !seen["edge"] {
+		t.Errorf("collections = %v, want home and edge", seen)
+	}
+
+	for _, coll := range []string{"home", "edge"} {
+		if _, _, err := m.RunPlaybook(ctx, coll, "", ".", "-m", "debug"); err != nil {
+			t.Errorf("RunPlaybook(%q) error: %v", coll, err)
+		}
+	}
+	if _, _, err := m.RunPlaybook(ctx, "unknown", "", ".", "-m", "debug"); err == nil {
+		t.Error("RunPlaybook(unknown) error = nil, want an error")
+	}
+}
+
 func TestManagerRunPlaybookAfterStop(t *testing.T) {
 	m := newFakeManager(t, 1, nil)
 	_ = m.Stop()
 
-	_, _, err := m.RunPlaybook(context.Background(), "", ".", "-m", "debug")
+	_, _, err := m.RunPlaybook(context.Background(), "", "", ".", "-m", "debug")
 	if err == nil || err.Error() != "no workers available" {
 		t.Errorf("RunPlaybook() error = %v, want \"no workers available\"", err)
 	}

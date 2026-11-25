@@ -114,7 +114,12 @@ type RunPlaybookRequest struct {
 	// working_dir is the directory the playbook runs from.
 	WorkingDir string `protobuf:"bytes,2,opt,name=working_dir,json=workingDir,proto3" json:"working_dir,omitempty"`
 	// args are the ansible-playbook arguments (inventory, flags, playbook).
-	Args          []string `protobuf:"bytes,3,rep,name=args,proto3" json:"args,omitempty"`
+	Args []string `protobuf:"bytes,3,rep,name=args,proto3" json:"args,omitempty"`
+	// collection is the name of the collection the job belongs to. With
+	// sandboxing enabled the master routes the run to the worker dedicated to
+	// that collection, so no other collection's files or credentials are
+	// visible to the playbook. Empty on unsandboxed deployments.
+	Collection    string `protobuf:"bytes,4,opt,name=collection,proto3" json:"collection,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -168,6 +173,13 @@ func (x *RunPlaybookRequest) GetArgs() []string {
 		return x.Args
 	}
 	return nil
+}
+
+func (x *RunPlaybookRequest) GetCollection() string {
+	if x != nil {
+		return x.Collection
+	}
+	return ""
 }
 
 type RunPlaybookResponse struct {
@@ -240,12 +252,15 @@ const file_strangle_v1_runner_proto_rawDesc = "" +
 	"\x18strangle/v1/runner.proto\x12\vstrangle.v1\"\r\n" +
 	"\vPingRequest\"\x1e\n" +
 	"\fPingResponse\x12\x0e\n" +
-	"\x02ok\x18\x01 \x01(\bR\x02ok\"_\n" +
+	"\x02ok\x18\x01 \x01(\bR\x02ok\"\x7f\n" +
 	"\x12RunPlaybookRequest\x12\x14\n" +
 	"\x05scope\x18\x01 \x01(\tR\x05scope\x12\x1f\n" +
 	"\vworking_dir\x18\x02 \x01(\tR\n" +
 	"workingDir\x12\x12\n" +
-	"\x04args\x18\x03 \x03(\tR\x04args\"`\n" +
+	"\x04args\x18\x03 \x03(\tR\x04args\x12\x1e\n" +
+	"\n" +
+	"collection\x18\x04 \x01(\tR\n" +
+	"collection\"`\n" +
 	"\x13RunPlaybookResponse\x12\x1b\n" +
 	"\texit_code\x18\x01 \x01(\x05R\bexitCode\x12\x16\n" +
 	"\x06output\x18\x02 \x01(\tR\x06output\x12\x14\n" +

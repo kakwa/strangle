@@ -71,6 +71,24 @@ type ServerConfig struct {
 	// Auth configures API authentication. Placeholder: parsed and validated
 	// but not enforced yet.
 	Auth AuthConfig `yaml:"auth,omitempty"`
+	// Sandbox configures Landlock isolation of playbook runs. Disabled by
+	// default: enabling it pins each worker to one collection and denies
+	// Ansible writes outside a per-worker scratch directory.
+	Sandbox SandboxConfig `yaml:"sandbox,omitempty"`
+}
+
+// SandboxConfig controls Landlock isolation between collections. It is
+// opt-in because a sandboxed worker can only read its own collection and the
+// system paths needed by Ansible/Python.
+type SandboxConfig struct {
+	// Enabled turns on per-collection workers and Landlock enforcement.
+	Enabled bool `yaml:"enabled,omitempty"`
+	// ReadOnly lists additional absolute paths made readable to every
+	// sandboxed worker (for example a shared, read-only role repository).
+	ReadOnly []string `yaml:"read_only,omitempty"`
+	// Writable lists additional absolute paths a sandboxed worker may write
+	// to. Collection directories stay read-only regardless of this list.
+	Writable []string `yaml:"writable,omitempty"`
 }
 
 // AuthConfig is a placeholder for future API authentication. It is parsed so

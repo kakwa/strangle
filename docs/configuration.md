@@ -28,6 +28,29 @@ Process-level settings for the master process.
 | `workers` | `1` | Worker child processes. Each owns one embedded Ansible interpreter, so this is the maximum number of concurrent playbook runs. |
 | `database.dsn` | — | PostgreSQL DSN. Without a DSN an in-memory store is used (history is lost on restart) and runs execute directly instead of through the job queue. |
 | `auth.token` | — | When set, `POST /api/sync` (without a UI session) requires the token, either as `Authorization: Bearer <token>` or as the webhook-friendly `X-Strangle-Token: <token>` header. Independent of the UI authentication below. |
+| `sandbox.enabled` | `false` | Enables Landlock isolation: each collection gets dedicated workers, its checkout is read-only and Ansible writes go to a private scratch directory. |
+| `sandbox.read_only` | — | Extra absolute paths made readable to every sandboxed worker. |
+| `sandbox.writable` | — | Extra absolute paths a sandboxed worker may write to. Collection directories stay read-only. |
+
+### Collection sandboxing
+
+With `sandbox.enabled: true` the master spawns `workers` processes **per
+collection** instead of one shared pool. Runs are routed to the workers of
+their collection. Landlock restricts each worker to:
+
+- its own collection directory and working directory (read-only);
+- the system paths needed by Go, Python and Ansible (read-only);
+- a private scratch directory (`TMPDIR`, `HOME`, `ANSIBLE_LOCAL_TEMP`,
+  `ANSIBLE_HOME` and `PYTHONPYCACHEPREFIX` point into it);
+- strangle-managed SSH host-key trust files in its own collection.
+
+A playbook therefore cannot read another collection's files or credentials,
+and cannot modify its own checkout. The policy uses
+`go-landlock`'s best-effort mode: older kernels enforce as much of it as they
+can, and kernels without Landlock log a warning and run without isolation.
+`config/server.yml` contains a commented example. The
+[validating collection](../sandbox/validate/README.md) can be added to a
+collection.yml to verify the isolation from inside a worker.
 
 ## UI authentication
 

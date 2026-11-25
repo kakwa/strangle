@@ -25,6 +25,7 @@ import (
 	"github.com/kakwa/strangle/internal/config"
 	"github.com/kakwa/strangle/internal/db"
 	"github.com/kakwa/strangle/internal/riverqueue"
+	"github.com/kakwa/strangle/internal/sandbox"
 	"github.com/kakwa/strangle/internal/scheduler"
 	"github.com/kakwa/strangle/internal/server"
 	"github.com/kakwa/strangle/internal/sshpool"
@@ -41,6 +42,7 @@ var (
 	serverConfigPath     string
 	collectionConfigPath string
 	socketPath           string
+	sandboxManifestPath  string
 )
 
 func main() {
@@ -95,6 +97,7 @@ func workerCmd() *cobra.Command {
 	cmd.Flags().StringVar(&socketPath, "socket", "", "unix socket path to serve the Runner gRPC service on (required)")
 	cmd.Flags().StringVarP(&serverConfigPath, "server-config", "s", "config/server.yml", "path to the server configuration file")
 	cmd.Flags().StringVarP(&collectionConfigPath, "collection-config", "c", "config/collection.yml", "path to the collection configuration file")
+	cmd.Flags().StringVar(&sandboxManifestPath, "sandbox", "", "Landlock manifest written by the master (internal use)")
 	_ = cmd.MarkFlagRequired("socket")
 	return cmd
 }
@@ -498,7 +501,18 @@ func run(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("resolve executable path: %w", err)
 	}
-	mgr, err := worker.NewManager(ctx, binPath, serverConfigPath, collectionConfigPath, cfg.Server.Workers, logger)
+	workerOpts := []worker.ManagerOption{}
+	if cfg.Server.Sandbox.Enabled {
+		if !sandbox.KernelSupported() {
+			logger.Warn("Landlock is not supported by this kernel: collection sandboxing will not be enforced")
+		}
+		manifests, err := sandbox.Build(cfg.Server.Sandbox, collMgr.Targets(), serverConfigPath, collectionConfigPath)
+		if err != nil {
+			return fmt.Errorf("build sandbox policies: %w", err)
+		}
+		workerOpts = append(workerOpts, worker.WithSandbox(manifests))
+	}
+	mgr, err := worker.NewManager(ctx, binPath, serverConfigPath, collectionConfigPath, cfg.Server.Workers, logger, workerOpts...)
 	if err != nil {
 		return fmt.Errorf("failed to start workers: %w", err)
 	}
@@ -652,9 +666,34 @@ func runWorker(cmd *cobra.Command, args []string) error {
 		return errors.New("--socket is required")
 	}
 
+	// A sandboxed worker is pinned to one collection. Read and apply its
+	// manifest before any SSH manager or embedded interpreter is created,
+	// so no sibling collection's credentials enter this process.
+	var manifest sandbox.Manifest
+	if sandboxManifestPath != "" {
+		var err error
+		manifest, err = sandbox.ReadFile(sandboxManifestPath)
+		if err != nil {
+			return err
+		}
+		sandbox.SetEnv(manifest.Env)
+	}
+
 	cfg, err := config.Load(serverConfigPath, collectionConfigPath)
 	if err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
+	}
+	if manifest.Collection != "" {
+		owned := make([]config.TargetConfig, 0, 1)
+		for _, t := range cfg.Targets {
+			if t.Name == manifest.Collection {
+				owned = append(owned, t)
+			}
+		}
+		if len(owned) != 1 {
+			return fmt.Errorf("sandbox manifest names unknown collection %q", manifest.Collection)
+		}
+		cfg.Targets = owned
 	}
 
 	logger, err := newLogger(cfg.Server.LogLevel)
@@ -662,6 +701,15 @@ func runWorker(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer func() { _ = logger.Sync() }()
+
+	if sandboxManifestPath != "" {
+		if !sandbox.KernelSupported() {
+			logger.Warn("Landlock is not supported by this kernel: sandboxing is not enforced")
+		}
+		if err := sandbox.Apply(manifest); err != nil {
+			return fmt.Errorf("apply sandbox: %w", err)
+		}
+	}
 
 	// The worker shares the master's checkouts: resolve the playbooks of
 	// git-backed targets from disk so its SSH managers match what the

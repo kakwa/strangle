@@ -1,0 +1,70 @@
+---
+# Validates a Landlock-sandboxed collection worker:
+#   - the collection's own files are readable
+#   - a sibling collection's secret is not readable
+#   - the collection checkout is not writable
+#   - the worker's private scratch directory is writable
+#
+# See README.md in this directory for setup.
+- name: Validate collection sandboxing
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars:
+    own_secret: "{{ playbook_dir }}/secret.txt"
+    neighbor_secret: "{{ lookup('env', 'STRANGLE_VALIDATE_NEIGHBOR') }}"
+    scratch_dir: "{{ lookup('env', 'ANSIBLE_LOCAL_TEMP') }}"
+  tasks:
+    - name: The collection can read its own secret
+      ansible.builtin.slurp:
+        src: "{{ own_secret }}"
+      register: own
+
+    - name: Check the own secret's content
+      ansible.builtin.assert:
+        that:
+          - "'validation-secret' in (own.content | b64decode)"
+
+    - name: A sibling collection's secret path is configured
+      ansible.builtin.assert:
+        that:
+          - neighbor_secret != ''
+        fail_msg: >-
+          Set STRANGLE_VALIDATE_NEIGHBOR to an absolute path to a secret in
+          another collection before running this playbook.
+
+    - name: Try to read the sibling collection's secret
+      ansible.builtin.slurp:
+        src: "{{ neighbor_secret }}"
+      register: neighbor
+      ignore_errors: true
+
+    - name: The sibling collection's secret is not readable
+      ansible.builtin.assert:
+        that:
+          - neighbor.failed | default(false)
+        fail_msg: "The sandbox allowed reading {{ neighbor_secret }}"
+
+    - name: Try to write into the collection checkout
+      ansible.builtin.copy:
+        content: "sandbox validation\n"
+        dest: "{{ playbook_dir }}/.sandbox-write-test"
+      register: checkout_write
+      ignore_errors: true
+
+    - name: The collection checkout is read-only
+      ansible.builtin.assert:
+        that:
+          - checkout_write.failed | default(false)
+        fail_msg: "The sandbox allowed writing to {{ playbook_dir }}"
+
+    - name: The worker scratch directory is writable
+      ansible.builtin.copy:
+        content: "sandbox validation\n"
+        dest: "{{ scratch_dir }}/strangle-validation.txt"
+      register: scratch_write
+
+    - name: Check the scratch write
+      ansible.builtin.assert:
+        that:
+          - not (scratch_write.failed | default(false))

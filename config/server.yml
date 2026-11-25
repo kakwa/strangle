@@ -29,3 +29,14 @@ workers: 2
 #   strangle user add <name> --password-stdin
 # auth:
 #   token: change-me
+
+# Landlock sandboxing between collections. When enabled, each collection gets
+# its own workers: its checkout is read-only and Ansible writes go to a
+# private scratch directory. See docs/configuration.md.
+# sandbox:
+#   enabled: true
+#   # Optional extra paths shared by all sandboxed workers:
+#   # read_only:
+#   #   - /usr/local/share/roles
+#   # writable:
+#   #   - /var/cache/strangle

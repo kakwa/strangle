@@ -152,6 +152,15 @@ strangle serve [-s config/server.yml] [-c config/collection.yml]
 | `workers`       | `1`             | Worker child processes (one embedded interpreter each) |
 | `database.dsn`  | —               | PostgreSQL DSN; without a DSN an in-memory store is used |
 | `auth.token`    | —               | Bearer token for `POST /api/sync` (webhook), independent of UI authentication |
+| `sandbox.enabled` | `false`       | Landlock isolation: one worker set per collection, read-only checkouts, private write scratch |
+
+### Collection sandboxing
+
+With `sandbox.enabled: true`, Landlock confines each worker to one collection:
+playbooks cannot read another collection's credentials or modify their own
+checkout. Ansible writes are redirected to a per-worker scratch directory.
+A [validating collection](sandbox/validate/README.md) is provided to verify
+the isolation. See [configuration](docs/configuration.md#collection-sandboxing).
 
 ### UI authentication
 

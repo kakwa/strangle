@@ -23,7 +23,7 @@ import (
 // interpreter (setup, transport or a closed worker). The master's worker
 // pool implements it; tests can provide their own.
 type Executor interface {
-	RunPlaybook(ctx context.Context, scope, workingDir string, args ...string) (int, string, error)
+	RunPlaybook(ctx context.Context, collection, scope, workingDir string, args ...string) (int, string, error)
 }
 
 // Ansible applies playbooks for every configured target by dispatching each
@@ -192,7 +192,7 @@ func (a *Ansible) runTarget(ctx context.Context, t config.TargetConfig, firstErr
 			zap.String("playbook", pb.Name),
 			zap.String("file", pb.PlaybookPath()),
 		)
-		if err := a.runPlaybook(ctx, pb, sshScope, scopeNames(inv, pb.PlaybookPath()), invHosts); err != nil {
+		if err := a.runPlaybook(ctx, t.Name, pb, sshScope, scopeNames(inv, pb.PlaybookPath()), invHosts); err != nil {
 			a.logger.Error("playbook failed",
 				zap.String("target", t.Name),
 				zap.String("playbook", pb.Name),
@@ -211,13 +211,13 @@ func (a *Ansible) runTarget(ctx context.Context, t config.TargetConfig, firstErr
 
 // runPlaybook dispatches one playbook to the worker pool, parses the output
 // and persists the results.
-func (a *Ansible) runPlaybook(ctx context.Context, pb config.PlaybookConfig, sshScope string, scope []string, invHosts []store.InventoryHost) error {
+func (a *Ansible) runPlaybook(ctx context.Context, collection string, pb config.PlaybookConfig, sshScope string, scope []string, invHosts []store.InventoryHost) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
 	started := time.Now().UTC()
-	exitCode, output, runErr := a.exec.RunPlaybook(ctx, sshScope, pb.WorkingDir, pb.Args()...)
+	exitCode, output, runErr := a.exec.RunPlaybook(ctx, collection, sshScope, pb.WorkingDir, pb.Args()...)
 	finished := time.Now().UTC()
 
 	if runErr != nil {

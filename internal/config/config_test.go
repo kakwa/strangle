@@ -237,6 +237,33 @@ playbooks:
 	}
 }
 
+func TestLoadServerSandbox(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "server.yml")
+	writeFile(t, path, `
+listen_addr: ":9090"
+sandbox:
+  enabled: true
+  read_only:
+    - /usr/local/share/roles
+  writable:
+    - /var/cache/strangle
+`)
+	cfg, err := LoadServer(path)
+	if err != nil {
+		t.Fatalf("LoadServer() error: %v", err)
+	}
+	if !cfg.Sandbox.Enabled {
+		t.Error("sandbox.enabled = false, want true")
+	}
+	if got := cfg.Sandbox.ReadOnly; !slices.Equal(got, []string{"/usr/local/share/roles"}) {
+		t.Errorf("sandbox.read_only = %v", got)
+	}
+	if got := cfg.Sandbox.Writable; !slices.Equal(got, []string{"/var/cache/strangle"}) {
+		t.Errorf("sandbox.writable = %v", got)
+	}
+}
+
 func TestLoadGitTarget(t *testing.T) {
 	// A git-backed target's strangle.yml lives inside the repository and is
 	// loaded by the collection manager once the checkout is in place. Load

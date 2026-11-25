@@ -1,0 +1,4 @@
+playbooks:
+  - name: isolation
+    playbook: validate.yml
+    inventory: inventory.ini

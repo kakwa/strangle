@@ -20,7 +20,7 @@ import (
 // a playbook, they only check that the handler routes to the enqueuer.
 type stubExecutor struct{}
 
-func (stubExecutor) RunPlaybook(context.Context, string, string, ...string) (int, string, error) {
+func (stubExecutor) RunPlaybook(context.Context, string, string, string, ...string) (int, string, error) {
 	return 0, "", nil
 }
 

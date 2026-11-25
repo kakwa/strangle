@@ -22,6 +22,10 @@ targets:
   - name: homelab
     # org: default
     path: /home/kakwa/Geek/GitHub/home.tf/ansible
+
+  # Optional Landlock validation collection (see sandbox/validate/README.md):
+  # - name: sandbox-validate
+  #   path: ./sandbox/validate
     # Git upstream. When set, strangle clones the repository into `path` and
     # keeps it pinned to the tracked ref.
     # git:

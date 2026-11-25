@@ -33,6 +33,12 @@ message RunPlaybookRequest {
 
   // args are the ansible-playbook arguments (inventory, flags, playbook).
   repeated string args = 3;
+
+  // collection is the name of the collection the job belongs to. With
+  // sandboxing enabled the master routes the run to the worker dedicated to
+  // that collection, so no other collection's files or credentials are
+  // visible to the playbook. Empty on unsandboxed deployments.
+  string collection = 4;
 }
 
 message RunPlaybookResponse {
