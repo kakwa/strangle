@@ -1,6 +1,7 @@
 import {
   IconBook,
   IconGauge,
+  IconKey,
   IconServer,
   IconServer2,
 } from '@tabler/icons-react'
@@ -19,6 +20,7 @@ const mainLinks = [
   { icon: IconGauge, label: 'Dashboard' },
   { icon: IconServer2, label: 'Hosts' },
   { icon: IconBook, label: 'Playbooks' },
+  { icon: IconKey, label: 'Tokens' },
 ]
 
 const dashboardLinks = [

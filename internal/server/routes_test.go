@@ -41,7 +41,7 @@ var testTargets = []config.TargetConfig{{
 // newTestServerWithStore builds a Server over the given store.
 func newTestServerWithStore(enq RunEnqueuer, st store.Store) *Server {
 	apr := applier.NewAnsible(testTargets, stubExecutor{}, st, zap.NewNop())
-	return New("test", apr, st, nil, enq, nil, nil, nil, "", zap.NewNop())
+	return New("test", apr, st, nil, enq, nil, nil, nil, nil, "", zap.NewNop())
 }
 
 func doGet(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {
@@ -381,7 +381,7 @@ func TestGetWorkersNilReporter(t *testing.T) {
 func TestListenAndServe(t *testing.T) {
 	s := New("127.0.0.1:0",
 		applier.NewAnsible(testTargets, stubExecutor{}, store.NewMem(), zap.NewNop()),
-		store.NewMem(), nil, &recEnqueuer{status: "queued"}, nil, nil, nil, "", zap.NewNop())
+		store.NewMem(), nil, &recEnqueuer{status: "queued"}, nil, nil, nil, nil, "", zap.NewNop())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
@@ -426,7 +426,7 @@ func (f *fakeSyncer) Targets() []config.TargetConfig {
 // view of the targets after a sync.
 func newSyncTestServer(syncer Syncer, token string) (*Server, *applier.Ansible) {
 	apr := applier.NewAnsible(testTargets, stubExecutor{}, store.NewMem(), zap.NewNop())
-	s := New("test", apr, store.NewMem(), nil, &recEnqueuer{status: "queued"}, nil, syncer, nil, token, zap.NewNop())
+	s := New("test", apr, store.NewMem(), nil, &recEnqueuer{status: "queued"}, nil, syncer, nil, nil, token, zap.NewNop())
 	return s, apr
 }
 
@@ -563,7 +563,7 @@ func TestSyncEndpointAuth(t *testing.T) {
 func TestBearerTokenOK(t *testing.T) {
 	s := New("test",
 		applier.NewAnsible(testTargets, stubExecutor{}, store.NewMem(), zap.NewNop()),
-		store.NewMem(), nil, &recEnqueuer{status: "queued"}, nil, nil, nil, "sekrit", zap.NewNop())
+		store.NewMem(), nil, &recEnqueuer{status: "queued"}, nil, nil, nil, nil, "sekrit", zap.NewNop())
 
 	cases := []struct {
 		name    string

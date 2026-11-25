@@ -23,6 +23,17 @@ itself gates on `GET /api/me`.
 the comparison is constant-time). A valid UI session also works on
 `/api/sync`.
 
+**User API tokens (bearer).** When a database is configured, local accounts
+can create their own bearer tokens (in the web UI under *Tokens* or with
+`strangle token`, see [configuration](configuration.md#api-tokens)). A
+valid token authenticates **every** `/api/*` request as its owner, sent as
+`Authorization: Bearer st_…` or, webhook-friendly,
+`X-Strangle-Token: st_…` (the bearer header wins when both are present).
+Only the SHA-256 digest of a token is stored; the raw value is returned
+exactly once at creation. The static sync token (`auth.token`) is **not** a
+user account: it only opens `POST /api/sync` and is rejected with `401`
+everywhere else when authentication is on.
+
 ## GET /api/health
 
 Liveness. Open, even when UI authentication is on.
@@ -65,6 +76,56 @@ authentication is on at all:
 - `200 {"authenticated": true, "username": "admin"}` — valid session.
 - `401 {"error": "not authenticated"}` — authentication is on and no valid
   session cookie is present (the UI shows its login screen).
+
+## API tokens (self-service)
+
+These endpoints manage the caller's own bearer tokens. They require a user
+identity — a valid session cookie or a valid user token — so a request can
+also be made with a token. Without a database (`database.dsn` unset) all
+three return `503`. A request that is neither a user session nor a user
+token gets `403`.
+
+### GET /api/tokens
+
+List the caller's tokens, newest name first. Only a display prefix of the
+raw value is returned — the full value can never be retrieved again.
+
+```json
+[
+  {"name": "ci", "prefix": "st_9a1b2c3d", "created_at": "2026-11-24T09:12:00Z",
+   "last_used_at": "2026-11-24T10:30:00Z"},
+  {"name": "laptop", "prefix": "st_44f0c2aa", "created_at": "2026-11-20T08:00:00Z",
+   "expires_at": "2026-11-27T08:00:00Z"}
+]
+```
+
+`expires_at` is omitted for a token that never expires; `last_used_at` is
+omitted until the token has been used at least once. Expired tokens are
+pruned and not listed.
+
+### POST /api/tokens
+
+Create a token. `ttl_hours` is optional; `0` or absent means no expiry.
+
+```sh
+curl -X POST localhost:8080/api/tokens \
+  -H "Cookie: strangle_session=…" \
+  -d '{"name": "ci", "ttl_hours": 72}'
+```
+
+`201` returns the raw value — the **only** time it is shown:
+
+```json
+{"raw": "st_9a1b2c3d…", "token": {"name": "ci", "prefix": "st_9a1b2c3d", "created_at": "…"}}
+```
+
+Errors: `400` invalid JSON or an empty name, `409` `token "name" already
+exists` (names are unique per user).
+
+### DELETE /api/tokens/{name}
+
+Revoke the named token. `204` on success, `404` if no such token exists for
+the caller.
 
 ## GET /api/stats
 

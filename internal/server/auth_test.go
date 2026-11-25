@@ -19,7 +19,7 @@ import (
 // store (nil keeps the server open).
 func newAuthTestServer(users auth.UserStore) *Server {
 	apr := applier.NewAnsible(testTargets, stubExecutor{}, store.NewMem(), zap.NewNop())
-	return New("test", apr, store.NewMem(), nil, &recEnqueuer{status: "queued"}, nil, nil, users, "", zap.NewNop())
+	return New("test", apr, store.NewMem(), nil, &recEnqueuer{status: "queued"}, nil, nil, users, nil, "", zap.NewNop())
 }
 
 func seedUser(t *testing.T, users auth.UserStore, name, pw string) {
@@ -211,7 +211,7 @@ func TestSyncWithSession(t *testing.T) {
 		targets: testTargets,
 	}
 	apr := applier.NewAnsible(testTargets, stubExecutor{}, store.NewMem(), zap.NewNop())
-	s := New("test", apr, store.NewMem(), nil, &recEnqueuer{status: "queued"}, nil, fake, users, "", zap.NewNop())
+	s := New("test", apr, store.NewMem(), nil, &recEnqueuer{status: "queued"}, nil, fake, users, nil, "", zap.NewNop())
 
 	// Auth on, no token configured: a bare sync is rejected.
 	if rec := postSync(t, s, `{"target":"home"}`, nil); rec.Code != http.StatusUnauthorized {
@@ -235,7 +235,7 @@ func TestSyncTokenWithAuthOn(t *testing.T) {
 
 	fake := &fakeSyncer{rev: "abc123", targets: testTargets}
 	apr := applier.NewAnsible(testTargets, stubExecutor{}, store.NewMem(), zap.NewNop())
-	s := New("test", apr, store.NewMem(), nil, &recEnqueuer{status: "queued"}, nil, fake, users, "sekrit", zap.NewNop())
+	s := New("test", apr, store.NewMem(), nil, &recEnqueuer{status: "queued"}, nil, fake, users, nil, "sekrit", zap.NewNop())
 
 	// The configured token still works for machine-to-machine syncs.
 	rec := postSync(t, s, `{"target":"home"}`, map[string]string{"X-Strangle-Token": "sekrit"})

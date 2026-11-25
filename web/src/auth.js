@@ -35,3 +35,38 @@ export async function logout() {
     // ignore
   }
 }
+
+// --- API token self-service --------------------------------------------------
+//
+// Tokens give user-linked CLIs and webhooks a bearer credential that
+// authenticates /api requests as the owning user. The raw value is returned
+// exactly once, at creation; only a display prefix is stored.
+
+function apiError(res) {
+  return res.json().catch(() => ({})).then((body) => body.error || `HTTP ${res.status}`)
+}
+
+// fetchTokens lists the caller's tokens. Throws with the server's message on
+// 403/503 (no user account / no database), which the UI shows as a hint.
+export async function fetchTokens() {
+  const res = await fetch('/api/tokens')
+  if (!res.ok) throw new Error(await apiError(res))
+  return res.json()
+}
+
+// createToken returns { raw, token }; raw is the bearer value, shown once.
+export async function createToken(name, ttlHours) {
+  const res = await fetch('/api/tokens', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, ttl_hours: ttlHours || 0 }),
+  })
+  if (!res.ok) throw new Error(await apiError(res))
+  return res.json()
+}
+
+// removeToken revokes one by name; a 404 (already gone) is not an error.
+export async function removeToken(name) {
+  const res = await fetch(`/api/tokens/${encodeURIComponent(name)}`, { method: 'DELETE' })
+  if (!res.ok && res.status !== 404) throw new Error(await apiError(res))
+}

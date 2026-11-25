@@ -48,6 +48,37 @@ authentication on, every `/api/*` request needs a valid session cookie
 (12 h, in memory), except `GET /api/health`, `POST /api/login`,
 `POST /api/logout` and `GET /api/me`; see [the API reference](api.md#authentication).
 
+## API tokens
+
+A local account can create **API tokens**: bearer credentials that
+authenticate any `/api/*` request as that account, for CLIs, webhooks and
+other integrations. They are managed per user in the web UI (under
+*Tokens*) or with the `token` command group:
+
+```sh
+strangle token create ci --user admin --ttl 72h   # prints the raw value once
+strangle token list [--user admin]                # all users' tokens without --user
+strangle token remove ci --user admin
+```
+
+As with users, the command group needs a database, so `-s` (the
+server.yml) must point at a config with `database.dsn` set.
+
+- A token is `st_` plus 32 random bytes in hex (`st_` + 64 hex chars).
+  Only its SHA-256 digest is stored; the raw value is printed once at
+  creation and can never be recovered.
+- Names are unique per user. A token's lifetime is optional
+  (`--ttl`, e.g. `72h`; absent = no expiry).
+- Use a token by sending `Authorization: Bearer st_…` or
+  `X-Strangle-Token: st_…`. It acts as the owning user: with
+  authentication on it satisfies the session requirement on every
+  `/api/*` endpoint, and it also opens `POST /api/sync` without a session.
+- The static `auth.token` (see the table above) is a separate mechanism:
+  it only opens `POST /api/sync` and is not a user account.
+
+See [the API reference](api.md#api-tokens-self-service) for the
+self-service endpoints.
+
 ## collection.yml
 
 The inventory of Ansible projects (**targets**) that strangle applies.

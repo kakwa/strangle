@@ -101,7 +101,7 @@ func Open(ctx context.Context, dsn string) (*DB, error) {
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
 
-	if err := gdb.WithContext(ctx).AutoMigrate(&Run{}, &Host{}, &HostRun{}, &TaskState{}, &UserRecord{}); err != nil {
+	if err := gdb.WithContext(ctx).AutoMigrate(&Run{}, &Host{}, &HostRun{}, &TaskState{}, &UserRecord{}, &TokenRecord{}); err != nil {
 		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
 

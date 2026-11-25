@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   IconBook,
   IconClock,
+  IconKey,
   IconMoonStars,
   IconPlayerPlay,
   IconServer,
@@ -16,7 +17,9 @@ import {
   Button,
   Card,
   Center,
+  Code,
   Group,
+  Input,
   Loader,
   SimpleGrid,
   Stack,
@@ -38,7 +41,7 @@ import {
 } from 'react-router-dom'
 import { DoubleNavbar } from './DoubleNavbar'
 import LoginScreen from './LoginScreen'
-import { fetchMe, logout } from './auth'
+import { createToken, fetchMe, fetchTokens, logout, removeToken } from './auth'
 
 const POLL_INTERVAL_MS = 10_000
 
@@ -659,6 +662,175 @@ function ColorSchemeToggle() {
 // Maps a URL path to the (section, selected host) pair the shell renders.
 // Unknown paths fall back to the dashboard so a stale deep link never breaks
 // the app.
+// TokensView is the API-token self-service screen: it lists the signed-in
+// user's bearer tokens and lets them create and revoke new ones. The raw
+// value of a new token is shown exactly once, in a copyable alert.
+function TokensView() {
+  const [tokens, setTokens] = useState(null)
+  const [loadError, setLoadError] = useState(null)
+  const [name, setName] = useState('')
+  const [ttlHours, setTtlHours] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+  const [created, setCreated] = useState(null) // { raw, token } of the last creation
+
+  const refresh = useCallback(async () => {
+    try {
+      setTokens(await fetchTokens())
+      setLoadError(null)
+    } catch (err) {
+      setLoadError(err.message)
+    }
+  }, [])
+
+  useEffect(() => {
+    refresh()
+  }, [refresh])
+
+  const create = async (e) => {
+    e.preventDefault()
+    const trimmed = name.trim()
+    if (!trimmed || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await createToken(trimmed, Number(ttlHours) || 0)
+      setCreated(res)
+      setName('')
+      setTtlHours('')
+      await refresh()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async (t) => {
+    setError(null)
+    try {
+      await removeToken(t.name)
+      if (created && created.token && created.token.name === t.name) setCreated(null)
+      await refresh()
+    } catch (err) {
+      setError(err.message)
+    }
+  }
+
+  if (tokens === null && loadError) {
+    return (
+      <Alert color="gray" title="Token management is unavailable">
+        {loadError}
+      </Alert>
+    )
+  }
+
+  return (
+    <Stack gap="md">
+      <Card withBorder>
+        <Group justify="space-between" mb="xs">
+          <Title order={4}>Your API tokens</Title>
+          <Text size="xs" c="dimmed">
+            for CLIs, webhooks and other integrations
+          </Text>
+        </Group>
+        <Text size="sm" c="dimmed" mb="md">
+          A token authenticates <Code>/api</Code> requests as your account.
+          Send it as <Code>Authorization: Bearer st_…</Code> or as an{' '}
+          <Code>X-Strangle-Token</Code> header.
+        </Text>
+        <form onSubmit={create}>
+          <Group align="flex-end" gap="sm">
+            <Input
+              label="Name"
+              placeholder="e.g. ci, laptop"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              style={{ maxWidth: 260 }}
+            />
+            <Input
+              label="Lifetime (hours, optional)"
+              type="number"
+              min="0"
+              placeholder="no expiry"
+              value={ttlHours}
+              onChange={(e) => setTtlHours(e.target.value)}
+              style={{ maxWidth: 200 }}
+            />
+            <Button type="submit" leftSection={<IconKey size={14} />} disabled={busy || !name.trim()}>
+              {busy ? 'Creating…' : 'Create token'}
+            </Button>
+          </Group>
+        </form>
+      </Card>
+
+      {created && (
+        <Alert color="teal" title={`Token ${created.token?.name || ''} created`} icon={<IconKey size={16} />}>
+          <Group align="flex-start" gap="sm">
+            <Text size="sm">
+              Copy the token now — it is shown exactly once and can never be
+              recovered:
+            </Text>
+            <Code copyable>{created.raw}</Code>
+          </Group>
+        </Alert>
+      )}
+
+      {error && <Alert color="red" title="Token request failed">{error}</Alert>}
+
+      <Card withBorder>
+        <Table>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Name</Table.Th>
+              <Table.Th>Prefix</Table.Th>
+              <Table.Th>Created</Table.Th>
+              <Table.Th>Expires</Table.Th>
+              <Table.Th>Last used</Table.Th>
+              <Table.Th></Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {(tokens || []).map((t) => (
+              <Table.Tr key={t.name}>
+                <Table.Td>{t.name}</Table.Td>
+                <Table.Td>
+                  <Text size="sm" ff="monospace">{t.prefix}…</Text>
+                </Table.Td>
+                <Table.Td>
+                  <Text size="sm" c="dimmed">{fmtTime(t.created_at)}</Text>
+                </Table.Td>
+                <Table.Td>
+                  <Text size="sm" c="dimmed">{t.expires_at ? fmtTime(t.expires_at) : 'never'}</Text>
+                </Table.Td>
+                <Table.Td>
+                  <Text size="sm" c="dimmed">
+                    {t.last_used_at ? `last used ${fmtAgo(t.last_used_at)}` : 'never used'}
+                  </Text>
+                </Table.Td>
+                <Table.Td>
+                  <Button size="xs" variant="light" color="red" onClick={() => remove(t)}>
+                    Revoke
+                  </Button>
+                </Table.Td>
+              </Table.Tr>
+            ))}
+            {(tokens || []).length === 0 && (
+              <Table.Tr>
+                <Table.Td colSpan={6}>
+                  <Text size="sm" c="dimmed">
+                    No tokens yet — create one above.
+                  </Text>
+                </Table.Td>
+              </Table.Tr>
+            )}
+          </Table.Tbody>
+        </Table>
+      </Card>
+    </Stack>
+  )
+}
+
 function sectionFromPath(pathname) {
   const safeDecode = (s) => {
     try {
@@ -673,6 +845,7 @@ function sectionFromPath(pathname) {
   }
   if (pathname === '/hosts') return { section: 'Hosts', selectedHost: null }
   if (pathname === '/playbooks') return { section: 'Playbooks', selectedHost: null }
+  if (pathname === '/tokens') return { section: 'Tokens', selectedHost: null }
   return { section: 'Dashboard', selectedHost: null }
 }
 
@@ -833,6 +1006,7 @@ function AppInner({ user, onLogout }) {
     closeMobile()
     if (label === 'Hosts') navigate('/hosts')
     else if (label === 'Playbooks') navigate('/playbooks')
+    else if (label === 'Tokens') navigate('/tokens')
     else navigate('/')
   }
 
@@ -933,6 +1107,7 @@ function AppInner({ user, onLogout }) {
                   />
                 }
               />
+              <Route path="/tokens" element={<TokensView />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           )}

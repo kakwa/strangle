@@ -62,6 +62,7 @@ func main() {
 
 	root.AddCommand(workerCmd())
 	root.AddCommand(userCmd())
+	root.AddCommand(tokenCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -211,6 +212,152 @@ func readPasswordStdin() string {
 	return strings.TrimRight(sc.Text(), "\r\n")
 }
 
+func tokenCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "token",
+		Short: "Manage API tokens for user-linked CLIs and integrations (stored in the database).",
+	}
+	// The tokens live in the configured database, so the subcommands need
+	// the server file to find the DSN.
+	cmd.PersistentFlags().StringVarP(&serverConfigPath, "server-config", "s",
+		"config/server.yml", "path to the server configuration file")
+
+	var user string
+	var ttl time.Duration
+
+	create := &cobra.Command{
+		Use:   "create <name>",
+		Short: "Create an API token for a user; the raw value is shown exactly once.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			users, tokens, err := openTokenStores()
+			if err != nil {
+				return err
+			}
+			if user == "" {
+				return errors.New("provide the owning user with --user")
+			}
+			ctx := context.Background()
+			if _, err := users.GetUser(ctx, user); err != nil {
+				if errors.Is(err, auth.ErrNotFound) {
+					return fmt.Errorf("user %q not found", user)
+				}
+				return err
+			}
+			raw, tok, err := tokens.Create(ctx, user, args[0], ttl)
+			if err != nil {
+				return err
+			}
+			// The raw value goes to stdout (so it can be captured with
+			// $()); everything else goes to stderr.
+			fmt.Println(raw)
+			expiry := "never expires"
+			if tok.Expires != nil {
+				expiry = "expires " + tok.Expires.Format("2006-01-02 15:04:05")
+			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "created token %q for user %s (%s)\n", tok.Name, user, expiry)
+			return nil
+		},
+	}
+	create.Flags().StringVar(&user, "user", "", "the user the token belongs to (required)")
+	create.Flags().DurationVar(&ttl, "ttl", 0, "token lifetime (e.g. 72h); 0 means no expiry")
+
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List API tokens, for one user (--user) or for all users.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			users, tokens, err := openTokenStores()
+			if err != nil {
+				return err
+			}
+			ctx := context.Background()
+			owners := []string{}
+			switch {
+			case user != "":
+				if _, err := users.GetUser(ctx, user); err != nil {
+					if errors.Is(err, auth.ErrNotFound) {
+						return fmt.Errorf("user %q not found", user)
+					}
+					return err
+				}
+				owners = []string{user}
+			default:
+				all, err := users.ListUsers(ctx)
+				if err != nil {
+					return err
+				}
+				for _, u := range all {
+					owners = append(owners, u.Name)
+				}
+			}
+			for _, o := range owners {
+				toks, err := tokens.List(ctx, o)
+				if err != nil {
+					return err
+				}
+				for _, t := range toks {
+					expiry := "never expires"
+					if t.Expires != nil {
+						expiry = "expires " + t.Expires.Format("2006-01-02 15:04:05")
+					}
+					last := "never used"
+					if t.LastUsedAt != nil {
+						last = "last used " + t.LastUsedAt.Format("2006-01-02 15:04:05")
+					}
+					fmt.Printf("%s\t%s\t%s\t%s\t%s\n", o, t.Name, t.Prefix, expiry, last)
+				}
+			}
+			return nil
+		},
+	}
+	list.Flags().StringVar(&user, "user", "", "only list this user's tokens")
+
+	remove := &cobra.Command{
+		Use:   "remove <name>",
+		Short: "Revoke an API token.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, tokens, err := openTokenStores()
+			if err != nil {
+				return err
+			}
+			if user == "" {
+				return errors.New("provide the owning user with --user")
+			}
+			if err := tokens.Remove(context.Background(), user, args[0]); err != nil {
+				if errors.Is(err, auth.ErrNotFound) {
+					return fmt.Errorf("token %q not found for user %q", args[0], user)
+				}
+				return err
+			}
+			fmt.Printf("removed token %q\n", args[0])
+			return nil
+		},
+	}
+	remove.Flags().StringVar(&user, "user", "", "the user that owns the token (required)")
+
+	cmd.AddCommand(create, list, remove)
+	return cmd
+}
+
+// openTokenStores opens the users and api_tokens tables from the configured
+// server file. API tokens only exist when a database is configured.
+func openTokenStores() (auth.UserStore, auth.TokenStore, error) {
+	cfg, err := config.LoadServer(serverConfigPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+	if cfg.Database.DSN == "" {
+		return nil, nil, errors.New("no database.dsn in server.yml: API tokens are stored in the database")
+	}
+	d, err := db.Open(context.Background(), cfg.Database.DSN)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to open database: %w", err)
+	}
+	return d.Users(), d.Tokens(), nil
+}
+
 func run(cmd *cobra.Command, args []string) error {
 	cfg, err := config.Load(serverConfigPath, collectionConfigPath)
 	if err != nil {
@@ -263,6 +410,7 @@ func run(cmd *cobra.Command, args []string) error {
 
 	var st store.Store
 	var users auth.UserStore
+	var tokens auth.TokenStore
 	if cfg.Server.Database.DSN != "" {
 		dctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		d, err := db.Open(dctx, cfg.Server.Database.DSN)
@@ -273,6 +421,7 @@ func run(cmd *cobra.Command, args []string) error {
 		}
 		st = d
 		users = d.Users()
+		tokens = d.Tokens()
 		logger.Info("using PostgreSQL store")
 	} else {
 		st = store.NewMem()
@@ -326,7 +475,7 @@ func run(cmd *cobra.Command, args []string) error {
 	if collMgr.HasGit() {
 		syncer = collMgr
 	}
-	srv := server.New(cfg.Server.ListenAddr, apr, st, multi, enqueue, mgr, syncer, users, cfg.Server.Auth.Token, logger)
+	srv := server.New(cfg.Server.ListenAddr, apr, st, multi, enqueue, mgr, syncer, users, tokens, cfg.Server.Auth.Token, logger)
 
 	done := make(chan struct{})
 	go func() {

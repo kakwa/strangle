@@ -59,6 +59,7 @@ type Server struct {
 	workers   WorkerReporter
 	syncer    Syncer
 	users     auth.UserStore
+	tokens    auth.TokenStore
 	sessions  *auth.Sessions
 	authOn    bool
 	authToken string
@@ -95,10 +96,12 @@ const SessionCookie = "strangle_session"
 // be nil when no worker pool is managed. syncer may be nil when no target
 // has a git upstream. users, when non-nil, is the store of UI accounts; UI
 // authentication is enforced as soon as it holds at least one user (see
-// Routes). authToken, when non-empty, is accepted as a bearer token on the
-// sync endpoint (machine-to-machine webhook protection, in addition to a
-// valid UI session).
-func New(addr string, apr *applier.Ansible, st store.Store, ssh *sshpool.Multi, run RunEnqueuer, workers WorkerReporter, syncer Syncer, users auth.UserStore, authToken string, logger *zap.Logger) *Server {
+// Routes). tokens, when non-nil, is the store of user API tokens: a valid
+// bearer token authenticates any /api request as its owner (self-service,
+// for user-linked CLIs and webhooks). authToken, when non-empty, is a
+// static bearer token accepted on the sync endpoint only (legacy
+// machine-to-machine webhook protection, not tied to a user).
+func New(addr string, apr *applier.Ansible, st store.Store, ssh *sshpool.Multi, run RunEnqueuer, workers WorkerReporter, syncer Syncer, users auth.UserStore, tokens auth.TokenStore, authToken string, logger *zap.Logger) *Server {
 	return &Server{
 		addr:      addr,
 		applier:   apr,
@@ -108,6 +111,7 @@ func New(addr string, apr *applier.Ansible, st store.Store, ssh *sshpool.Multi, 
 		workers:   workers,
 		syncer:    syncer,
 		users:     users,
+		tokens:    tokens,
 		authToken: authToken,
 		logger:    logger,
 	}
@@ -195,6 +199,88 @@ func (s *Server) Routes() http.Handler {
 			return
 		}
 		writeJSON(w, http.StatusOK, meResponse{Authenticated: true, Username: sess.Username})
+	})
+
+	// --- API token self-service ---------------------------------------------
+	//
+	// Users manage their own bearer tokens for CLIs, webhooks and other
+	// integrations. A valid token authenticates any /api request as its
+	// owner, so these endpoints accept a session cookie or a bearer token.
+
+	// GET /api/tokens lists the caller's tokens. Raw values are never
+	// returned; only a display prefix.
+	mux.HandleFunc("GET /api/tokens", func(w http.ResponseWriter, r *http.Request) {
+		if s.tokens == nil {
+			writeError(w, http.StatusServiceUnavailable, errors.New("token storage is not configured (no database)"))
+			return
+		}
+		owner, ok := s.userFrom(r)
+		if !ok {
+			writeError(w, http.StatusForbidden, errors.New("a user account is required to manage tokens (use a session or a user token)"))
+			return
+		}
+		tokens, err := s.tokens.List(r.Context(), owner)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, tokens)
+	})
+
+	// POST /api/tokens creates one. Body: {"name": "...", "ttl_hours": N}
+	// where ttl_hours is optional (absent or 0: no expiry). The raw value is
+	// returned exactly once, in the 201 response.
+	mux.HandleFunc("POST /api/tokens", func(w http.ResponseWriter, r *http.Request) {
+		if s.tokens == nil {
+			writeError(w, http.StatusServiceUnavailable, errors.New("token storage is not configured (no database)"))
+			return
+		}
+		owner, ok := s.userFrom(r)
+		if !ok {
+			writeError(w, http.StatusForbidden, errors.New("a user account is required to manage tokens (use a session or a user token)"))
+			return
+		}
+		var req struct {
+			Name     string `json:"name"`
+			TTLHours int64  `json:"ttl_hours"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		raw, tok, err := s.tokens.Create(r.Context(), owner, req.Name, time.Duration(req.TTLHours)*time.Hour)
+		if err != nil {
+			if strings.Contains(err.Error(), "already exists") {
+				writeError(w, http.StatusConflict, err)
+				return
+			}
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		s.logger.Info("API token created", zap.String("username", owner), zap.String("token", tok.Name))
+		writeJSON(w, http.StatusCreated, map[string]any{"raw": raw, "token": tok})
+	})
+
+	// DELETE /api/tokens/{name} revokes one.
+	mux.HandleFunc("DELETE /api/tokens/{name}", func(w http.ResponseWriter, r *http.Request) {
+		if s.tokens == nil {
+			writeError(w, http.StatusServiceUnavailable, errors.New("token storage is not configured (no database)"))
+			return
+		}
+		owner, ok := s.userFrom(r)
+		if !ok {
+			writeError(w, http.StatusForbidden, errors.New("a user account is required to manage tokens (use a session or a user token)"))
+			return
+		}
+		if err := s.tokens.Remove(r.Context(), owner, r.PathValue("name")); err != nil {
+			if errors.Is(err, auth.ErrNotFound) {
+				writeError(w, http.StatusNotFound, err)
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	// --- data endpoints ----------------------------------------------------
@@ -475,23 +561,27 @@ type meResponse struct {
 	Username      string `json:"username,omitempty"`
 }
 
-// requireAuth wraps next, rejecting /api/* requests without a valid session
-// when authentication is on. The open endpoints are GET /api/health
-// (liveness), POST /api/login, POST /api/logout and GET /api/me.
+// requireAuth wraps next, rejecting /api/* requests without a valid
+// identity when authentication is on. An identity is a valid session
+// (cookie) or a user bearer token; the static sync token only unlocks
+// POST /api/sync. The open endpoints are GET /api/health (liveness),
+// POST /api/login, POST /api/logout and GET /api/me.
 func (s *Server) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.authOn && strings.HasPrefix(r.URL.Path, "/api/") {
-			_, ok := s.sessionFrom(r)
-			// Machine-to-machine webhooks may use the configured sync token
-			// instead of a UI session.
-			syncOK := r.URL.Path == "/api/sync" && r.Method == http.MethodPost && s.syncAllowed(r)
-			if !ok && !s.authOpen(r) && !syncOK {
+			if _, ok := s.userFrom(r); !ok && !s.authOpen(r) && !s.syncOK(r) {
 				writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
 				return
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// syncOK reports whether r may use POST /api/sync: any valid identity works,
+// and when auth is off the endpoint is open.
+func (s *Server) syncOK(r *http.Request) bool {
+	return r.URL.Path == "/api/sync" && r.Method == http.MethodPost && s.syncAllowed(r)
 }
 
 // authOpen lists the /api endpoints reachable without a session.
@@ -509,16 +599,17 @@ func (s *Server) authOpen(r *http.Request) bool {
 	return false
 }
 
-// syncAllowed reports whether r may use POST /api/sync: a valid UI session
-// always works, and the configured sync token works when it is set.
+// syncAllowed reports whether r may use POST /api/sync: a valid session or
+// a user token always works, the static sync token works when it is set,
+// and with no authentication at all the endpoint is open.
 func (s *Server) syncAllowed(r *http.Request) bool {
-	if _, ok := s.sessionFrom(r); ok {
+	if _, ok := s.userFrom(r); ok {
 		return true
 	}
-	if s.authToken == "" {
-		return !s.authOn
+	if s.authToken != "" && s.bearerTokenOK(r) {
+		return true
 	}
-	return s.bearerTokenOK(r)
+	return !s.authOn && s.authToken == ""
 }
 
 // sessionFrom resolves the session carried by the request cookie, if any.
@@ -535,6 +626,24 @@ func (s *Server) sessionFrom(r *http.Request) (*auth.Session, bool) {
 		return nil, false
 	}
 	return sess, true
+}
+
+// userFrom resolves which user r acts as: a valid UI session (cookie) or a
+// bearer API token owned by a user. The static sync token is not a user and
+// does not count.
+func (s *Server) userFrom(r *http.Request) (string, bool) {
+	if sess, ok := s.sessionFrom(r); ok {
+		return sess.Username, true
+	}
+	raw, ok := bearerTokenValue(r)
+	if !ok || s.tokens == nil {
+		return "", false
+	}
+	tok, err := s.tokens.Lookup(r.Context(), raw)
+	if err != nil {
+		return "", false
+	}
+	return tok.Owner, true
 }
 
 // ListenAndServe runs the HTTP server until ctx is canceled,
@@ -577,16 +686,28 @@ func spaHandler(fsys fs.FS) http.Handler {
 	})
 }
 
-// bearerTokenOK reports whether r carries the configured API token, either
-// as an Authorization: Bearer header or as an X-Strangle-Token header (the
-// latter is friendlier for webhook integrations).
-func (s *Server) bearerTokenOK(r *http.Request) bool {
+// bearerTokenValue extracts a bearer credential from r, either as an
+// Authorization header or as an X-Strangle-Token header (the latter is
+// friendlier for webhook integrations).
+func bearerTokenValue(r *http.Request) (string, bool) {
 	auth := r.Header.Get("Authorization")
 	if token := r.Header.Get("X-Strangle-Token"); token != "" && auth == "" {
 		auth = "Bearer " + token
 	}
 	token, ok := strings.CutPrefix(auth, "Bearer ")
 	if !ok || token == "" {
+		return "", false
+	}
+	return token, true
+}
+
+// bearerTokenOK reports whether r carries the static configured API token.
+func (s *Server) bearerTokenOK(r *http.Request) bool {
+	if s.authToken == "" {
+		return false
+	}
+	token, ok := bearerTokenValue(r)
+	if !ok {
 		return false
 	}
 	return subtle.ConstantTimeCompare([]byte(token), []byte(s.authToken)) == 1

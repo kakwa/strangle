@@ -184,6 +184,11 @@ const USERS = { admin: 'secret' }
 const SESSION_TTL_MS = 12 * HOUR
 const sessions = new Map() // token -> { username, expires }
 
+// User API tokens (mirrors the /api/tokens self-service). The raw value is
+// kept only for the mock's lifetime; the real server stores just its hash.
+const TOKEN_PREFIX = 'st_'
+const tokens = new Map() // raw -> { name, owner, prefix, created_at, expires_at?, last_used_at? }
+
 function parseCookies(header) {
   const out = {}
   for (const part of (header || '').split(';')) {
@@ -202,6 +207,33 @@ function sessionOf(req) {
     return null
   }
   return s
+}
+
+// bearerOf extracts a bearer credential, via Authorization or
+// X-Strangle-Token, mirroring the real server's extraction rules.
+function bearerOf(req) {
+  const auth = req.headers.authorization || ''
+  const x = req.headers['x-strangle-token']
+  const header = x && !auth ? `Bearer ${x}` : auth
+  const m = header.match(/^Bearer (.+)$/)
+  return m ? m[1] : null
+}
+
+// identityOf resolves who a request acts as: a session or a user token.
+// Returns { username } or null.
+function identityOf(req) {
+  const me = sessionOf(req)
+  if (me) return { username: me.username }
+  const raw = bearerOf(req)
+  if (raw && tokens.has(raw)) {
+    const t = tokens.get(raw)
+    if (!t.expires_at || Date.now() < new Date(t.expires_at).getTime()) {
+      const now = new Date().toISOString()
+      t.last_used_at = now
+      return { username: t.owner }
+    }
+  }
+  return null
 }
 
 function json(res, status, body) {
@@ -247,7 +279,7 @@ function handleApi(req, res, url) {
     res.end(JSON.stringify({ status: 'logged out' }))
     return
   }
-  const me = sessionOf(req)
+  const me = identityOf(req)
   if (req.method === 'GET' && p === '/api/me') {
     if (!me) return json(res, 401, { error: 'not authenticated' })
     return json(res, 200, { authenticated: true, username: me.username })
@@ -277,6 +309,52 @@ function handleApi(req, res, url) {
   }
   if (req.method === 'GET' && p === '/api/playbooks') {
     return json(res, 200, PLAYBOOKS)
+  }
+  // --- API token self-service (mirrors internal/server) -------------------
+  if (req.method === 'GET' && p === '/api/tokens') {
+    const mine = [...tokens.values()]
+      .filter((t) => t.owner === me.username && (!t.expires_at || Date.now() < new Date(t.expires_at).getTime()))
+      .sort((a, b) => a.name.localeCompare(b.name))
+    return json(res, 200, mine)
+  }
+  if (req.method === 'POST' && p === '/api/tokens') {
+    let body = ''
+    req.on('data', (c) => (body += c))
+    req.on('end', () => {
+      let req2
+      try {
+        req2 = JSON.parse(body || '{}')
+      } catch {
+        return json(res, 400, { error: 'invalid JSON' })
+      }
+      const name = typeof req2.name === 'string' ? req2.name.trim() : ''
+      if (!name) return json(res, 400, { error: 'name is required' })
+      const dup = [...tokens.values()].some((t) => t.owner === me.username && t.name === name)
+      if (dup) return json(res, 409, { error: `token "${name}" already exists` })
+      const raw = TOKEN_PREFIX + randomBytes(32).toString('hex')
+      const rec = {
+        name, owner: me.username, prefix: raw.slice(0, TOKEN_PREFIX.length + 8),
+        created_at: new Date().toISOString(), last_used_at: null,
+      }
+      const ttl = Number(req2.ttl_hours) || 0
+      if (ttl > 0) rec.expires_at = new Date(Date.now() + ttl * HOUR).toISOString()
+      tokens.set(raw, rec)
+      const { owner, ...pub } = rec
+      return json(res, 201, { raw, token: pub })
+    })
+    return
+  }
+  const tokenDel = p.match(/^\/api\/tokens\/([^/]+)$/)
+  if (req.method === 'DELETE' && tokenDel) {
+    const name = decodeURIComponent(tokenDel[1])
+    for (const [raw, t] of tokens) {
+      if (t.owner === me.username && t.name === name) {
+        tokens.delete(raw)
+        res.writeHead(204)
+        return res.end()
+      }
+    }
+    return json(res, 404, { error: `token "${name}" not found` })
   }
   if (req.method === 'POST' && p === '/api/run') {
     let body = ''

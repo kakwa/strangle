@@ -105,7 +105,11 @@ docs/                documentation: architecture, configuration, API, git collec
   run in the background and returns `202`
 - `POST /api/sync`       — body `{"target": "...", "branch": "..."}`; re-syncs a
   git-backed target, optionally switching the tracked branch. Accepts a UI
-  session or the configured token when `auth.token` is set
+  session, a user token, or the configured token when `auth.token` is set
+- `GET /api/tokens`      — list the caller's API tokens (prefix only, never the raw value)
+- `POST /api/tokens`     — body `{"name": "...", "ttl_hours": N}`; create one,
+  returns the raw value exactly once
+- `DELETE /api/tokens/{name}` — revoke one
 - `GET /api/hostkeys`    — host keys pending approval (SSH transport only)
 - `POST /api/hostkeys/accept` / `POST /api/hostkeys/reject`
 - `GET /api/ssh/stats`   — SSH pool counters per scope
@@ -125,6 +129,8 @@ button:
   traces with expandable diffs and errors.
 - `/playbooks` — **Playbooks**: every target's jobs with their last outcome,
   plus a manual-run button per job.
+- `/tokens` — **Tokens**: the signed-in user's API tokens — create one (the
+  raw value is shown once), see its prefix, lifetime and last use, revoke it.
 
 ## Configuration
 
@@ -159,6 +165,23 @@ strangle user add <name> --password-stdin
 strangle user list
 strangle user remove <name>
 ```
+
+#### API tokens
+
+Local accounts can create bearer **API tokens** that authenticate any
+`/api/*` request as that account — for CLIs, webhooks and other integrations.
+Tokens are managed in the web UI under *Tokens* or from the command line:
+
+```sh
+strangle token create ci --user admin --ttl 72h   # prints the raw value once
+strangle token list [--user admin]
+strangle token remove ci --user admin
+```
+
+Only the SHA-256 digest of a token is stored; the raw value is shown exactly
+once, at creation. A token is sent as `Authorization: Bearer st_…` or
+`X-Strangle-Token: st_…`. The static `auth.token` above is a separate
+mechanism: it only opens `POST /api/sync` and is not a user account.
 
 ### collection.yml — the targets
 
