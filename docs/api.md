@@ -103,6 +103,34 @@ Liveness. Open, even when UI authentication is on.
 {"status": "ok"}
 ```
 
+## GET /metrics
+
+Prometheus text exposition (`text/plain; version=0.0.4`), open like
+`/api/health` so scrapers need no UI session. Only aggregate values are
+exported: run/host/worker counters and gauges from the store plus a small set
+of Go runtime metrics. No host names, playbook output or credentials appear
+in labels.
+
+```
+# HELP strangle_runs Number of recorded runs.
+# TYPE strangle_runs gauge
+strangle_runs 42
+# HELP strangle_workers Number of worker slots by state.
+# TYPE strangle_workers gauge
+strangle_workers{state="alive"} 2
+```
+
+Run counts are gauges rather than counters: retention may purge old rows and
+reduce them between scrapes. The full set includes `strangle_build_info`,
+`strangle_runs`, `strangle_runs_succeeded`, `strangle_runs_failed`,
+`strangle_run_duration_ms_avg`, `strangle_last_run_timestamp_seconds`,
+`strangle_hosts{state=...}`,
+`strangle_playbook_runs{collection,playbook}`,
+`strangle_playbook_failed_runs{collection,playbook}`,
+`strangle_workers{state=...}`, `strangle_worker_jobs{worker,collection}`,
+`strangle_worker_restarts_total{worker,collection}`, `strangle_store_up`,
+`process_start_time_seconds` and the common `go_*` runtime gauges.
+
 ## POST /api/login
 
 Authenticate a local account and start a session. The session cookie

@@ -100,6 +100,7 @@ docs/                documentation: architecture, configuration, API, git collec
 ## API (summary)
 
 - `GET /api/health`      — liveness (open, no auth)
+- `GET /metrics`         — Prometheus text exposition: aggregate run, host and worker stats (open)
 - `POST /api/login`      — authenticate a local account, sets a 12 h session cookie
 - `POST /api/logout`     — end the session
 - `GET /api/me`          — who is logged in; the UI's auth probe

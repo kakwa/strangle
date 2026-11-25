@@ -10,7 +10,7 @@ strangle (master)
   ├── collection.Manager: git-backed targets (clone/pin/sync/reload)
   ├── worker.Manager: spawns and supervises the worker pool
   ├── scheduler + River client: enqueues playbook runs
-  └── HTTP server: /api/* and the embedded web UI
+  └── HTTP server: /api/*, /metrics and the embedded web UI
 
 strangle worker --socket /tmp/.../worker-N.sock   (× N, N = workers)
   ├── one embedded CPython interpreter + Ansible (go.nhat.io/cpy/v3)
@@ -63,6 +63,11 @@ The `worker.Manager` keeps the pool alive:
 Dispatch is round-robin over the live slots (dead or respawning slots are
 skipped). A dispatch to a busy slot is fine: runs on one worker are
 serialized inside that worker, so extra jobs queue behind the in-flight one.
+
+`GET /metrics` is rendered on demand by `internal/metrics` from the same store
+and worker status used by the API, plus a few Go runtime gauges. It needs no
+configuration and is intentionally open like `/api/health`; see the
+[API reference](api.md#get-metrics) for the exported series.
 
 ## Job flow
 

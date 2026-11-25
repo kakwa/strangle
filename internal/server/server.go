@@ -18,6 +18,7 @@ import (
 	"github.com/kakwa/strangle/internal/auth"
 	"github.com/kakwa/strangle/internal/collection"
 	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/metrics"
 	"github.com/kakwa/strangle/internal/sshpool"
 	"github.com/kakwa/strangle/internal/store"
 	"github.com/kakwa/strangle/internal/worker"
@@ -164,6 +165,10 @@ func (s *Server) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	s.registerOrgRoutes(mux)
+
+	// Prometheus scrape endpoint. It is intentionally outside /api so it is
+	// reachable without a UI session; only aggregate counts are exposed.
+	mux.Handle("GET /metrics", metrics.Handler(s.store, s.workers, s.logger))
 
 	// --- UI authentication -------------------------------------------------
 

@@ -44,7 +44,7 @@ command line · **[SCHED]** scheduling · **[GIT]** git-backed collections ·
 - [x] 29. [DB] Retention: a policy to purge old runs (max age and/or max count)
 - [x] 30. [DB] [SCHED] Host auto clean-up (remove hosts not seen and not targeted after a configurable delay)
 - [x] 31. [INFRA] TLS support for the HTTP server (cert/key in server.yml)
-- [ ] 32. [INFRA] `/metrics` endpoint (prometheus)
+- [x] 32. [INFRA] `/metrics` endpoint (prometheus)
 - [ ] 33. [TESTS] Go tests for the server (API over httptest), applier and scheduler packages
 - [ ] 34. [UI] Host search box in the hosts view (name filter)
 - [ ] 35. [SSH] [AUTH] Ephemeral SSH certificates (short-lived, internal CA or a vault PKI / approle integration, pluggable in the ssh options)
