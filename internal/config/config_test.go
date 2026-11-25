@@ -207,6 +207,45 @@ auth:
 	}
 }
 
+func TestLoadRetention(t *testing.T) {
+	serverPath, collectionPath := writeTree(t, `
+retention:
+  interval: 2h
+  max_age: 48h
+  max_count: 1000
+`, `
+targets:
+  - name: one
+    path: __TARGET__
+    retention:
+      max_count: 7
+`, strangleMinimal)
+	cfg, err := Load(serverPath, collectionPath)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Server.Retention.Interval != 2*time.Hour ||
+		cfg.Server.Retention.MaxAge != 48*time.Hour ||
+		cfg.Server.Retention.MaxCount != 1000 {
+		t.Fatalf("server retention = %+v", cfg.Server.Retention)
+	}
+	if len(cfg.Targets) != 1 || cfg.Targets[0].Retention.MaxCount != 7 ||
+		cfg.Targets[0].Retention.MaxAge != 0 {
+		t.Fatalf("target retention = %+v", cfg.Targets)
+	}
+}
+
+func TestLoadRejectsNegativeRetention(t *testing.T) {
+	serverPath, collectionPath := writeTree(t, `
+retention:
+  max_age: -1h
+`, collOne, strangleMinimal)
+	if _, err := Load(serverPath, collectionPath); err == nil ||
+		!strings.Contains(err.Error(), "retention.max_age") {
+		t.Fatalf("Load() error = %v, want a negative max_age error", err)
+	}
+}
+
 func TestLoadDefaults(t *testing.T) {
 	serverPath, collectionPath := writeTree(t, "# empty\n", collOne, `
 playbooks:

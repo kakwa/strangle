@@ -42,3 +42,12 @@ workers: 2
 #   #   - /usr/local/share/roles
 #   # writable:
 #   #   - /var/cache/strangle
+
+# Run-history retention. Disabled until max_age or max_count is set. Both
+# limits may be combined: a finished run is purged when either selects it.
+# Queued and running runs are never purged. Collections can override the
+# limits in collection.yml (see the example there).
+# retention:
+#   interval: 1h
+#   max_age: 720h       # 30 days
+#   max_count: 1000     # keep the newest 1000 runs per collection

@@ -208,10 +208,11 @@ func (m *Manager) Reload() error {
 func (m *Manager) loadTargetLocked(name, ref string) (config.TargetConfig, error) {
 	previous := m.targets[name]
 	spec := config.TargetSpec{
-		Name: previous.Name,
-		Org:  previous.Org,
-		Path: previous.Path,
-		Git:  previous.Git,
+		Name:      previous.Name,
+		Org:       previous.Org,
+		Path:      previous.Path,
+		Git:       previous.Git,
+		Retention: previous.Retention,
 	}
 	t, err := config.LoadTarget(spec, previous.Path, map[string]string{
 		"Name":   previous.Name,

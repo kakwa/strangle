@@ -1,0 +1,72 @@
+package retention
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/kakwa/strangle/internal/config"
+	"github.com/kakwa/strangle/internal/store"
+	"go.uber.org/zap"
+)
+
+func seedRun(t *testing.T, st *store.Mem, id uint64, target string, finished time.Time) {
+	t.Helper()
+	run := store.RunRecord{
+		ID: id, Target: target, Playbook: "site",
+		StartedAt: finished.Add(-time.Minute), FinishedAt: finished,
+		State: store.RunStateCompleted, Success: true,
+	}
+	if err := st.SaveRun(context.Background(), store.RunInput{Run: run}); err != nil {
+		t.Fatalf("SaveRun(%d) error: %v", id, err)
+	}
+}
+
+func TestManagerPrunePolicies(t *testing.T) {
+	st := store.NewMem()
+	defer st.Close()
+	now := time.Now().UTC()
+
+	seedRun(t, st, 1, "home", now.Add(-72*time.Hour))
+	seedRun(t, st, 2, "home", now.Add(-time.Hour))
+	seedRun(t, st, 3, "edge", now.Add(-2*time.Hour))
+	seedRun(t, st, 4, "edge", now.Add(-time.Hour))
+
+	targets := []config.TargetConfig{
+		{Name: "home"},
+		{Name: "edge", Retention: config.RetentionConfig{MaxCount: 1}},
+	}
+	m := New(st, config.RetentionConfig{MaxAge: 24 * time.Hour, Interval: time.Minute},
+		func() []config.TargetConfig { return targets }, zap.NewNop())
+	if m == nil {
+		t.Fatal("New() = nil, want an enabled manager")
+	}
+	m.Prune(context.Background())
+
+	runs, err := st.ListRuns(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("ListRuns() error: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("remaining runs = %v, want home #2 and edge #4", runs)
+	}
+	for _, r := range runs {
+		if r.ID != 2 && r.ID != 4 {
+			t.Errorf("unexpected remaining run %d", r.ID)
+		}
+	}
+}
+
+func TestManagerDisabled(t *testing.T) {
+	st := store.NewMem()
+	defer st.Close()
+	targets := []config.TargetConfig{{Name: "home"}}
+	if m := New(st, config.RetentionConfig{}, func() []config.TargetConfig { return targets }, zap.NewNop()); m != nil {
+		t.Fatal("New() enabled retention with no policy")
+	}
+	// Prune on a nil manager is safe for callers that do not check New's
+	// result before starting a goroutine.
+	var m *Manager
+	m.Prune(context.Background())
+	m.Run(context.Background())
+}

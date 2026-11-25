@@ -82,6 +82,24 @@ type ServerConfig struct {
 	// default: enabling it pins each worker to one collection and denies
 	// Ansible writes outside a per-worker scratch directory.
 	Sandbox SandboxConfig `yaml:"sandbox,omitempty"`
+	// Retention is the default run-history policy for collections that do
+	// not declare their own. Disabled when both limits are zero.
+	Retention RetentionConfig `yaml:"retention,omitempty"`
+}
+
+// RetentionConfig purges finished run history. MaxAge removes runs older
+// than the duration; MaxCount keeps only the newest N runs. Both limits are
+// optional and can be combined: a run is purged when either rule selects it.
+// Interval is the maintenance cadence and is only read from server.yml.
+type RetentionConfig struct {
+	Interval time.Duration `yaml:"interval,omitempty"`
+	MaxAge   time.Duration `yaml:"max_age,omitempty"`
+	MaxCount int           `yaml:"max_count,omitempty"`
+}
+
+// Enabled reports whether either retention rule is configured.
+func (r RetentionConfig) Enabled() bool {
+	return r.MaxAge > 0 || r.MaxCount > 0
 }
 
 // SandboxConfig controls Landlock isolation between collections. It is
@@ -178,6 +196,10 @@ type TargetSpec struct {
 	Git GitConfig `yaml:"git,omitempty"`
 	// Notifications sends a message when a run of this collection fails.
 	Notifications []NotificationSpec `yaml:"notifications,omitempty"`
+	// Retention overrides the server's default run-history policy for this
+	// collection. Only MaxAge and MaxCount are used here; the maintenance
+	// interval is process-wide.
+	Retention RetentionConfig `yaml:"retention,omitempty"`
 }
 
 // GitConfig describes the upstream git repository of a target. When set,
@@ -221,6 +243,9 @@ type TargetConfig struct {
 	Git GitConfig
 	// Notifications are the failure notifiers of this collection.
 	Notifications []NotificationConfig
+	// Retention is this collection's run-history policy, overriding the
+	// server default when it enables either rule.
+	Retention RetentionConfig
 
 	// WorkingDir is the directory the playbooks run from. Ansible resolves
 	// ansible.cfg, relative paths and roles relative to it. Defaults to
@@ -487,6 +512,10 @@ func Load(serverPath, collectionPath string) (Config, error) {
 			return Config{}, fmt.Errorf("collection: target %q: invalid org name %q", spec.Name, spec.Org)
 		}
 		coll.Targets[i].Org = spec.Org
+		if err := validateRetention(fmt.Sprintf("collection: target %q", spec.Name), &spec.Retention); err != nil {
+			return Config{}, err
+		}
+		coll.Targets[i].Retention = spec.Retention
 		if _, err := resolveNotifications(spec.Notifications,
 			fmt.Sprintf("collection: target %q", spec.Name), collDir); err != nil {
 			return Config{}, err
@@ -523,6 +552,7 @@ func Load(serverPath, collectionPath string) (Config, error) {
 				Path:          path,
 				Git:           spec.Git,
 				Notifications: notifications,
+				Retention:     spec.Retention,
 				WorkingDir:    path,
 			})
 			continue
@@ -614,6 +644,7 @@ func LoadTarget(spec TargetSpec, path string, vars map[string]string) (TargetCon
 		Path:          path,
 		Git:           spec.Git,
 		Notifications: notifications,
+		Retention:     spec.Retention,
 		Schedule:      targetSchedule,
 	}
 	if file.WorkingDir == "" {
@@ -1044,6 +1075,24 @@ func (s *ServerConfig) validate() error {
 	}
 	if s.Workers <= 0 {
 		s.Workers = 1
+	}
+	return validateRetention("server", &s.Retention)
+}
+
+// validateRetention rejects negative limits and gives an enabled policy a
+// default maintenance interval.
+func validateRetention(where string, r *RetentionConfig) error {
+	if r.Interval < 0 {
+		return fmt.Errorf("%s: retention.interval must not be negative", where)
+	}
+	if r.MaxAge < 0 {
+		return fmt.Errorf("%s: retention.max_age must not be negative", where)
+	}
+	if r.MaxCount < 0 {
+		return fmt.Errorf("%s: retention.max_count must not be negative", where)
+	}
+	if r.Enabled() && r.Interval == 0 {
+		r.Interval = time.Hour
 	}
 	return nil
 }

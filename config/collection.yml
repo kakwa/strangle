@@ -37,6 +37,11 @@ targets:
     #     smtp: smtp.example.com:587
     #     username: strangle
     #     password_file: /run/secrets/smtp
+    # Optional run-history retention for this collection. Overrides the
+    # server.yml limits when max_age or max_count is set.
+    # retention:
+    #   max_age: 168h       # 7 days
+    #   max_count: 200
 
   # Optional Landlock validation collection (see sandbox/validate/README.md):
   # - name: sandbox-validate

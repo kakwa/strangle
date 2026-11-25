@@ -566,6 +566,90 @@ func (d *DB) RunTasks(ctx context.Context, runID uint64) ([]store.TaskRunRecord,
 	return out, nil
 }
 
+// PruneRuns removes finished runs of one collection that exceed the policy.
+// Queued and running runs are kept so an in-flight River job cannot recreate
+// a purged record when it finishes. Child rows are removed in the same
+// transaction: the schema declares no cascading foreign keys.
+func (d *DB) PruneRuns(ctx context.Context, target string, policy store.RetentionPolicy) (store.PruneResult, error) {
+	var out store.PruneResult
+	if !policy.Enabled() {
+		return out, nil
+	}
+
+	type candidate struct {
+		ID         uint64
+		StartedAt  time.Time
+		FinishedAt time.Time
+	}
+	var rows []candidate
+	if err := d.db.WithContext(ctx).Model(&Run{}).
+		Select("id", "started_at", "finished_at").
+		Where("target = ?", target).
+		Where("state NOT IN ?", []string{store.RunStateQueued, store.RunStateRunning}).
+		Order("id DESC").
+		Scan(&rows).Error; err != nil {
+		return out, fmt.Errorf("list runs for retention: %w", err)
+	}
+
+	cutoff := time.Now().UTC().Add(-policy.MaxAge)
+	ids := make([]uint64, 0, len(rows))
+	keptCount := 0
+	for _, r := range rows {
+		remove := false
+		if policy.MaxAge > 0 {
+			timestamp := r.FinishedAt
+			if timestamp.IsZero() {
+				timestamp = r.StartedAt
+			}
+			remove = !timestamp.IsZero() && timestamp.Before(cutoff)
+		}
+		if !remove && policy.MaxCount > 0 && keptCount >= policy.MaxCount {
+			remove = true
+		}
+		if remove {
+			ids = append(ids, r.ID)
+		} else {
+			keptCount++
+		}
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	tx := d.db.WithContext(ctx).Begin()
+	if tx.Error != nil {
+		return out, fmt.Errorf("begin retention transaction: %w", tx.Error)
+	}
+	// Latest-state rows are kept, but must not link to a deleted run.
+	if err := tx.Model(&TaskState{}).Where("last_run_id IN ?", ids).
+		Update("last_run_id", 0).Error; err != nil {
+		tx.Rollback()
+		return out, fmt.Errorf("clear task state run links: %w", err)
+	}
+	if res := tx.Where("run_id IN ?", ids).Delete(&HostRun{}); res.Error != nil {
+		tx.Rollback()
+		return out, fmt.Errorf("delete host run history: %w", res.Error)
+	} else {
+		out.HostRuns = res.RowsAffected
+	}
+	if res := tx.Where("run_id IN ?", ids).Delete(&TaskRunResult{}); res.Error != nil {
+		tx.Rollback()
+		return out, fmt.Errorf("delete task results: %w", res.Error)
+	} else {
+		out.TaskResults = res.RowsAffected
+	}
+	res := tx.Where("id IN ?", ids).Delete(&Run{})
+	if res.Error != nil {
+		tx.Rollback()
+		return out, fmt.Errorf("delete runs: %w", res.Error)
+	}
+	out.Runs = res.RowsAffected
+	if err := tx.Commit().Error; err != nil {
+		return out, fmt.Errorf("commit retention transaction: %w", err)
+	}
+	return out, nil
+}
+
 func (d *DB) Stats(ctx context.Context) (*store.Stats, error) {
 	st := &store.Stats{PerPlaybook: []store.PlaybookStats{}}
 

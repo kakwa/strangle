@@ -175,6 +175,27 @@ type InventoryHost struct {
 	Groups []string `json:"groups,omitempty"`
 }
 
+// RetentionPolicy describes which finished runs of one collection may be
+// purged. MaxAge deletes runs older than the duration; MaxCount keeps only
+// the newest N runs. A zero field disables that rule; both zero disables
+// retention for the collection.
+type RetentionPolicy struct {
+	MaxAge   time.Duration
+	MaxCount int
+}
+
+// Enabled reports whether either retention rule is configured.
+func (p RetentionPolicy) Enabled() bool {
+	return p.MaxAge > 0 || p.MaxCount > 0
+}
+
+// PruneResult counts the rows removed by one retention pass.
+type PruneResult struct {
+	Runs        int64
+	HostRuns    int64
+	TaskResults int64
+}
+
 // Store persists and queries run history, host state and task change traces.
 type Store interface {
 	// CreateRun reserves an ID for a run that has not finished yet. Callers
@@ -202,6 +223,10 @@ type Store interface {
 	// RunTasks returns every per-task result recorded for one run, in the
 	// order the tasks were parsed from that run's output.
 	RunTasks(ctx context.Context, runID uint64) ([]TaskRunRecord, error)
+	// PruneRuns deletes finished runs of one collection according to the
+	// policy. Queued and running runs are never removed. It also removes the
+	// per-run host and task rows that would otherwise become orphans.
+	PruneRuns(ctx context.Context, target string, policy RetentionPolicy) (PruneResult, error)
 	// Stats returns aggregate statistics.
 	Stats(ctx context.Context) (*Stats, error)
 	// Close releases underlying resources.

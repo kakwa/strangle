@@ -27,6 +27,7 @@ import (
 	"github.com/kakwa/strangle/internal/config"
 	"github.com/kakwa/strangle/internal/db"
 	"github.com/kakwa/strangle/internal/notify"
+	"github.com/kakwa/strangle/internal/retention"
 	"github.com/kakwa/strangle/internal/riverqueue"
 	"github.com/kakwa/strangle/internal/sandbox"
 	"github.com/kakwa/strangle/internal/scheduler"
@@ -615,6 +616,16 @@ func run(cmd *cobra.Command, args []string) error {
 		close(done)
 	}()
 
+	retentionDone := make(chan struct{})
+	if retentionMgr := retention.New(st, cfg.Server.Retention, collMgr.Targets, logger); retentionMgr != nil {
+		go func() {
+			retentionMgr.Run(ctx)
+			close(retentionDone)
+		}()
+	} else {
+		close(retentionDone)
+	}
+
 	if queue != nil {
 		// The queue runs on its own context, not the signal context: a
 		// SIGTERM must not hard-cancel in-flight runs; Stop drains them.
@@ -637,10 +648,10 @@ func run(cmd *cobra.Command, args []string) error {
 	)
 	if err := srv.ListenAndServe(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("server failed", zap.Error(err))
-		shutdown(stop, done, mgr, st, queue, logger)
+		shutdown(stop, done, retentionDone, mgr, st, queue, logger)
 		return err
 	}
-	shutdown(stop, done, mgr, st, queue, logger)
+	shutdown(stop, done, retentionDone, mgr, st, queue, logger)
 	logger.Info("strangle stopped")
 	return nil
 }
@@ -808,9 +819,10 @@ func newLogger(level string) (*zap.Logger, error) {
 // playbook runs to finish and be recorded), then terminates the workers and
 // closes the store in that order: in-progress runs may still be writing to
 // the store while they finish, and they run inside the worker processes.
-func shutdown(stop context.CancelFunc, done <-chan struct{}, mgr *worker.Manager, st store.Store, queue *riverqueue.Client, logger *zap.Logger) {
+func shutdown(stop context.CancelFunc, done, retentionDone <-chan struct{}, mgr *worker.Manager, st store.Store, queue *riverqueue.Client, logger *zap.Logger) {
 	stop()
 	<-done
+	<-retentionDone
 	if queue != nil {
 		qctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		if err := queue.Stop(qctx); err != nil {

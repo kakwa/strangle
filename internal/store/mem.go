@@ -14,10 +14,11 @@ import (
 // Mem is an in-memory Store, used when no database DSN is configured and in
 // tests.
 type Mem struct {
-	mu     sync.RWMutex
-	nextID uint64
-	runs   []RunRecord
-	hosts  map[string]*HostRecord
+	mu            sync.RWMutex
+	nextID        uint64
+	nextTaskRunID uint64
+	runs          []RunRecord
+	hosts         map[string]*HostRecord
 	// hostRuns keeps recap lines denormalized with the host name.
 	hostRuns []HostRunRecord
 	tasks    map[string]*TaskStateRecord // key: host + "\x00" + task
@@ -168,8 +169,9 @@ func (s *Mem) SaveRun(_ context.Context, in RunInput) error {
 	// Task states and per-run history.
 	hostChanged := map[string]bool{}
 	for _, t := range in.Tasks {
+		s.nextTaskRunID++
 		s.taskRuns = append(s.taskRuns, TaskRunRecord{
-			ID:         uint64(len(s.taskRuns) + 1),
+			ID:         s.nextTaskRunID,
 			RunID:      run.ID,
 			Target:     target,
 			Host:       t.Host,
@@ -325,6 +327,92 @@ func (s *Mem) HostChanges(_ context.Context, host string, limit int) ([]TaskStat
 	})
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
+	}
+	return out, nil
+}
+
+// PruneRuns removes finished runs of one collection that exceed the policy.
+// Queued and running runs are kept so a River job cannot resurrect a purged
+// record when it finishes.
+func (s *Mem) PruneRuns(_ context.Context, target string, policy RetentionPolicy) (PruneResult, error) {
+	var out PruneResult
+	if !policy.Enabled() {
+		return out, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	cutoff := time.Now().UTC().Add(-policy.MaxAge)
+	active := make([]RunRecord, 0, len(s.runs))
+	for _, r := range s.runs {
+		if r.Target == target && r.State != RunStateQueued && r.State != RunStateRunning {
+			active = append(active, r)
+		}
+	}
+	// ID order matches the API's newest-first view and is stable even when
+	// started_at values are equal.
+	sort.Slice(active, func(i, j int) bool { return active[i].ID > active[j].ID })
+
+	expired := map[uint64]bool{}
+	keptCount := 0
+	for _, r := range active {
+		remove := false
+		if policy.MaxAge > 0 {
+			timestamp := r.FinishedAt
+			if timestamp.IsZero() {
+				timestamp = r.StartedAt
+			}
+			remove = !timestamp.IsZero() && timestamp.Before(cutoff)
+		}
+		if !remove && policy.MaxCount > 0 && keptCount >= policy.MaxCount {
+			remove = true
+		}
+		if remove {
+			expired[r.ID] = true
+		} else {
+			keptCount++
+		}
+	}
+	if len(expired) == 0 {
+		return out, nil
+	}
+
+	kept := s.runs[:0]
+	for _, r := range s.runs {
+		if !expired[r.ID] {
+			kept = append(kept, r)
+		}
+	}
+	s.runs = kept
+	out.Runs = int64(len(expired))
+
+	hostRuns := s.hostRuns[:0]
+	for _, hr := range s.hostRuns {
+		if expired[hr.RunID] {
+			out.HostRuns++
+			continue
+		}
+		hostRuns = append(hostRuns, hr)
+	}
+	s.hostRuns = hostRuns
+
+	taskRuns := s.taskRuns[:0]
+	for _, tr := range s.taskRuns {
+		if expired[tr.RunID] {
+			out.TaskResults++
+			continue
+		}
+		taskRuns = append(taskRuns, tr)
+	}
+	s.taskRuns = taskRuns
+
+	// The latest-state view is retained, but must not point at a run that no
+	// longer exists.
+	for _, task := range s.tasks {
+		if expired[task.LastRunID] {
+			task.LastRunID = 0
+		}
 	}
 	return out, nil
 }

@@ -128,6 +128,13 @@ Hosts are keyed by `target + name`, so the same host name in two targets is
 two distinct hosts. The web UI merges same-named hosts across targets when
 rendering a single host table.
 
+`internal/retention` runs in the master as a second ticker-driven maintenance
+task. It calls `PruneRuns` once at startup and then on the configured interval,
+using the server policy or a per-collection override. Only finished runs are
+eligible; queued and running runs stay so a job cannot recreate a purged
+record. Per-host recap and per-task history rows are deleted in the same
+transaction (or under the in-memory store's lock) as their run.
+
 A worker's embedded interpreter installs the `strangle_facts` Ansible callback
 alongside the Go-managed SSH connection plugin. The callback accumulates every
 `ansible_facts` dictionary returned for a host (including the implicit
@@ -168,9 +175,10 @@ history of in-flight runs (they execute inside workers and write to the
 store as they finish):
 
 1. Stop the scheduler (no new jobs are enqueued).
-2. Drain the River queue (up to 10 minutes), letting in-flight runs finish.
-3. Stop the workers (terminate the child processes).
-4. Close the store.
+2. Stop the retention loop (no purge starts during shutdown).
+3. Drain the River queue (up to 10 minutes), letting in-flight runs finish.
+4. Stop the workers (terminate the child processes).
+5. Close the store.
 
 The HTTP server shuts down in parallel (5-second grace). Ansible's
 `TaskQueueManager` normally replaces the process SIGINT/SIGTERM handlers

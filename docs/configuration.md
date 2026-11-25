@@ -31,6 +31,19 @@ Process-level settings for the master process.
 | `sandbox.enabled` | `false` | Enables Landlock isolation: each collection gets dedicated workers, its checkout is read-only and Ansible writes go to a private scratch directory. |
 | `sandbox.read_only` | — | Extra absolute paths made readable to every sandboxed worker. |
 | `sandbox.writable` | — | Extra absolute paths a sandboxed worker may write to. Collection directories stay read-only. |
+| `retention.interval` | `1h` | How often the master prunes old runs. Only used when `max_age` or `max_count` is set. |
+| `retention.max_age` | — | Delete finished runs older than this duration (Go duration syntax, e.g. `720h`). |
+| `retention.max_count` | — | Keep only the newest N finished runs per collection. Can be combined with `max_age`. |
+
+### Run retention
+
+Retention is disabled until `max_age` or `max_count` is set in `server.yml`
+or on a collection. Each pass deletes finished runs that are older than
+`max_age` or beyond the newest `max_count`; in both cases the run's per-host
+and per-task rows are deleted with it. Queued and running runs are never
+purged, so an in-flight job cannot recreate a deleted record when it
+finishes. A collection-level block overrides both limits, but the cadence
+stays process-wide.
 
 ### Collection sandboxing
 
@@ -164,6 +177,21 @@ Webhooks receive a JSON object with `event` (`run_failed`), `org`,
 and a bounded tail of the playbook output (4 KB). Slack and email receive the
 same information in a human-readable message. Notifiers run in parallel and
 their failures are logged but never change the recorded run result.
+
+### Per-collection retention
+
+A target can override the server's `retention.max_age` and
+`retention.max_count` limits. Like notifications, this belongs in
+collection.yml so it survives a git-backed target's `strangle.yml` reload.
+
+```yaml
+targets:
+  - name: home
+    path: /path/to/ansible
+    retention:
+      max_age: 168h      # 7 days
+      max_count: 200
+```
 
 ## strangle.yml (one per target)
 
