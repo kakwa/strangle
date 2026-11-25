@@ -4,7 +4,7 @@ Configuration is file-only: three kinds of YAML files. There are no
 environment variables. The files are located with flags:
 
 ```sh
-strangle [-s config/server.yml] [-c config/collection.yml]
+strangle serve [-s config/server.yml] [-c config/collection.yml]
 ```
 
 | Flag | Meaning | Default |

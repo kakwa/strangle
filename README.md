@@ -15,7 +15,7 @@ run duration, change/failed counts — are derived from the stored history.
 
 ## How it works
 
-The master process (`strangle`) owns the configuration, the HTTP API and the
+The master process (`strangle serve`) owns the configuration, the HTTP API and the
 schedule. It spawns a pool of worker child processes (`strangle worker`), each
 owning one embedded Ansible interpreter, and dispatches playbook runs to them
 over unix sockets (a small gRPC service, `proto/strangle/v1/runner.proto`).
@@ -139,7 +139,7 @@ and `-c` flags (defaults `./config/server.yml` and `./config/collection.yml`).
 There are no environment variables.
 
 ```sh
-strangle [-s config/server.yml] [-c config/collection.yml]
+strangle serve [-s config/server.yml] [-c config/collection.yml]
 ```
 
 ### server.yml — process-level settings
@@ -224,10 +224,10 @@ so `bin/strangle` is self-contained — no `web/dist` needed at runtime.
 ```sh
 # build the UI (into web/dist) and the server, UI embedded
 make build
-./bin/strangle                      # reads ./config/server.yml and ./config/collection.yml
+./bin/strangle serve                # reads ./config/server.yml and ./config/collection.yml
 
 # or point at explicit config files
-./bin/strangle -s config/server.yml -c config/collection.yml
+./bin/strangle serve -s config/server.yml -c config/collection.yml
 
 # web UI (development): Vite dev server on :5173, proxies /api to :8080
 make web-dev

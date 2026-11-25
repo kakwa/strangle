@@ -45,4 +45,4 @@ Each box is ticked in the commit that implements the feature, on
 
 ## Additional (beyond TODO)
 
-- [ ] CLI shape: `strangle <command> --flags` (no bare `strangle` with flags) and a `strangle serve` command to launch the server
+- [x] CLI shape: `strangle <command> --flags` (no bare `strangle` with flags) and a `strangle serve` command to launch the server

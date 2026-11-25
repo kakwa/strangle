@@ -1,9 +1,9 @@
 // Command strangle applies Ansible playbooks on a schedule and reports on
 // the results through an HTTP API and web UI.
 //
-// The master process (the root command) spawns worker child processes that
-// each own one embedded Ansible interpreter and dispatch playbook runs to
-// them over unix sockets (the "worker" subcommand).
+// "strangle serve" runs the master process, which spawns worker child
+// processes that each own one embedded Ansible interpreter and dispatch
+// playbook runs to them over unix sockets (the "worker" subcommand).
 package main
 
 import (
@@ -54,12 +54,12 @@ func main() {
 			"schedule and reports on the results through an HTTP API and web UI.\n\n" +
 			"It reads two configuration files: a server file with process-level " +
 			"settings and a collection file listing the Ansible targets to apply. " +
-			"Each target directory must contain its own strangle.yml.",
-		RunE: run,
+			"Each target directory must contain its own strangle.yml.\n\n" +
+			"Run \"strangle serve\" to start the master process, or \"strangle " +
+			"<command> --help\" for the other subcommands.",
 	}
-	root.Flags().StringVarP(&serverConfigPath, "server-config", "s", "config/server.yml", "path to the server configuration file")
-	root.Flags().StringVarP(&collectionConfigPath, "collection-config", "c", "config/collection.yml", "path to the collection configuration file")
 
+	root.AddCommand(serveCmd())
 	root.AddCommand(workerCmd())
 	root.AddCommand(userCmd())
 	root.AddCommand(tokenCmd())
@@ -68,6 +68,19 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// serveCmd starts the master process: it spawns the worker child processes,
+// schedules the playbook runs and serves the HTTP API and web UI.
+func serveCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Start the strangle server (master process).",
+		RunE:  run,
+	}
+	cmd.Flags().StringVarP(&serverConfigPath, "server-config", "s", "config/server.yml", "path to the server configuration file")
+	cmd.Flags().StringVarP(&collectionConfigPath, "collection-config", "c", "config/collection.yml", "path to the collection configuration file")
+	return cmd
 }
 
 // workerCmd is the subcommand run inside a worker child process: it serves

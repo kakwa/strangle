@@ -16,7 +16,7 @@ build: web
 	$(GO) build -o bin/strangle ./cmd/strangle
 
 run: build
-	./bin/strangle
+	./bin/strangle serve
 
 test:
 	$(GO) test ./...
