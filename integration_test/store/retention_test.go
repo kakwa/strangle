@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/internal/db"
-	"github.com/kakwa/strangle/internal/store"
 )
 
 func seedRetentionRun(t *testing.T, st *db.DB, id uint64, target, state string, finished time.Time) {
@@ -15,10 +14,10 @@ func seedRetentionRun(t *testing.T, st *db.DB, id uint64, target, state string, 
 	run := testRun(target, "site", finished)
 	run.ID = id
 	run.State = state
-	if err := st.SaveRun(context.Background(), store.RunInput{
+	if err := st.SaveRun(context.Background(), db.RunInput{
 		Run:   run,
-		Hosts: []store.HostRunRecord{{Host: "h1", Ok: 1}},
-		Tasks: []store.TaskStateRecord{{Host: "h1", Task: "install", Status: "ok", LastRunID: id}},
+		Hosts: []db.HostRunRecord{{Host: "h1", Ok: 1}},
+		Tasks: []db.TaskStateRecord{{Host: "h1", Task: "install", Status: "ok", LastRunID: id}},
 	}); err != nil {
 		t.Fatalf("SaveRun(%d) error: %v", id, err)
 	}
@@ -30,12 +29,12 @@ func TestStorePruneRunsMaxAge(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	seedRetentionRun(t, st, 1, "home", store.RunStateCompleted, now.Add(-48*time.Hour))
-	seedRetentionRun(t, st, 2, "home", store.RunStateCompleted, now.Add(-time.Hour))
-	seedRetentionRun(t, st, 3, "home", store.RunStateRunning, now.Add(-72*time.Hour))
-	seedRetentionRun(t, st, 4, "edge", store.RunStateCompleted, now.Add(-72*time.Hour))
+	seedRetentionRun(t, st, 1, "home", db.RunStateCompleted, now.Add(-48*time.Hour))
+	seedRetentionRun(t, st, 2, "home", db.RunStateCompleted, now.Add(-time.Hour))
+	seedRetentionRun(t, st, 3, "home", db.RunStateRunning, now.Add(-72*time.Hour))
+	seedRetentionRun(t, st, 4, "edge", db.RunStateCompleted, now.Add(-72*time.Hour))
 
-	res, err := st.PruneRuns(ctx, "home", store.RetentionPolicy{MaxAge: 24 * time.Hour})
+	res, err := st.PruneRuns(ctx, "home", db.RetentionPolicy{MaxAge: 24 * time.Hour})
 	if err != nil {
 		t.Fatalf("PruneRuns() error: %v", err)
 	}
@@ -64,7 +63,7 @@ func TestStorePruneRunsMaxAge(t *testing.T) {
 	}
 
 	taskRuns, err := st.RunTasks(ctx, 1)
-	if len(taskRuns) != 0 || (err != nil && !errors.Is(err, store.ErrNotFound)) {
+	if len(taskRuns) != 0 || (err != nil && !errors.Is(err, db.ErrNotFound)) {
 		t.Errorf("RunTasks(1) = %v, %v; want no orphaned results", taskRuns, err)
 	}
 	changes, err := st.HostChanges(ctx, "h1", 10)
@@ -85,9 +84,9 @@ func TestStorePruneRunsMaxCount(t *testing.T) {
 	now := time.Now().UTC()
 
 	for id := uint64(1); id <= 4; id++ {
-		seedRetentionRun(t, st, id, "home", store.RunStateCompleted, now.Add(time.Duration(id)*time.Hour))
+		seedRetentionRun(t, st, id, "home", db.RunStateCompleted, now.Add(time.Duration(id)*time.Hour))
 	}
-	res, err := st.PruneRuns(ctx, "home", store.RetentionPolicy{MaxCount: 2})
+	res, err := st.PruneRuns(ctx, "home", db.RetentionPolicy{MaxCount: 2})
 	if err != nil {
 		t.Fatalf("PruneRuns() error: %v", err)
 	}
@@ -104,7 +103,7 @@ func TestStorePruneRunsMaxCount(t *testing.T) {
 
 	// A disabled policy is a no-op.
 	before := len(runs)
-	res, err = st.PruneRuns(ctx, "home", store.RetentionPolicy{})
+	res, err = st.PruneRuns(ctx, "home", db.RetentionPolicy{})
 	if err != nil || res.Runs != 0 {
 		t.Fatalf("disabled PruneRuns() = %+v, %v", res, err)
 	}

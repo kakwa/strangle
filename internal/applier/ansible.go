@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/internal/cfg"
-	"github.com/kakwa/strangle/internal/store"
+	"github.com/kakwa/strangle/internal/db"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
@@ -52,18 +52,18 @@ func checkFrom(ctx context.Context) bool {
 }
 
 // Ansible applies playbooks for every configured target by dispatching each
-// run to a worker process and records the results in a store.
+// run to a worker process and records the results in a db.
 type Ansible struct {
 	mu      sync.RWMutex
 	targets map[string]cfg.TargetConfig
 	exec    Executor
-	store   store.Store
+	store   db.Store
 	logger  *zap.Logger
 }
 
 // NewAnsible returns an Applier for the given targets. Runs are executed by
 // the given executor (a pool of worker processes in production).
-func NewAnsible(targets []cfg.TargetConfig, exec Executor, st store.Store, logger *zap.Logger) *Ansible {
+func NewAnsible(targets []cfg.TargetConfig, exec Executor, st db.Store, logger *zap.Logger) *Ansible {
 	a := &Ansible{
 		targets: map[string]cfg.TargetConfig{},
 		exec:    exec,
@@ -236,7 +236,7 @@ func (a *Ansible) runTarget(ctx context.Context, t cfg.TargetConfig, firstErr *e
 
 // runPlaybook dispatches one playbook to the worker pool, parses the output
 // and persists the results.
-func (a *Ansible) runPlaybook(ctx context.Context, target cfg.TargetConfig, pb cfg.PlaybookConfig, sshScope string, scope []string, invHosts []store.InventoryHost) error {
+func (a *Ansible) runPlaybook(ctx context.Context, target cfg.TargetConfig, pb cfg.PlaybookConfig, sshScope string, scope []string, invHosts []db.InventoryHost) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -245,7 +245,7 @@ func (a *Ansible) runPlaybook(ctx context.Context, target cfg.TargetConfig, pb c
 	if id := runIDFrom(ctx); id != 0 && a.store != nil {
 		record, err := a.store.Run(ctx, id)
 		if err == nil {
-			record.State = store.RunStateRunning
+			record.State = db.RunStateRunning
 			record.StartedAt = started
 			if err := a.store.UpdateRun(ctx, record); err != nil {
 				a.logger.Warn("failed to mark run as running", zap.Uint64("run", id), zap.Error(err))
@@ -267,14 +267,14 @@ func (a *Ansible) runPlaybook(ctx context.Context, target cfg.TargetConfig, pb c
 
 	summaries, tasks := Parse(output)
 
-	state := store.RunStateCompleted
+	state := db.RunStateCompleted
 	canceled := false
 	if ctx.Err() != nil {
-		state = store.RunStateCancelled
+		state = db.RunStateCancelled
 		canceled = true
 		output += "\n[strangle] run canceled"
 	}
-	run := store.RunRecord{
+	run := db.RunRecord{
 		ID:           runIDFrom(ctx),
 		Target:       pb.TargetName,
 		Playbook:     pb.Name,
@@ -293,12 +293,21 @@ func (a *Ansible) runPlaybook(ctx context.Context, target cfg.TargetConfig, pb c
 		Inventory:    pb.Inventory,
 	}
 
-	hostRuns := make([]store.HostRunRecord, 0, len(summaries))
+	hostRuns := make([]db.HostRunRecord, 0, len(summaries))
 	for _, s := range summaries {
-		hostRuns = append(hostRuns, store.HostRunRecord{
+		status := "ok"
+		switch {
+		case s.Failed > 0:
+			status = "failed"
+		case s.Unreachable > 0:
+			status = "unreachable"
+		case s.Changed > 0:
+			status = "changed"
+		}
+		hostRuns = append(hostRuns, db.HostRunRecord{
 			Target:      pb.TargetName,
 			Host:        s.Host,
-			Status:      store.HostStatus(s.Ok, s.Changed, s.Failed, s.Unreachable),
+			Status:      status,
 			Ok:          s.Ok,
 			Changed:     s.Changed,
 			Failed:      s.Failed,
@@ -309,9 +318,9 @@ func (a *Ansible) runPlaybook(ctx context.Context, target cfg.TargetConfig, pb c
 		})
 	}
 
-	taskStates := make([]store.TaskStateRecord, 0, len(tasks))
+	taskStates := make([]db.TaskStateRecord, 0, len(tasks))
 	for _, ts := range tasks {
-		taskStates = append(taskStates, store.TaskStateRecord{
+		taskStates = append(taskStates, db.TaskStateRecord{
 			Target:    pb.TargetName,
 			Host:      ts.Host,
 			Task:      ts.Task,
@@ -324,7 +333,7 @@ func (a *Ansible) runPlaybook(ctx context.Context, target cfg.TargetConfig, pb c
 
 	// The run has completed: persist its results even if the context was
 	// canceled while it was running (e.g. the process is shutting down).
-	if err := a.store.SaveRun(context.WithoutCancel(ctx), store.RunInput{
+	if err := a.store.SaveRun(context.WithoutCancel(ctx), db.RunInput{
 		Run:        run,
 		Hosts:      hostRuns,
 		Tasks:      taskStates,
@@ -356,7 +365,7 @@ func (a *Ansible) runPlaybook(ctx context.Context, target cfg.TargetConfig, pb c
 // loadInventory parses one playbook's inventory directory. It returns nil for
 // anything it cannot parse (e.g. an INI file), in which case host membership
 // is not tracked for that cycle.
-func (a *Ansible) loadInventory(pb cfg.PlaybookConfig) (*Inventory, []store.InventoryHost) {
+func (a *Ansible) loadInventory(pb cfg.PlaybookConfig) (*Inventory, []db.InventoryHost) {
 	dir := pb.InventoryPath()
 	st, err := os.Stat(dir)
 	if err != nil || !st.IsDir() {
@@ -374,9 +383,9 @@ func (a *Ansible) loadInventory(pb cfg.PlaybookConfig) (*Inventory, []store.Inve
 	if len(inv.Hosts) == 0 {
 		return nil, nil
 	}
-	hosts := make([]store.InventoryHost, 0, len(inv.Hosts))
+	hosts := make([]db.InventoryHost, 0, len(inv.Hosts))
 	for _, h := range inv.Hosts {
-		hosts = append(hosts, store.InventoryHost{
+		hosts = append(hosts, db.InventoryHost{
 			Name:   h.Name,
 			IP:     h.IP,
 			User:   h.User,
@@ -437,7 +446,16 @@ func playHosts(path string) ([]string, error) {
 func countStatus(summaries []HostSummary, status string) int {
 	n := 0
 	for _, s := range summaries {
-		if store.HostStatus(s.Ok, s.Changed, s.Failed, s.Unreachable) == status {
+		got := "ok"
+		switch {
+		case s.Failed > 0:
+			got = "failed"
+		case s.Unreachable > 0:
+			got = "unreachable"
+		case s.Changed > 0:
+			got = "changed"
+		}
+		if got == status {
 			n++
 		}
 	}

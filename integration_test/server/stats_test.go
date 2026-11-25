@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kakwa/strangle/internal/store"
+	"github.com/kakwa/strangle/internal/db"
 )
 
 func TestCollectionScopedStats(t *testing.T) {
@@ -17,24 +17,24 @@ func TestCollectionScopedStats(t *testing.T) {
 	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
 	seedRunAt(t, st, "home", "site", "home1", now)
 	seedRunAt(t, st, "edge", "site", "edge1", now)
-	if err := st.SaveRun(ctx, store.RunInput{
-		Run: store.RunRecord{
+	if err := st.SaveRun(ctx, db.RunInput{
+		Run: db.RunRecord{
 			Target: "edge", Playbook: "deploy", StartedAt: now.Add(time.Hour),
 			FinishedAt: now.Add(time.Hour + time.Second), Success: false, Hosts: 1,
 		},
-		Hosts: []store.HostRunRecord{{Host: "edge1", Status: "failed", Failed: 1}},
+		Hosts: []db.HostRunRecord{{Host: "edge1", Status: "failed", Failed: 1}},
 	}); err != nil {
 		t.Fatalf("SaveRun() error: %v", err)
 	}
 	s := newOrgTestServer(&recEnqueuer{status: "queued"}, st)
 
-	statsAt := func(path string) store.Stats {
+	statsAt := func(path string) db.Stats {
 		t.Helper()
 		rec := doGet(t, s, path)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("GET %s: status = %d, body %s", path, rec.Code, rec.Body.String())
 		}
-		var out store.Stats
+		var out db.Stats
 		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
 			t.Fatalf("decode %s: %v", path, err)
 		}

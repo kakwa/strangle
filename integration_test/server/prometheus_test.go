@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/internal/applier"
+	"github.com/kakwa/strangle/internal/db"
 	"github.com/kakwa/strangle/internal/server"
-	"github.com/kakwa/strangle/internal/store"
 	"github.com/kakwa/strangle/internal/testutil"
 	"github.com/kakwa/strangle/internal/worker"
 	"go.uber.org/zap"
@@ -21,9 +21,9 @@ type stubWorkers struct{ statuses []worker.WorkerStatus }
 
 func (s stubWorkers) WorkerStatuses(context.Context) []worker.WorkerStatus { return s.statuses }
 
-type failingStore struct{ store.Store }
+type failingStore struct{ db.Store }
 
-func (failingStore) Stats(context.Context) (*store.Stats, error) {
+func (failingStore) Stats(context.Context) (*db.Stats, error) {
 	return nil, errors.New("database unavailable")
 }
 
@@ -41,18 +41,18 @@ func TestHandlerRendersStoreAndWorkerMetrics(t *testing.T) {
 	now := time.Now().UTC()
 
 	for i, success := range []bool{true, false} {
-		run := store.RunRecord{
+		run := db.RunRecord{
 			ID: uint64(i + 1), Target: "home\nlab", Playbook: "site",
 			StartedAt: now.Add(-time.Minute), FinishedAt: now,
 			DurationMS: 1500, Success: success,
 		}
 		if !success {
-			run.State = store.RunStateCompleted
+			run.State = db.RunStateCompleted
 		}
-		if err := st.SaveRun(ctx, store.RunInput{
+		if err := st.SaveRun(ctx, db.RunInput{
 			Run:       run,
-			Hosts:     []store.HostRunRecord{{Host: "web1", Ok: 1}},
-			Inventory: []store.InventoryHost{{Name: "web1"}},
+			Hosts:     []db.HostRunRecord{{Host: "web1", Ok: 1}},
+			Inventory: []db.InventoryHost{{Name: "web1"}},
 		}); err != nil {
 			t.Fatalf("SaveRun() error: %v", err)
 		}

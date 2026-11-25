@@ -18,8 +18,8 @@ import (
 	"github.com/kakwa/strangle/internal/applier"
 	"github.com/kakwa/strangle/internal/cfg"
 	"github.com/kakwa/strangle/internal/collection"
+	"github.com/kakwa/strangle/internal/db"
 	"github.com/kakwa/strangle/internal/sshpool"
-	"github.com/kakwa/strangle/internal/store"
 	"github.com/kakwa/strangle/internal/worker"
 	"go.uber.org/zap"
 )
@@ -43,8 +43,8 @@ var testTargets = []cfg.TargetConfig{{
 	},
 }}
 
-// newTestServerWithStore builds a Server over the given store.
-func newTestServerWithStore(enq server.RunEnqueuer, st store.Store, opts ...server.Option) *server.Server {
+// newTestServerWithStore builds a Server over the given db.
+func newTestServerWithStore(enq server.RunEnqueuer, st db.Store, opts ...server.Option) *server.Server {
 	apr := applier.NewAnsible(testTargets, stubExecutor{}, st, zap.NewNop())
 	return server.New("test", apr, st, nil, enq, nil, nil, nil, nil, "", zap.NewNop(), opts...)
 }
@@ -59,11 +59,11 @@ func doGet(t *testing.T, s *server.Server, path string) *httptest.ResponseRecord
 
 // seedRun persists one successful run for the named playbook with host web1
 // in the inventory (and, optionally, a second host that disappears).
-func seedRun(t *testing.T, st store.Store, playbook string, success bool) {
+func seedRun(t *testing.T, st db.Store, playbook string, success bool) {
 	t.Helper()
 	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
-	err := st.SaveRun(context.Background(), store.RunInput{
-		Run: store.RunRecord{
+	err := st.SaveRun(context.Background(), db.RunInput{
+		Run: db.RunRecord{
 			Target:     "home",
 			Playbook:   playbook,
 			StartedAt:  now.Add(-time.Second),
@@ -73,8 +73,8 @@ func seedRun(t *testing.T, st store.Store, playbook string, success bool) {
 			Success:    success,
 			Hosts:      1,
 		},
-		Hosts:      []store.HostRunRecord{{Host: "web1", Status: "ok", Ok: 3}},
-		Inventory:  []store.InventoryHost{{Name: "web1"}, {Name: "db1"}},
+		Hosts:      []db.HostRunRecord{{Host: "web1", Status: "ok", Ok: 3}},
+		Inventory:  []db.InventoryHost{{Name: "web1"}, {Name: "db1"}},
 		ScopeNames: []string{"web1", "db1"},
 		Facts:      map[string]json.RawMessage{"web1": []byte(`{"ansible_hostname":"web1"}`)},
 	})
@@ -109,7 +109,7 @@ func TestGetStats(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	var out store.Stats
+	var out db.Stats
 	if err := json.NewDecoder(rec.Body).Decode(&out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestGetRunsWithLimit(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	var runs []store.RunRecord
+	var runs []db.RunRecord
 	if err := json.NewDecoder(rec.Body).Decode(&runs); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -152,11 +152,11 @@ func TestGetHosts(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	var hosts []store.HostRecord
+	var hosts []db.HostRecord
 	if err := json.NewDecoder(rec.Body).Decode(&hosts); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	byName := map[string]store.HostRecord{}
+	byName := map[string]db.HostRecord{}
 	for _, h := range hosts {
 		byName[h.Name] = h
 	}
@@ -182,7 +182,7 @@ func TestGetHostRuns(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	var runs []store.HostRunRecord
+	var runs []db.HostRunRecord
 	if err := json.NewDecoder(rec.Body).Decode(&runs); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -195,13 +195,13 @@ func TestGetHostChanges(t *testing.T) {
 	st := testutil.OpenDB(t, "server")
 	seedRun(t, st, "site", true)
 	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
-	err := st.SaveRun(context.Background(), store.RunInput{
-		Run: store.RunRecord{
+	err := st.SaveRun(context.Background(), db.RunInput{
+		Run: db.RunRecord{
 			Target: "home", Playbook: "site",
 			StartedAt: now.Add(-time.Second), FinishedAt: now,
 			DurationMS: 1000, Success: true,
 		},
-		Tasks: []store.TaskStateRecord{
+		Tasks: []db.TaskStateRecord{
 			{Host: "web1", Task: "install package", Status: "changed", LastDiff: "- old\n+ new"},
 		},
 	})
@@ -214,7 +214,7 @@ func TestGetHostChanges(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	var changes []store.TaskStateRecord
+	var changes []db.TaskStateRecord
 	if err := json.NewDecoder(rec.Body).Decode(&changes); err != nil {
 		t.Fatalf("decode: %v", err)
 	}

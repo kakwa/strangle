@@ -15,13 +15,13 @@ import (
 
 	"github.com/kakwa/strangle/internal/applier"
 	"github.com/kakwa/strangle/internal/cfg"
-	"github.com/kakwa/strangle/internal/store"
+	"github.com/kakwa/strangle/internal/db"
 	"go.uber.org/zap"
 )
 
 // newOrgTestServer builds a server with two orgs: the default one holding
 // "home", and "lab" holding "edge".
-func newOrgTestServer(enq server.RunEnqueuer, st store.Store) *server.Server {
+func newOrgTestServer(enq server.RunEnqueuer, st db.Store) *server.Server {
 	targets := []cfg.TargetConfig{
 		{
 			Name: "home",
@@ -41,30 +41,30 @@ func newOrgTestServer(enq server.RunEnqueuer, st store.Store) *server.Server {
 	return server.New("test", apr, st, nil, enq, nil, nil, nil, nil, "", zap.NewNop())
 }
 
-func seedRunAt(t *testing.T, st store.Store, target, playbook, host string, started time.Time) {
+func seedRunAt(t *testing.T, st db.Store, target, playbook, host string, started time.Time) {
 	t.Helper()
-	if err := st.SaveRun(context.Background(), store.RunInput{
-		Run: store.RunRecord{
+	if err := st.SaveRun(context.Background(), db.RunInput{
+		Run: db.RunRecord{
 			Target: target, Playbook: playbook, StartedAt: started, FinishedAt: started.Add(time.Second),
 			Success: true, Hosts: 1,
 		},
-		Hosts: []store.HostRunRecord{{Host: host, Status: "ok", Ok: 1}},
+		Hosts: []db.HostRunRecord{{Host: host, Status: "ok", Ok: 1}},
 	}); err != nil {
 		t.Fatalf("SaveRun() error: %v", err)
 	}
 }
 
-func seedTargetRun(t *testing.T, st store.Store, target string) {
+func seedTargetRun(t *testing.T, st db.Store, target string) {
 	t.Helper()
 	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
-	if err := st.SaveRun(context.Background(), store.RunInput{
-		Run: store.RunRecord{
+	if err := st.SaveRun(context.Background(), db.RunInput{
+		Run: db.RunRecord{
 			Target: target, Playbook: "site", StartedAt: now, FinishedAt: now,
 			Success: true, Hosts: 1,
 			Output: "PLAY [all] ***\nfull output for " + target + "\n",
 		},
-		Hosts: []store.HostRunRecord{{Host: "web1", Status: "ok", Ok: 1}},
-		Tasks: []store.TaskStateRecord{{Host: "web1", Task: "Install nginx", Status: "changed", LastDiff: "-old\n+new"}},
+		Hosts: []db.HostRunRecord{{Host: "web1", Status: "ok", Ok: 1}},
+		Tasks: []db.TaskStateRecord{{Host: "web1", Task: "Install nginx", Status: "changed", LastDiff: "-old\n+new"}},
 	}); err != nil {
 		t.Fatalf("SaveRun() error: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestVersionedRoutesAndFlatAliases(t *testing.T) {
 		}
 	}
 
-	var flat, versioned []store.RunRecord
+	var flat, versioned []db.RunRecord
 	if rec := doGet(t, s, "/api/runs"); rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &flat) != nil {
 		t.Fatal("cannot decode flat runs")
 	}
@@ -155,7 +155,7 @@ func TestCollectionScopedRunsAndRun(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET collection runs: status = %d, body %s", rec.Code, rec.Body.String())
 	}
-	var runs []store.RunRecord
+	var runs []db.RunRecord
 	if err := json.Unmarshal(rec.Body.Bytes(), &runs); err != nil {
 		t.Fatalf("decode runs: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestCollectionScopedRunsAndRun(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET collection stats: status = %d, body %s", rec.Code, rec.Body.String())
 	}
-	var stats store.Stats
+	var stats db.Stats
 	if err := json.Unmarshal(rec.Body.Bytes(), &stats); err != nil {
 		t.Fatalf("decode stats: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestRunDetailAndListingWithoutOutput(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET runs: status = %d, body %s", rec.Code, rec.Body.String())
 	}
-	var listed []store.RunRecord
+	var listed []db.RunRecord
 	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
 		t.Fatalf("decode runs: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestRunDetailAndListingWithoutOutput(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("GET %s: status = %d, body %s", path, rec.Code, rec.Body.String())
 		}
-		var detail store.RunRecord
+		var detail db.RunRecord
 		if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
 			t.Fatalf("decode %s: %v", path, err)
 		}
@@ -263,7 +263,7 @@ func TestRunDetailAndListingWithoutOutput(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET %s: status = %d, body %s", tasksPath, rec.Code, rec.Body.String())
 	}
-	var tasks []store.TaskRunRecord
+	var tasks []db.TaskRunRecord
 	if err := json.Unmarshal(rec.Body.Bytes(), &tasks); err != nil {
 		t.Fatalf("decode tasks: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestCollectionRunFiltersAndPagination(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("GET %s%s: status = %d, body %s", collectionPath, query, rec.Code, rec.Body.String())
 		}
-		var runs []store.RunRecord
+		var runs []db.RunRecord
 		if err := json.Unmarshal(rec.Body.Bytes(), &runs); err != nil {
 			t.Fatalf("decode runs: %v", err)
 		}

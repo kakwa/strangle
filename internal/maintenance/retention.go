@@ -4,14 +4,14 @@ import (
 	"context"
 
 	"github.com/kakwa/strangle/internal/cfg"
-	"github.com/kakwa/strangle/internal/store"
+	"github.com/kakwa/strangle/internal/db"
 	"go.uber.org/zap"
 )
 
 // NewRetention returns a task that prunes old runs, or nil when retention is
 // disabled. targets is a provider rather than a snapshot so a git-backed
 // collection's reloaded policy is picked up on the next pass.
-func NewRetention(st store.Store, conf cfg.RetentionConfig, targets func() []cfg.TargetConfig, logger *zap.Logger) *Task {
+func NewRetention(st db.Store, conf cfg.RetentionConfig, targets func() []cfg.TargetConfig, logger *zap.Logger) *Task {
 	enabled := conf.Enabled()
 	for _, t := range targets() {
 		if t.Retention.Enabled() {
@@ -21,7 +21,7 @@ func NewRetention(st store.Store, conf cfg.RetentionConfig, targets func() []cfg
 	}
 	return newTask(conf.Interval, enabled, func(ctx context.Context) {
 		for _, target := range targets() {
-			policy := store.RetentionPolicy{
+			policy := db.RetentionPolicy{
 				MaxAge:   conf.MaxAge,
 				MaxCount: conf.MaxCount,
 			}

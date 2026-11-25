@@ -2,7 +2,7 @@ package server
 
 import (
 	"github.com/kakwa/strangle/internal/auth"
-	"github.com/kakwa/strangle/internal/store"
+	"github.com/kakwa/strangle/internal/db"
 )
 
 const (
@@ -91,8 +91,8 @@ type apiErrorDoc struct {
 }
 
 // runListResponseDoc is the header-bearing envelope used by the run listings.
-// The response body itself is []store.RunRecord.
+// The response body itself is []db.RunRecord.
 type runListResponseDoc struct {
-	Runs       []store.RunRecord `json:"runs"`
-	TotalCount int               `json:"total_count"`
+	Runs       []db.RunRecord `json:"runs"`
+	TotalCount int            `json:"total_count"`
 }

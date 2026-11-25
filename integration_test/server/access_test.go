@@ -14,13 +14,13 @@ import (
 	"github.com/kakwa/strangle/internal/applier"
 	"github.com/kakwa/strangle/internal/auth"
 	"github.com/kakwa/strangle/internal/cfg"
-	"github.com/kakwa/strangle/internal/store"
+	"github.com/kakwa/strangle/internal/db"
 	"go.uber.org/zap"
 )
 
 // newAccessTestServer builds an authenticated server with two collections
-// and the supplied membership store.
-func newAccessTestServer(st store.Store, users auth.UserStore, access auth.CollectionAccess, enq server.RunEnqueuer) *server.Server {
+// and the supplied membership db.
+func newAccessTestServer(st db.Store, users auth.UserStore, access auth.CollectionAccess, enq server.RunEnqueuer) *server.Server {
 	targets := []cfg.TargetConfig{
 		{Name: "home", Playbooks: []cfg.PlaybookConfig{{Name: "site"}}},
 		{Name: "edge", Org: "lab", Playbooks: []cfg.PlaybookConfig{{Name: "site"}}},
@@ -34,7 +34,7 @@ func TestCollectionRestrictions(t *testing.T) {
 	st := testutil.OpenDB(t, "server")
 	seedTargetRun(t, st, "home")
 	seedTargetRun(t, st, "edge")
-	seedRunWithState(t, st, 100, "edge", store.RunStateRunning, "99")
+	seedRunWithState(t, st, 100, "edge", db.RunStateRunning, "99")
 	seedUser(t, st.Users(), "alice", "pw")
 	access := st.Access()
 	if err := access.Add(context.Background(), "alice", "lab", "edge"); err != nil {

@@ -25,7 +25,7 @@ func openDBWithDSN(t *testing.T, label string) (*db.DB, string) {
 }
 
 // TestResultsUseGormTables verifies that an applier run persists its outcome
-// through store.Store into the existing run-history tables. River is not
+// through db.Store into the existing run-history tables. River is not
 // involved here and never owns job results.
 func TestResultsUseGormTables(t *testing.T) {
 	const output = `TASK [Install nginx] *******

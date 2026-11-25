@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/internal/cfg"
-	"github.com/kakwa/strangle/internal/store"
+	"github.com/kakwa/strangle/internal/db"
 	"go.uber.org/zap"
 )
 
@@ -16,7 +16,7 @@ type cleanupCall struct {
 }
 
 type stubStore struct {
-	store.Store
+	db.Store
 	calls []cleanupCall
 }
 

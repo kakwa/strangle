@@ -6,22 +6,21 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/internal/db"
-	"github.com/kakwa/strangle/internal/store"
 )
 
-func seedHostRun(t *testing.T, st *db.DB, id uint64, target string, finished time.Time, inventory []store.InventoryHost, hosts []string) {
+func seedHostRun(t *testing.T, st *db.DB, id uint64, target string, finished time.Time, inventory []db.InventoryHost, hosts []string) {
 	t.Helper()
 	run := testRun(target, "site", finished)
 	run.ID = id
-	run.State = store.RunStateCompleted
+	run.State = db.RunStateCompleted
 
-	recaps := make([]store.HostRunRecord, 0, len(hosts))
-	tasks := make([]store.TaskStateRecord, 0, len(hosts))
+	recaps := make([]db.HostRunRecord, 0, len(hosts))
+	tasks := make([]db.TaskStateRecord, 0, len(hosts))
 	for _, name := range hosts {
-		recaps = append(recaps, store.HostRunRecord{Host: name, Ok: 1})
-		tasks = append(tasks, store.TaskStateRecord{Host: name, Task: "install", Status: "ok", LastRunID: id})
+		recaps = append(recaps, db.HostRunRecord{Host: name, Ok: 1})
+		tasks = append(tasks, db.TaskStateRecord{Host: name, Task: "install", Status: "ok", LastRunID: id})
 	}
-	if err := st.SaveRun(context.Background(), store.RunInput{
+	if err := st.SaveRun(context.Background(), db.RunInput{
 		Run: run, Hosts: recaps, Tasks: tasks, Inventory: inventory,
 	}); err != nil {
 		t.Fatalf("SaveRun(%d) error: %v", id, err)
@@ -35,15 +34,15 @@ func TestStorePruneHosts(t *testing.T) {
 	now := time.Now().UTC()
 
 	seedHostRun(t, st, 1, "home", now.Add(-72*time.Hour),
-		[]store.InventoryHost{{Name: "old"}, {Name: "recent"}}, []string{"old", "recent"})
+		[]db.InventoryHost{{Name: "old"}, {Name: "recent"}}, []string{"old", "recent"})
 	seedHostRun(t, st, 2, "home", now.Add(-time.Hour),
-		[]store.InventoryHost{{Name: "recent"}}, []string{"recent"})
+		[]db.InventoryHost{{Name: "recent"}}, []string{"recent"})
 	seedHostRun(t, st, 3, "edge", now.Add(-72*time.Hour),
-		[]store.InventoryHost{{Name: "old"}}, []string{"old"})
+		[]db.InventoryHost{{Name: "old"}}, []string{"old"})
 	// A later inventory snapshot that omits the host clears in_inventory.
-	if err := st.SaveRun(ctx, store.RunInput{
+	if err := st.SaveRun(ctx, db.RunInput{
 		Run:       testRun("home", "site", now),
-		Inventory: []store.InventoryHost{{Name: "recent"}},
+		Inventory: []db.InventoryHost{{Name: "recent"}},
 	}); err != nil {
 		t.Fatalf("SaveRun(inventory snapshot) error: %v", err)
 	}

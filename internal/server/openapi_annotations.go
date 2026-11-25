@@ -2,8 +2,8 @@ package server
 
 import (
 	"github.com/kakwa/strangle/internal/auth"
+	"github.com/kakwa/strangle/internal/db"
 	"github.com/kakwa/strangle/internal/sshpool"
-	"github.com/kakwa/strangle/internal/store"
 	"github.com/kakwa/strangle/internal/worker"
 )
 
@@ -12,7 +12,7 @@ import (
 var (
 	_ auth.Token
 	_ sshpool.HostKey
-	_ store.Stats
+	_ db.Stats
 	_ worker.WorkerStatus
 )
 
@@ -127,7 +127,7 @@ func (s *Server) docDeleteToken() {}
 // @Produce json
 // @Security sessionCookie
 // @Security userBearer
-// @Success 200 {object} store.Stats "Statistics"
+// @Success 200 {object} db.Stats "Statistics"
 // @Failure 401 {object} apiErrorDoc "not authenticated"
 // @Failure 500 {object} apiErrorDoc "store error"
 // @Router  /api/v1/stats [get]
@@ -143,7 +143,7 @@ func (s *Server) docStats() {}
 // @Security userBearer
 // @Param   org path string true "Organization name"
 // @Param   collection path string true "Collection (target) name"
-// @Success 200 {object} store.Stats "Statistics"
+// @Success 200 {object} db.Stats "Statistics"
 // @Failure 401 {object} apiErrorDoc "not authenticated"
 // @Failure 403 {object} apiErrorDoc "access denied"
 // @Failure 404 {object} apiErrorDoc "unknown collection"
@@ -165,7 +165,7 @@ func (s *Server) docCollectionStats() {}
 // @Param   to query string false "Exclusive RFC3339 end time"
 // @Param   limit query int false "Maximum number of runs" default(50)
 // @Param   offset query int false "Number of matching runs to skip" default(0)
-// @Success 200 {array} store.RunRecord "Runs"
+// @Success 200 {array} db.RunRecord "Runs"
 // @Header  200 {integer} X-Total-Count "Total matching runs before pagination"
 // @Failure 400 {object} apiErrorDoc "invalid filter"
 // @Failure 401 {object} apiErrorDoc "not authenticated"
@@ -189,7 +189,7 @@ func (s *Server) docRuns() {}
 // @Param   to query string false "Exclusive RFC3339 end time"
 // @Param   limit query int false "Maximum number of runs" default(50)
 // @Param   offset query int false "Number of matching runs to skip" default(0)
-// @Success 200 {array} store.RunRecord "Runs"
+// @Success 200 {array} db.RunRecord "Runs"
 // @Header  200 {integer} X-Total-Count "Total matching runs before pagination"
 // @Failure 400 {object} apiErrorDoc "invalid filter"
 // @Failure 401 {object} apiErrorDoc "not authenticated"
@@ -208,7 +208,7 @@ func (s *Server) docCollectionRuns() {}
 // @Security sessionCookie
 // @Security userBearer
 // @Param   id path int true "Numeric run identifier"
-// @Success 200 {object} store.RunRecord "Run"
+// @Success 200 {object} db.RunRecord "Run"
 // @Failure 400 {object} apiErrorDoc "invalid run id"
 // @Failure 401 {object} apiErrorDoc "not authenticated"
 // @Failure 404 {object} apiErrorDoc "run not found"
@@ -227,7 +227,7 @@ func (s *Server) docRunDetail() {}
 // @Param   org path string true "Organization name"
 // @Param   collection path string true "Collection (target) name"
 // @Param   id path int true "Numeric run identifier"
-// @Success 200 {object} store.RunRecord "Run"
+// @Success 200 {object} db.RunRecord "Run"
 // @Failure 400 {object} apiErrorDoc "invalid run id"
 // @Failure 401 {object} apiErrorDoc "not authenticated"
 // @Failure 403 {object} apiErrorDoc "access denied"
@@ -247,7 +247,7 @@ func (s *Server) docCollectionRunDetail() {}
 // @Param   org path string true "Organization name"
 // @Param   collection path string true "Collection (target) name"
 // @Param   id path int true "Numeric run identifier"
-// @Success 200 {array} store.TaskRunRecord "Task runs"
+// @Success 200 {array} db.TaskRunRecord "Task runs"
 // @Failure 400 {object} apiErrorDoc "invalid run id"
 // @Failure 401 {object} apiErrorDoc "not authenticated"
 // @Failure 403 {object} apiErrorDoc "access denied"
@@ -264,7 +264,7 @@ func (s *Server) docRunTasks() {}
 // @Produce json
 // @Security sessionCookie
 // @Security userBearer
-// @Success 200 {array} store.HostRecord "Hosts"
+// @Success 200 {array} db.HostRecord "Hosts"
 // @Failure 401 {object} apiErrorDoc "not authenticated"
 // @Failure 500 {object} apiErrorDoc "store error"
 // @Router  /api/v1/hosts [get]
@@ -280,7 +280,7 @@ func (s *Server) docHosts() {}
 // @Security userBearer
 // @Param   org path string true "Organization name"
 // @Param   collection path string true "Collection (target) name"
-// @Success 200 {array} store.HostRecord "Hosts"
+// @Success 200 {array} db.HostRecord "Hosts"
 // @Failure 401 {object} apiErrorDoc "not authenticated"
 // @Failure 403 {object} apiErrorDoc "access denied"
 // @Failure 404 {object} apiErrorDoc "unknown collection"
@@ -298,7 +298,7 @@ func (s *Server) docCollectionHosts() {}
 // @Security userBearer
 // @Param   host path string true "Inventory host name"
 // @Param   limit query int false "Maximum number of entries" default(10)
-// @Success 200 {array} store.HostRunRecord "Host runs"
+// @Success 200 {array} db.HostRunRecord "Host runs"
 // @Failure 401 {object} apiErrorDoc "not authenticated"
 // @Failure 500 {object} apiErrorDoc "store error"
 // @Router  /api/v1/hosts/{host}/runs [get]
@@ -316,7 +316,7 @@ func (s *Server) docHostRuns() {}
 // @Param   collection path string true "Collection (target) name"
 // @Param   host path string true "Inventory host name"
 // @Param   limit query int false "Maximum number of entries" default(10)
-// @Success 200 {array} store.HostRunRecord "Host runs"
+// @Success 200 {array} db.HostRunRecord "Host runs"
 // @Failure 401 {object} apiErrorDoc "not authenticated"
 // @Failure 403 {object} apiErrorDoc "access denied"
 // @Failure 404 {object} apiErrorDoc "unknown collection"
@@ -334,7 +334,7 @@ func (s *Server) docCollectionHostRuns() {}
 // @Security userBearer
 // @Param   host path string true "Inventory host name"
 // @Param   limit query int false "Maximum number of entries" default(200)
-// @Success 200 {array} store.TaskStateRecord "Task changes"
+// @Success 200 {array} db.TaskStateRecord "Task changes"
 // @Failure 401 {object} apiErrorDoc "not authenticated"
 // @Failure 500 {object} apiErrorDoc "store error"
 // @Router  /api/v1/hosts/{host}/changes [get]
@@ -352,7 +352,7 @@ func (s *Server) docHostChanges() {}
 // @Param   collection path string true "Collection (target) name"
 // @Param   host path string true "Inventory host name"
 // @Param   limit query int false "Maximum number of entries" default(200)
-// @Success 200 {array} store.TaskStateRecord "Task changes"
+// @Success 200 {array} db.TaskStateRecord "Task changes"
 // @Failure 401 {object} apiErrorDoc "not authenticated"
 // @Failure 403 {object} apiErrorDoc "access denied"
 // @Failure 404 {object} apiErrorDoc "unknown collection"

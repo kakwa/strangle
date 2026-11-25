@@ -18,8 +18,8 @@ import (
 	"github.com/kakwa/strangle/internal/auth"
 	"github.com/kakwa/strangle/internal/cfg"
 	"github.com/kakwa/strangle/internal/collection"
+	"github.com/kakwa/strangle/internal/db"
 	"github.com/kakwa/strangle/internal/sshpool"
-	"github.com/kakwa/strangle/internal/store"
 	"github.com/kakwa/strangle/internal/worker"
 	"github.com/kakwa/strangle/web"
 	"github.com/labstack/echo/v5"
@@ -90,7 +90,7 @@ func WithTLS(certFile, keyFile string) Option {
 type Server struct {
 	addr        string
 	applier     *applier.Ansible
-	store       store.Store
+	store       db.Store
 	ssh         *sshpool.Multi
 	run         RunEnqueuer
 	workers     WorkerReporter
@@ -141,7 +141,7 @@ const SessionCookie = "strangle_session"
 // for user-linked CLIs and webhooks). authToken, when non-empty, is a
 // static bearer token accepted on the sync endpoint only (legacy
 // machine-to-machine webhook protection, not tied to a user).
-func New(addr string, apr *applier.Ansible, st store.Store, ssh *sshpool.Multi, run RunEnqueuer, workers WorkerReporter, syncer Syncer, users auth.UserStore, tokens auth.TokenStore, authToken string, logger *zap.Logger, opts ...Option) *Server {
+func New(addr string, apr *applier.Ansible, st db.Store, ssh *sshpool.Multi, run RunEnqueuer, workers WorkerReporter, syncer Syncer, users auth.UserStore, tokens auth.TokenStore, authToken string, logger *zap.Logger, opts ...Option) *Server {
 	s := &Server{
 		addr:      addr,
 		applier:   apr,
@@ -421,7 +421,7 @@ func (s *Server) buildRoutes() *echo.Echo {
 		if coll != "" {
 			allowed = map[string]bool{coll: true}
 		}
-		visible := make([]store.RunRecord, 0, len(runs))
+		visible := make([]db.RunRecord, 0, len(runs))
 		for _, run := range runs {
 			if targetVisible(allowed, run.Target) {
 				visible = append(visible, runSummary(run))
@@ -451,7 +451,7 @@ func (s *Server) buildRoutes() *echo.Echo {
 			return
 		}
 		run, err := s.store.Run(r.Context(), id)
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, db.ErrNotFound) {
 			writeError(w, http.StatusNotFound, err)
 			return
 		}
@@ -490,7 +490,7 @@ func (s *Server) buildRoutes() *echo.Echo {
 			return
 		}
 		run, err := s.store.Run(r.Context(), id)
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, db.ErrNotFound) {
 			writeError(w, http.StatusNotFound, err)
 			return
 		}
@@ -534,7 +534,7 @@ func (s *Server) buildRoutes() *echo.Echo {
 		if coll != "" {
 			allowed = map[string]bool{coll: true}
 		}
-		filtered := make([]store.HostRecord, 0, len(hosts))
+		filtered := make([]db.HostRecord, 0, len(hosts))
 		for _, h := range hosts {
 			if (coll == "" || h.Target == coll) && targetVisible(allowed, h.Target) {
 				filtered = append(filtered, h)
@@ -556,7 +556,7 @@ func (s *Server) buildRoutes() *echo.Echo {
 		if coll := r.PathValue("collection"); coll != "" {
 			allowed = map[string]bool{coll: true}
 		}
-		filtered := make([]store.HostRunRecord, 0, len(runs))
+		filtered := make([]db.HostRunRecord, 0, len(runs))
 		for _, run := range runs {
 			if targetVisible(allowed, run.Target) {
 				filtered = append(filtered, run)
@@ -578,7 +578,7 @@ func (s *Server) buildRoutes() *echo.Echo {
 		if coll := r.PathValue("collection"); coll != "" {
 			allowed = map[string]bool{coll: true}
 		}
-		filtered := make([]store.TaskStateRecord, 0, len(changes))
+		filtered := make([]db.TaskStateRecord, 0, len(changes))
 		for _, c := range changes {
 			if targetVisible(allowed, c.Target) {
 				filtered = append(filtered, c)
@@ -603,7 +603,7 @@ func (s *Server) buildRoutes() *echo.Echo {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		latest := map[string]store.RunRecord{}
+		latest := map[string]db.RunRecord{}
 		for _, run := range runs {
 			if coll != "" && run.Target != coll {
 				continue
@@ -704,10 +704,10 @@ func (s *Server) buildRoutes() *echo.Echo {
 		// req.Playbook is the job name from strangle.yml, not a file path.
 		// Reserve a run record now so the run has an ID before it finishes
 		// and can be canceled while in flight.
-		record := store.RunRecord{
+		record := db.RunRecord{
 			Target:   req.Target,
 			Playbook: req.Playbook,
-			State:    store.RunStateQueued,
+			State:    db.RunStateQueued,
 			Check:    req.Check,
 		}
 		if s.store != nil {
@@ -759,7 +759,7 @@ func (s *Server) buildRoutes() *echo.Echo {
 		}
 		record, err := s.store.Run(r.Context(), id)
 		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
+			if errors.Is(err, db.ErrNotFound) {
 				writeError(w, http.StatusNotFound, err)
 			} else {
 				writeError(w, http.StatusInternalServerError, err)
@@ -767,10 +767,10 @@ func (s *Server) buildRoutes() *echo.Echo {
 			return
 		}
 		if record.Target != coll || !targetVisible(s.accessibleTargets(r.Context(), r), record.Target) {
-			writeError(w, http.StatusNotFound, store.ErrNotFound)
+			writeError(w, http.StatusNotFound, db.ErrNotFound)
 			return
 		}
-		if record.State != store.RunStateQueued && record.State != store.RunStateRunning {
+		if record.State != db.RunStateQueued && record.State != db.RunStateRunning {
 			writeError(w, http.StatusConflict, errors.New("run is not active"))
 			return
 		}
@@ -787,12 +787,12 @@ func (s *Server) buildRoutes() *echo.Echo {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		record.State = store.RunStateCancelled
+		record.State = db.RunStateCancelled
 		record.Canceled = true
 		if err := s.store.UpdateRun(context.WithoutCancel(r.Context()), record); err != nil {
 			s.logger.Warn("failed to record run cancellation", zap.Uint64("run", id), zap.Error(err))
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"id": id, "state": store.RunStateCancelled})
+		writeJSON(w, http.StatusOK, map[string]any{"id": id, "state": db.RunStateCancelled})
 	})
 	routes.HandleFunc("POST "+apiPrefix+"/orgs/{org}/collections/{collection}/runs/{id}/cancel", handleCancelRun)
 

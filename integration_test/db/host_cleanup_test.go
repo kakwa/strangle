@@ -6,24 +6,23 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/internal/db"
-	"github.com/kakwa/strangle/internal/store"
 	"github.com/kakwa/strangle/internal/testutil"
 )
 
-func seedDBHostRun(t *testing.T, d *db.DB, id uint64, target string, finished time.Time, inventory []store.InventoryHost, hosts []string) {
+func seedDBHostRun(t *testing.T, d *db.DB, id uint64, target string, finished time.Time, inventory []db.InventoryHost, hosts []string) {
 	t.Helper()
-	run := store.RunRecord{
+	run := db.RunRecord{
 		ID: id, Target: target, Playbook: "site",
 		StartedAt: finished.Add(-time.Minute), FinishedAt: finished,
-		State: store.RunStateCompleted, Success: true,
+		State: db.RunStateCompleted, Success: true,
 	}
-	recaps := make([]store.HostRunRecord, 0, len(hosts))
-	tasks := make([]store.TaskStateRecord, 0, len(hosts))
+	recaps := make([]db.HostRunRecord, 0, len(hosts))
+	tasks := make([]db.TaskStateRecord, 0, len(hosts))
 	for _, name := range hosts {
-		recaps = append(recaps, store.HostRunRecord{Host: name, Ok: 1})
-		tasks = append(tasks, store.TaskStateRecord{Host: name, Task: "install", Status: "ok", LastRunID: id})
+		recaps = append(recaps, db.HostRunRecord{Host: name, Ok: 1})
+		tasks = append(tasks, db.TaskStateRecord{Host: name, Task: "install", Status: "ok", LastRunID: id})
 	}
-	if err := d.SaveRun(context.Background(), store.RunInput{
+	if err := d.SaveRun(context.Background(), db.RunInput{
 		Run: run, Hosts: recaps, Tasks: tasks, Inventory: inventory,
 	}); err != nil {
 		t.Fatalf("SaveRun(%d) error: %v", id, err)
@@ -37,11 +36,11 @@ func TestDBPruneHosts(t *testing.T) {
 	now := time.Now().UTC()
 
 	seedDBHostRun(t, d, 1, "home", now.Add(-72*time.Hour),
-		[]store.InventoryHost{{Name: "old"}, {Name: "recent"}}, []string{"old", "recent"})
+		[]db.InventoryHost{{Name: "old"}, {Name: "recent"}}, []string{"old", "recent"})
 	seedDBHostRun(t, d, 2, "home", now.Add(-time.Hour),
-		[]store.InventoryHost{{Name: "recent"}}, []string{"recent"})
+		[]db.InventoryHost{{Name: "recent"}}, []string{"recent"})
 	seedDBHostRun(t, d, 3, "edge", now.Add(-72*time.Hour),
-		[]store.InventoryHost{{Name: "old"}}, []string{"old"})
+		[]db.InventoryHost{{Name: "old"}}, []string{"old"})
 
 	// Emulate the collection dropping the host from its inventory: the flag
 	// is a column in PostgreSQL.

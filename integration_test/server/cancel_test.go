@@ -9,13 +9,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kakwa/strangle/internal/store"
+	"github.com/kakwa/strangle/internal/db"
 )
 
-func seedRunWithState(t *testing.T, st store.Store, id uint64, target, state, jobID string) {
+func seedRunWithState(t *testing.T, st db.Store, id uint64, target, state, jobID string) {
 	t.Helper()
-	if err := st.SaveRun(context.Background(), store.RunInput{
-		Run: store.RunRecord{
+	if err := st.SaveRun(context.Background(), db.RunInput{
+		Run: db.RunRecord{
 			ID: id, Target: target, Playbook: "site", State: state, JobID: jobID,
 		},
 	}); err != nil {
@@ -33,7 +33,7 @@ func postCancel(t *testing.T, s *server.Server, path string) *httptest.ResponseR
 
 func TestCancelRunVersionedCollectionScope(t *testing.T) {
 	st := testutil.OpenDB(t, "server")
-	seedRunWithState(t, st, 1, "home", store.RunStateRunning, "42")
+	seedRunWithState(t, st, 1, "home", db.RunStateRunning, "42")
 	enq := &recEnqueuer{status: "queued"}
 	s := newOrgTestServer(enq, st)
 
@@ -48,14 +48,14 @@ func TestCancelRunVersionedCollectionScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run(): %v", err)
 	}
-	if run.State != store.RunStateCancelled || !run.Canceled {
+	if run.State != db.RunStateCancelled || !run.Canceled {
 		t.Fatalf("run state = %+v, want cancelled", run)
 	}
 
 	// A worker that finishes after the cancellation request must not turn the
 	// record back into a completed run or erase its job ID.
-	if err := st.SaveRun(context.Background(), store.RunInput{
-		Run: store.RunRecord{ID: 1, Target: "home", Playbook: "site", State: store.RunStateCompleted, Success: true},
+	if err := st.SaveRun(context.Background(), db.RunInput{
+		Run: db.RunRecord{ID: 1, Target: "home", Playbook: "site", State: db.RunStateCompleted, Success: true},
 	}); err != nil {
 		t.Fatalf("SaveRun() after cancel: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestCancelRunVersionedCollectionScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run(): %v", err)
 	}
-	if run.State != store.RunStateCancelled || !run.Canceled {
+	if run.State != db.RunStateCancelled || !run.Canceled {
 		t.Fatalf("run state after worker finish = %+v, want cancelled", run)
 	}
 	if run.JobID != "42" {
@@ -87,7 +87,7 @@ func TestCancelRunVersionedCollectionScope(t *testing.T) {
 
 func TestCancelRunRejectsCompletedAndInvalid(t *testing.T) {
 	st := testutil.OpenDB(t, "server")
-	seedRunWithState(t, st, 1, "home", store.RunStateCompleted, "42")
+	seedRunWithState(t, st, 1, "home", db.RunStateCompleted, "42")
 	enq := &recEnqueuer{status: "queued"}
 	s := newOrgTestServer(enq, st)
 

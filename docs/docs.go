@@ -29,42 +29,7 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
-            "github_com_kakwa_strangle_internal_sshpool.HostKey": {
-                "properties": {
-                    "fingerprint": {
-                        "type": "string"
-                    },
-                    "first_seen": {
-                        "type": "string"
-                    },
-                    "host": {
-                        "type": "string"
-                    },
-                    "public_key": {
-                        "type": "string"
-                    },
-                    "status": {
-                        "type": "string"
-                    },
-                    "target": {
-                        "description": "Target is the scope key (\u003ctarget\u003e/\u003cplaybook name\u003e) that owns the\nconnection. It is set when host keys are aggregated across scopes (see Multi);\nthe per-scope persistence files leave it empty.",
-                        "type": "string"
-                    }
-                },
-                "type": "object"
-            },
-            "github_com_kakwa_strangle_internal_sshpool.Stats": {
-                "properties": {
-                    "active_connections": {
-                        "type": "integer"
-                    },
-                    "total_dials": {
-                        "type": "integer"
-                    }
-                },
-                "type": "object"
-            },
-            "github_com_kakwa_strangle_internal_store.HostRecord": {
+            "github_com_kakwa_strangle_internal_db.HostRecord": {
                 "properties": {
                     "active": {
                         "type": "boolean"
@@ -121,7 +86,7 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
-            "github_com_kakwa_strangle_internal_store.HostRunRecord": {
+            "github_com_kakwa_strangle_internal_db.HostRunRecord": {
                 "properties": {
                     "changed": {
                         "type": "integer"
@@ -174,7 +139,7 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
-            "github_com_kakwa_strangle_internal_store.HostsStats": {
+            "github_com_kakwa_strangle_internal_db.HostsStats": {
                 "properties": {
                     "active": {
                         "type": "integer"
@@ -191,7 +156,7 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
-            "github_com_kakwa_strangle_internal_store.PlaybookStats": {
+            "github_com_kakwa_strangle_internal_db.PlaybookStats": {
                 "properties": {
                     "failed": {
                         "type": "integer"
@@ -211,7 +176,7 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
-            "github_com_kakwa_strangle_internal_store.RunRecord": {
+            "github_com_kakwa_strangle_internal_db.RunRecord": {
                 "properties": {
                     "canceled": {
                         "description": "Canceled records when cancellation was requested for the run.",
@@ -242,6 +207,10 @@ const docTemplate = `{
                     "id": {
                         "type": "integer"
                     },
+                    "inventory": {
+                        "description": "Inventory is the inventory file/path used by this run. Together with\nTarget and Playbook it identifies a host's context.",
+                        "type": "string"
+                    },
                     "job_id": {
                         "description": "JobID is the queue job that executes this run, when available.",
                         "type": "string"
@@ -267,7 +236,7 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
-            "github_com_kakwa_strangle_internal_store.RunsStats": {
+            "github_com_kakwa_strangle_internal_db.RunsStats": {
                 "properties": {
                     "avg_duration_ms": {
                         "type": "integer"
@@ -287,25 +256,25 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
-            "github_com_kakwa_strangle_internal_store.Stats": {
+            "github_com_kakwa_strangle_internal_db.Stats": {
                 "properties": {
                     "hosts": {
-                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_store.HostsStats"
+                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.HostsStats"
                     },
                     "per_playbook": {
                         "items": {
-                            "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_store.PlaybookStats"
+                            "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.PlaybookStats"
                         },
                         "type": "array",
                         "uniqueItems": false
                     },
                     "runs": {
-                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_store.RunsStats"
+                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.RunsStats"
                     }
                 },
                 "type": "object"
             },
-            "github_com_kakwa_strangle_internal_store.TaskRunRecord": {
+            "github_com_kakwa_strangle_internal_db.TaskRunRecord": {
                 "properties": {
                     "diff": {
                         "type": "string"
@@ -337,7 +306,7 @@ const docTemplate = `{
                 },
                 "type": "object"
             },
-            "github_com_kakwa_strangle_internal_store.TaskStateRecord": {
+            "github_com_kakwa_strangle_internal_db.TaskStateRecord": {
                 "properties": {
                     "host": {
                         "type": "string"
@@ -365,6 +334,41 @@ const docTemplate = `{
                     },
                     "task": {
                         "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "github_com_kakwa_strangle_internal_sshpool.HostKey": {
+                "properties": {
+                    "fingerprint": {
+                        "type": "string"
+                    },
+                    "first_seen": {
+                        "type": "string"
+                    },
+                    "host": {
+                        "type": "string"
+                    },
+                    "public_key": {
+                        "type": "string"
+                    },
+                    "status": {
+                        "type": "string"
+                    },
+                    "target": {
+                        "description": "Target is the scope key (\u003ctarget\u003e/\u003cplaybook name\u003e) that owns the\nconnection. It is set when host keys are aggregated across scopes (see Multi);\nthe per-scope persistence files leave it empty.",
+                        "type": "string"
+                    }
+                },
+                "type": "object"
+            },
+            "github_com_kakwa_strangle_internal_sshpool.Stats": {
+                "properties": {
+                    "active_connections": {
+                        "type": "integer"
+                    },
+                    "total_dials": {
+                        "type": "integer"
                     }
                 },
                 "type": "object"
@@ -714,7 +718,7 @@ const docTemplate = `{
                             "application/json": {
                                 "schema": {
                                     "items": {
-                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_store.HostRecord"
+                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.HostRecord"
                                     },
                                     "type": "array"
                                 }
@@ -786,7 +790,7 @@ const docTemplate = `{
                             "application/json": {
                                 "schema": {
                                     "items": {
-                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_store.TaskStateRecord"
+                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.TaskStateRecord"
                                     },
                                     "type": "array"
                                 }
@@ -858,7 +862,7 @@ const docTemplate = `{
                             "application/json": {
                                 "schema": {
                                     "items": {
-                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_store.HostRunRecord"
+                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.HostRunRecord"
                                     },
                                     "type": "array"
                                 }
@@ -1588,7 +1592,7 @@ const docTemplate = `{
                             "application/json": {
                                 "schema": {
                                     "items": {
-                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_store.HostRecord"
+                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.HostRecord"
                                     },
                                     "type": "array"
                                 }
@@ -1698,7 +1702,7 @@ const docTemplate = `{
                             "application/json": {
                                 "schema": {
                                     "items": {
-                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_store.TaskStateRecord"
+                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.TaskStateRecord"
                                     },
                                     "type": "array"
                                 }
@@ -1808,7 +1812,7 @@ const docTemplate = `{
                             "application/json": {
                                 "schema": {
                                     "items": {
-                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_store.HostRunRecord"
+                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.HostRunRecord"
                                     },
                                     "type": "array"
                                 }
@@ -2157,7 +2161,7 @@ const docTemplate = `{
                             "application/json": {
                                 "schema": {
                                     "items": {
-                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_store.RunRecord"
+                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.RunRecord"
                                     },
                                     "type": "array"
                                 }
@@ -2275,7 +2279,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_store.RunRecord"
+                                    "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.RunRecord"
                                 }
                             }
                         },
@@ -2512,7 +2516,7 @@ const docTemplate = `{
                             "application/json": {
                                 "schema": {
                                     "items": {
-                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_store.TaskRunRecord"
+                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.TaskRunRecord"
                                     },
                                     "type": "array"
                                 }
@@ -2695,7 +2699,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_store.Stats"
+                                    "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.Stats"
                                 }
                             }
                         },
@@ -3079,7 +3083,7 @@ const docTemplate = `{
                             "application/json": {
                                 "schema": {
                                     "items": {
-                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_store.RunRecord"
+                                        "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.RunRecord"
                                     },
                                     "type": "array"
                                 }
@@ -3159,7 +3163,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_store.RunRecord"
+                                    "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.RunRecord"
                                 }
                             }
                         },
@@ -3228,7 +3232,7 @@ const docTemplate = `{
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_store.Stats"
+                                    "$ref": "#/components/schemas/github_com_kakwa_strangle_internal_db.Stats"
                                 }
                             }
                         },

@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/internal/cfg"
-	"github.com/kakwa/strangle/internal/store"
+	"github.com/kakwa/strangle/internal/db"
 )
 
 // apiVersion is the current version of the HTTP API. All endpoints are
@@ -22,7 +22,7 @@ const apiVersion = "v1"
 const apiPrefix = "/api/" + apiVersion
 
 // allRuns is the upper bound used when an endpoint needs to look at the whole
-// run history before applying its own filters (store.ListRuns has no filter
+// run history before applying its own filters (db.ListRuns has no filter
 // arguments yet).
 const allRuns = 1_000_000
 
@@ -119,7 +119,7 @@ func parseRunFilter(r *http.Request, collection string) (runFilter, error) {
 // filteredRuns applies every run-listing filter except access control and
 // pagination: those are applied by the handler so the total count reflects
 // only records the requester may see.
-func (s *Server) filteredRuns(ctx context.Context, f runFilter) ([]store.RunRecord, error) {
+func (s *Server) filteredRuns(ctx context.Context, f runFilter) ([]db.RunRecord, error) {
 	all, err := s.store.ListRuns(ctx, allRuns)
 	if err != nil {
 		return nil, err
@@ -139,7 +139,7 @@ func (s *Server) filteredRuns(ctx context.Context, f runFilter) ([]store.RunReco
 		}
 	}
 
-	out := make([]store.RunRecord, 0, len(all))
+	out := make([]db.RunRecord, 0, len(all))
 	for _, run := range all {
 		if f.Collection != "" && run.Target != f.Collection {
 			continue
@@ -164,7 +164,7 @@ func (s *Server) filteredRuns(ctx context.Context, f runFilter) ([]store.RunReco
 // runSummary is a run record without the full captured output. Listings poll
 // every few seconds; returning 50 playbook logs on each poll wastes bandwidth
 // and memory. The detail endpoint is the only place that returns output.
-func runSummary(run store.RunRecord) store.RunRecord {
+func runSummary(run db.RunRecord) db.RunRecord {
 	run.Output = ""
 	return run
 }
@@ -181,13 +181,13 @@ func sshScopeCollection(scope string) string {
 }
 
 // collectionStats returns aggregate stats for one collection.
-func (s *Server) collectionStats(ctx context.Context, collection string) (*store.Stats, error) {
+func (s *Server) collectionStats(ctx context.Context, collection string) (*db.Stats, error) {
 	return s.statsForTargets(ctx, map[string]bool{collection: true})
 }
 
 // statsForTargets computes aggregate stats over the given collections. A nil
 // set means all collections and uses the store's native aggregate query.
-func (s *Server) statsForTargets(ctx context.Context, allowed map[string]bool) (*store.Stats, error) {
+func (s *Server) statsForTargets(ctx context.Context, allowed map[string]bool) (*db.Stats, error) {
 	if allowed == nil {
 		return s.store.Stats(ctx)
 	}
@@ -199,19 +199,72 @@ func (s *Server) statsForTargets(ctx context.Context, allowed map[string]bool) (
 	if err != nil {
 		return nil, err
 	}
-	var scopedRuns []store.RunRecord
+	var scopedRuns []db.RunRecord
 	for _, run := range runs {
 		if allowed[run.Target] {
 			scopedRuns = append(scopedRuns, run)
 		}
 	}
-	var scopedHosts []store.HostRecord
+	var scopedHosts []db.HostRecord
 	for _, h := range hosts {
 		if allowed[h.Target] {
 			scopedHosts = append(scopedHosts, h)
 		}
 	}
-	return store.AggregateStats(scopedRuns, scopedHosts), nil
+	// Build the scoped aggregate here: the store's Stats query covers all
+	// collections and cannot apply this handler's access filter.
+	st := &db.Stats{PerPlaybook: []db.PlaybookStats{}}
+	for _, h := range scopedHosts {
+		st.Hosts.Total++
+		if h.InInventory {
+			st.Hosts.InInventory++
+		}
+		if h.Active {
+			st.Hosts.Active++
+		} else if h.InInventory {
+			st.Hosts.Disappeared++
+		}
+	}
+	var totalDur int64
+	perPB := map[string]*db.PlaybookStats{}
+	for _, r := range scopedRuns {
+		st.Runs.Total++
+		if r.Success {
+			st.Runs.Succeeded++
+		} else {
+			st.Runs.Failed++
+		}
+		totalDur += r.DurationMS
+		if r.FinishedAt.After(st.Runs.LastRunAt) {
+			st.Runs.LastRunAt = r.FinishedAt
+		}
+		key := r.Target + "\x00" + r.Playbook
+		pb := perPB[key]
+		if pb == nil {
+			pb = &db.PlaybookStats{Target: r.Target, Playbook: r.Playbook}
+			perPB[key] = pb
+		}
+		pb.Total++
+		if !r.Success {
+			pb.Failed++
+		}
+		if r.FinishedAt.After(pb.LastRunAt) {
+			pb.LastRunAt = r.FinishedAt
+		}
+	}
+	if st.Runs.Total > 0 {
+		st.Runs.AvgDurationMS = totalDur / int64(st.Runs.Total)
+	}
+	for _, pb := range perPB {
+		st.PerPlaybook = append(st.PerPlaybook, *pb)
+	}
+	sort.Slice(st.PerPlaybook, func(i, j int) bool {
+		if st.PerPlaybook[i].Target != st.PerPlaybook[j].Target {
+			return st.PerPlaybook[i].Target < st.PerPlaybook[j].Target
+		}
+		return st.PerPlaybook[i].Playbook < st.PerPlaybook[j].Playbook
+	})
+	return st, nil
 }
 
 // organizations returns all organizations in name order, each with its

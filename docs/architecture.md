@@ -95,7 +95,7 @@ queue (`internal/riverqueue`):
 - The River client runs on its own context: a `SIGTERM` must not hard-cancel
   in-flight runs; shutdown drains the queue instead (see below).
 - River tables hold only queue metadata (job state, attempts, timestamps).
-  The applier writes every result through `store.Store` into the run-history
+  The applier writes every result through `db.Store` into the run-history
   tables: `runs`, `host_runs`, `task_states` and `task_run_results`.
 
 ## The applier
@@ -103,17 +103,17 @@ queue (`internal/riverqueue`):
 `internal/applier` receives the run from a River worker, dispatches it to the
 worker pool through the `Executor` interface, parses the captured output
 (recap, per-task status, diffs, errors), parses the target's inventory in
-`inventory.go`, and records everything through the `store.Store` interface.
+`inventory.go`, and records everything through the `db.Store` interface.
 
 After a git sync, the master calls `UpdateTargets` with the reloaded targets,
 so a branch switch or a changed `strangle.yml` takes effect from the next run.
 
 ## The store
 
-`store.Store` is the persistence interface. Its only production implementation
-is `internal/db` — GORM on PostgreSQL, with tables for runs, per-host recap
+`db.Store` is the persistence interface. Its only implementation is
+`internal/db` — GORM on PostgreSQL, with tables for runs, per-host recap
 lines, append-only per-task results, per-task latest state and hosts. There is
-no in-memory fallback; `internal/store` defines the interface and shared
+no in-memory fallback; `internal/db` also defines the interface and shared
 value types.
 
 Every task result parsed from a run is appended to task history, so the run

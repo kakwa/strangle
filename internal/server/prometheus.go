@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kakwa/strangle/internal/store"
+	"github.com/kakwa/strangle/internal/db"
 	"github.com/kakwa/strangle/internal/worker"
 	"go.uber.org/zap"
 )
@@ -27,13 +27,13 @@ var processStart = time.Now().UTC()
 // metricsHandler renders one scrape of the current process state. The endpoint
 // is unauthenticated: it exposes aggregate counts only, never host names or
 // playbook output.
-func metricsHandler(st store.Store, workers WorkerReporter, logger *zap.Logger) http.Handler {
+func metricsHandler(st db.Store, workers WorkerReporter, logger *zap.Logger) http.Handler {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var out exposition
-		var stats *store.Stats
+		var stats *db.Stats
 		var err error
 		if st == nil {
 			err = errors.New("no store configured")
@@ -90,7 +90,7 @@ func (e *exposition) gauge(name, help string, value float64) {
 	e.metric(name, "gauge", help, []sample{{value: value}})
 }
 
-func (e *exposition) writeStats(stats *store.Stats) {
+func (e *exposition) writeStats(stats *db.Stats) {
 	e.gauge("strangle_store_up", "Whether the run store is reachable (1) or not (0).", 1)
 	e.metric("strangle_build_info", "gauge", "Build information (always 1).", []sample{{
 		labels: []label{{"version", "dev"}}, value: 1,
@@ -113,7 +113,7 @@ func (e *exposition) writeStats(stats *store.Stats) {
 		{labels: []label{{"state", "disappeared"}}, value: float64(hosts.Disappeared)},
 	})
 
-	playbooks := append([]store.PlaybookStats(nil), stats.PerPlaybook...)
+	playbooks := append([]db.PlaybookStats(nil), stats.PerPlaybook...)
 	sort.Slice(playbooks, func(i, j int) bool {
 		if playbooks[i].Target != playbooks[j].Target {
 			return playbooks[i].Target < playbooks[j].Target

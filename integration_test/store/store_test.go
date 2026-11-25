@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/internal/db"
-	"github.com/kakwa/strangle/internal/store"
 	"github.com/kakwa/strangle/internal/testutil"
 )
 
@@ -17,9 +16,9 @@ func openStore(t *testing.T) *db.DB {
 	return testutil.OpenDB(t, "store")
 }
 
-func testRun(target, playbook string, finished time.Time) store.RunRecord {
+func testRun(target, playbook string, finished time.Time) db.RunRecord {
 	started := finished.Add(-time.Duration(len(playbook)) * time.Second)
-	return store.RunRecord{
+	return db.RunRecord{
 		Target:       target,
 		Playbook:     playbook,
 		StartedAt:    started,
@@ -41,22 +40,22 @@ func TestStoreSaveRunAndQueries(t *testing.T) {
 	t1 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	t2 := t1.Add(time.Hour)
 
-	in := store.RunInput{
-		Run: func() store.RunRecord {
+	in := db.RunInput{
+		Run: func() db.RunRecord {
 			r := testRun("home", "site.yml", t1)
 			r.Output = "PLAY [all] ***\nfull output\n"
 			return r
 		}(),
-		Hosts: []store.HostRunRecord{
+		Hosts: []db.HostRunRecord{
 			{Target: "home", Host: "h1", Status: "changed", Ok: 10, Changed: 2},
 			{Target: "home", Host: "h2", Status: "ok", Ok: 10},
 		},
-		Tasks: []store.TaskStateRecord{
+		Tasks: []db.TaskStateRecord{
 			{Target: "home", Host: "h1", Task: "Install nginx", Status: "changed", LastDiff: "-a\n+b"},
 			{Target: "home", Host: "h1", Task: "Start nginx", Status: "ok"},
 		},
 		ScopeNames: []string{"h1", "h2", "h3"},
-		Inventory:  []store.InventoryHost{{Name: "h1"}, {Name: "h2"}, {Name: "h3"}},
+		Inventory:  []db.InventoryHost{{Name: "h1"}, {Name: "h2"}, {Name: "h3"}},
 	}
 	if err := s.SaveRun(ctx, in); err != nil {
 		t.Fatalf("SaveRun() error: %v", err)
@@ -73,15 +72,15 @@ func TestStoreSaveRunAndQueries(t *testing.T) {
 	if err != nil || full.Output != "PLAY [all] ***\nfull output\n" {
 		t.Errorf("Run() = %+v, %v; want the captured output", full, err)
 	}
-	if _, err := s.Run(ctx, 999); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("Run(unknown) error = %v, want store.ErrNotFound", err)
+	if _, err := s.Run(ctx, 999); !errors.Is(err, db.ErrNotFound) {
+		t.Errorf("Run(unknown) error = %v, want db.ErrNotFound", err)
 	}
 
 	hosts, err := s.ListHosts(ctx)
 	if err != nil || len(hosts) != 3 {
 		t.Fatalf("ListHosts() = %v, %v", hosts, err)
 	}
-	byName := map[string]store.HostRecord{}
+	byName := map[string]db.HostRecord{}
 	for _, h := range hosts {
 		byName[h.Name] = h
 	}
@@ -128,15 +127,15 @@ func TestStoreSaveRunAndQueries(t *testing.T) {
 		history[0].Diff != "-a\n+b" || history[0].RunID != runs[0].ID {
 		t.Errorf("RunTasks()[0] = %+v", history[0])
 	}
-	if _, err := s.RunTasks(ctx, 999); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("RunTasks(unknown) error = %v, want store.ErrNotFound", err)
+	if _, err := s.RunTasks(ctx, 999); !errors.Is(err, db.ErrNotFound) {
+		t.Errorf("RunTasks(unknown) error = %v, want db.ErrNotFound", err)
 	}
 
 	// A host sharing a prefix must not leak its task states.
-	in2 := store.RunInput{
+	in2 := db.RunInput{
 		Run:   testRun("home", "site.yml", t2),
-		Hosts: []store.HostRunRecord{{Target: "home", Host: "h10", Status: "ok", Ok: 1}},
-		Tasks: []store.TaskStateRecord{{Target: "home", Host: "h10", Task: "Install nginx", Status: "changed", LastDiff: "x"}},
+		Hosts: []db.HostRunRecord{{Target: "home", Host: "h10", Status: "ok", Ok: 1}},
+		Tasks: []db.TaskStateRecord{{Target: "home", Host: "h10", Task: "Install nginx", Status: "changed", LastDiff: "x"}},
 	}
 	if err := s.SaveRun(ctx, in2); err != nil {
 		t.Fatalf("SaveRun() error: %v", err)
@@ -161,10 +160,10 @@ func TestStoreSaveRunAndQueries(t *testing.T) {
 
 	// The same host name in another target is a distinct host: host runs and
 	// task states stay scoped per target.
-	in3 := store.RunInput{
+	in3 := db.RunInput{
 		Run:   testRun("other", "site.yml", t2.Add(time.Second)),
-		Hosts: []store.HostRunRecord{{Target: "other", Host: "h1", Status: "ok", Ok: 3}},
-		Tasks: []store.TaskStateRecord{{Target: "other", Host: "h1", Task: "Reboot", Status: "changed", LastDiff: "y"}},
+		Hosts: []db.HostRunRecord{{Target: "other", Host: "h1", Status: "ok", Ok: 3}},
+		Tasks: []db.TaskStateRecord{{Target: "other", Host: "h1", Task: "Reboot", Status: "changed", LastDiff: "y"}},
 	}
 	if err := s.SaveRun(ctx, in3); err != nil {
 		t.Fatalf("SaveRun() #3 error: %v", err)
@@ -190,20 +189,20 @@ func TestStoreSaveRunAndQueries(t *testing.T) {
 
 	stats, err := s.Stats(ctx)
 	if err != nil {
-		t.Fatalf("store.Stats() error: %v", err)
+		t.Fatalf("db.Stats() error: %v", err)
 	}
 	if stats.Hosts.Total != 5 || stats.Hosts.InInventory != 3 || stats.Hosts.Active != 4 || stats.Hosts.Disappeared != 1 {
-		t.Errorf("store.Stats().Hosts = %+v", stats.Hosts)
+		t.Errorf("db.Stats().Hosts = %+v", stats.Hosts)
 	}
 	if stats.Runs.Total != 3 || stats.Runs.Succeeded != 3 {
-		t.Errorf("store.Stats().Runs = %+v", stats.Runs)
+		t.Errorf("db.Stats().Runs = %+v", stats.Runs)
 	}
 	perPB := map[string]int{}
 	for _, pb := range stats.PerPlaybook {
 		perPB[pb.Target+"/"+pb.Playbook] = pb.Total
 	}
 	if perPB["home/site.yml"] != 2 || perPB["other/site.yml"] != 1 {
-		t.Errorf("store.Stats().PerPlaybook = %v", perPB)
+		t.Errorf("db.Stats().PerPlaybook = %v", perPB)
 	}
 }
 
@@ -213,15 +212,15 @@ func TestStoreFactsAreRefreshedOnlyWhenPresent(t *testing.T) {
 	defer s.Close()
 
 	facts := json.RawMessage(`{"ansible_hostname":"web1"}`)
-	in := store.RunInput{
+	in := db.RunInput{
 		Run:   testRun("home", "site.yml", time.Now().UTC()),
-		Hosts: []store.HostRunRecord{{Host: "web1", Status: "ok", Ok: 1}},
+		Hosts: []db.HostRunRecord{{Host: "web1", Status: "ok", Ok: 1}},
 		Facts: map[string]json.RawMessage{"web1": facts},
 	}
 	if err := s.SaveRun(ctx, in); err != nil {
 		t.Fatalf("SaveRun() error: %v", err)
 	}
-	host := func() store.HostRecord {
+	host := func() db.HostRecord {
 		t.Helper()
 		hosts, err := s.ListHosts(ctx)
 		if err != nil || len(hosts) != 1 {
@@ -259,6 +258,6 @@ func TestStoreEmptyCollectionsAreNotNull(t *testing.T) {
 		t.Fatalf("HostChanges() = %v, %v; want non-nil empty slice", changes, err)
 	}
 	if stats, err := s.Stats(ctx); err != nil || stats.PerPlaybook == nil {
-		t.Fatalf("store.Stats().PerPlaybook = %v, %v; want non-nil empty slice", stats, err)
+		t.Fatalf("db.Stats().PerPlaybook = %v, %v; want non-nil empty slice", stats, err)
 	}
 }

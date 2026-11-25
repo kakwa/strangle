@@ -6,21 +6,20 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/internal/db"
-	"github.com/kakwa/strangle/internal/store"
 	"github.com/kakwa/strangle/internal/testutil"
 )
 
 func seedDBRetentionRun(t *testing.T, d *db.DB, id uint64, target, state string, finished time.Time) {
 	t.Helper()
 	ctx := context.Background()
-	in := store.RunInput{
-		Run: store.RunRecord{
+	in := db.RunInput{
+		Run: db.RunRecord{
 			ID: id, Target: target, Playbook: "site",
 			StartedAt: finished.Add(-time.Minute), FinishedAt: finished,
-			State: state, Success: state != store.RunStateCancelled,
+			State: state, Success: state != db.RunStateCancelled,
 		},
-		Hosts: []store.HostRunRecord{{Host: "h1", Ok: 1}},
-		Tasks: []store.TaskStateRecord{{Host: "h1", Task: "install", Status: "ok", LastRunID: id}},
+		Hosts: []db.HostRunRecord{{Host: "h1", Ok: 1}},
+		Tasks: []db.TaskStateRecord{{Host: "h1", Task: "install", Status: "ok", LastRunID: id}},
 	}
 	if err := d.SaveRun(ctx, in); err != nil {
 		t.Fatalf("SaveRun(%d) error: %v", id, err)
@@ -33,12 +32,12 @@ func TestDBPruneRuns(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	seedDBRetentionRun(t, d, 1, "home", store.RunStateCompleted, now.Add(-48*time.Hour))
-	seedDBRetentionRun(t, d, 2, "home", store.RunStateCompleted, now.Add(-time.Hour))
-	seedDBRetentionRun(t, d, 3, "home", store.RunStateRunning, now.Add(-72*time.Hour))
-	seedDBRetentionRun(t, d, 4, "edge", store.RunStateCompleted, now.Add(-72*time.Hour))
+	seedDBRetentionRun(t, d, 1, "home", db.RunStateCompleted, now.Add(-48*time.Hour))
+	seedDBRetentionRun(t, d, 2, "home", db.RunStateCompleted, now.Add(-time.Hour))
+	seedDBRetentionRun(t, d, 3, "home", db.RunStateRunning, now.Add(-72*time.Hour))
+	seedDBRetentionRun(t, d, 4, "edge", db.RunStateCompleted, now.Add(-72*time.Hour))
 
-	res, err := d.PruneRuns(ctx, "home", store.RetentionPolicy{MaxAge: 24 * time.Hour})
+	res, err := d.PruneRuns(ctx, "home", db.RetentionPolicy{MaxAge: 24 * time.Hour})
 	if err != nil {
 		t.Fatalf("PruneRuns() error: %v", err)
 	}

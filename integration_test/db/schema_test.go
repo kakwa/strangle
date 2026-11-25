@@ -9,7 +9,6 @@ import (
 
 	"github.com/kakwa/strangle/internal/cfg"
 	"github.com/kakwa/strangle/internal/db"
-	"github.com/kakwa/strangle/internal/store"
 	"github.com/kakwa/strangle/internal/testutil"
 )
 
@@ -97,13 +96,13 @@ func TestHostAndAnsibleRunSchema(t *testing.T) {
 
 	save := func(playbook string, finished time.Time) {
 		t.Helper()
-		err := d.SaveRun(ctx, store.RunInput{
-			Run: store.RunRecord{
+		err := d.SaveRun(ctx, db.RunInput{
+			Run: db.RunRecord{
 				Target: "home", Playbook: playbook, Inventory: "hosts.ini",
 				Check: true, StartedAt: finished.Add(-time.Minute), FinishedAt: finished,
 			},
-			Hosts: []store.HostRunRecord{{Host: "web1", Status: "changed", Ok: 2, Changed: 1}},
-			Tasks: []store.TaskStateRecord{{Host: "web1", Task: "install nginx", Status: "changed"}},
+			Hosts: []db.HostRunRecord{{Host: "web1", Status: "changed", Ok: 2, Changed: 1}},
+			Tasks: []db.TaskStateRecord{{Host: "web1", Task: "install nginx", Status: "changed"}},
 			Facts: map[string]json.RawMessage{"web1": json.RawMessage(`{"os":"linux"}`)},
 		})
 		if err != nil {

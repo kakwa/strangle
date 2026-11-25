@@ -2,7 +2,7 @@
 //
 // Serves the production build in dist/ (with SPA fallback) plus a fixed set
 // of fixture data whose JSON shapes match the real API exactly (see
-// internal/server/server.go and internal/store/store.go). POST /api/run is
+// internal/server/server.go and internal/db/records.go). POST /api/run is
 // stateful: it appends a new run to /api/runs so the UI's pending-run
 // tracking can be exercised end to end. Host-key decisions are stateful too;
 // /api/_mock/reset-hostkeys (mock-only) restores the fixtures between tests.

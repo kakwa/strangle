@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/internal/db"
-	"github.com/kakwa/strangle/internal/store"
 	"github.com/kakwa/strangle/internal/testutil"
 )
 
@@ -57,23 +56,23 @@ func TestDBRoundTrip(t *testing.T) {
 	t1 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	t2 := t1.Add(time.Hour)
 
-	in := store.RunInput{
-		Run: store.RunRecord{
+	in := db.RunInput{
+		Run: db.RunRecord{
 			Target: "home", Playbook: "site.yml",
 			StartedAt: t1.Add(-30 * time.Second), FinishedAt: t1,
 			DurationMS: 30000, ExitCode: 0, Success: true, Hosts: 2, ChangedHosts: 1,
 			Output: "PLAY [all] ***\ndb output\n",
 		},
-		Hosts: []store.HostRunRecord{
+		Hosts: []db.HostRunRecord{
 			{Target: "home", Host: "h1", Status: "changed", Ok: 10, Changed: 2},
 			{Target: "home", Host: "h2", Status: "ok", Ok: 10},
 		},
-		Tasks: []store.TaskStateRecord{
+		Tasks: []db.TaskStateRecord{
 			{Host: "h1", Task: "Install nginx", Status: "changed", LastRunAt: t1, LastDiff: "-a\n+b"},
 			{Host: "h1", Task: "Start nginx", Status: "ok", LastRunAt: t1},
 		},
 		ScopeNames: []string{"h1", "h2", "h3"},
-		Inventory:  []store.InventoryHost{{Name: "h1", IP: "10.0.0.1", Groups: []string{"web"}}, {Name: "h2"}, {Name: "h3"}},
+		Inventory:  []db.InventoryHost{{Name: "h1", IP: "10.0.0.1", Groups: []string{"web"}}, {Name: "h2"}, {Name: "h3"}},
 		Facts:      map[string]json.RawMessage{"h1": []byte(`{"ansible_hostname":"h1"}`)},
 	}
 	if err := d.SaveRun(ctx, in); err != nil {
@@ -99,7 +98,7 @@ func TestDBRoundTrip(t *testing.T) {
 	if err != nil || len(hosts) != 3 {
 		t.Fatalf("ListHosts() = %v, %v", hosts, err)
 	}
-	byName := map[string]store.HostRecord{}
+	byName := map[string]db.HostRecord{}
 	for _, h := range hosts {
 		byName[h.Name] = h
 	}
@@ -130,7 +129,7 @@ func TestDBRoundTrip(t *testing.T) {
 	if err != nil || len(changes) != 2 {
 		t.Fatalf("HostChanges(h1) = %v, %v", changes, err)
 	}
-	var install *store.TaskStateRecord
+	var install *db.TaskStateRecord
 	for i := range changes {
 		if changes[i].Task == "Install nginx" {
 			install = &changes[i]
@@ -154,16 +153,16 @@ func TestDBRoundTrip(t *testing.T) {
 	}
 
 	// A second run must not duplicate host-run rows.
-	in2 := store.RunInput{
-		Run: store.RunRecord{
+	in2 := db.RunInput{
+		Run: db.RunRecord{
 			Target: "home", Playbook: "site.yml",
 			StartedAt: t2.Add(-10 * time.Second), FinishedAt: t2,
 			DurationMS: 10000, ExitCode: 0, Success: true, Hosts: 1,
 		},
-		Hosts: []store.HostRunRecord{{Target: "home", Host: "h2", Status: "ok", Ok: 5}},
+		Hosts: []db.HostRunRecord{{Target: "home", Host: "h2", Status: "ok", Ok: 5}},
 		// h1 is in scope but absent from the recap, so it becomes disappeared.
 		ScopeNames: []string{"h1", "h2"},
-		Inventory: []store.InventoryHost{
+		Inventory: []db.InventoryHost{
 			{Name: "h1"}, {Name: "h2"}, // h3 dropped from the inventory
 		},
 	}
@@ -172,7 +171,7 @@ func TestDBRoundTrip(t *testing.T) {
 	}
 
 	hosts, _ = d.ListHosts(ctx)
-	byName = map[string]store.HostRecord{}
+	byName = map[string]db.HostRecord{}
 	for _, h := range hosts {
 		byName[h.Name] = h
 	}
@@ -184,15 +183,15 @@ func TestDBRoundTrip(t *testing.T) {
 	}
 
 	// The same host name in another target is a distinct host.
-	in3 := store.RunInput{
-		Run: store.RunRecord{
+	in3 := db.RunInput{
+		Run: db.RunRecord{
 			Target: "other", Playbook: "site.yml",
 			StartedAt: t2.Add(-5 * time.Second), FinishedAt: t2,
 			DurationMS: 5000, ExitCode: 0, Success: true, Hosts: 1,
 		},
-		Hosts:      []store.HostRunRecord{{Target: "other", Host: "h1", Status: "ok", Ok: 3}},
+		Hosts:      []db.HostRunRecord{{Target: "other", Host: "h1", Status: "ok", Ok: 3}},
 		ScopeNames: []string{"h1"},
-		Inventory:  []store.InventoryHost{{Name: "h1"}},
+		Inventory:  []db.InventoryHost{{Name: "h1"}},
 	}
 	if err := d.SaveRun(ctx, in3); err != nil {
 		t.Fatalf("SaveRun() #3 error: %v", err)
@@ -248,15 +247,15 @@ func TestDBTaskHistoryAcrossRuns(t *testing.T) {
 	base := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
 
 	for i, status := range []string{"changed", "ok"} {
-		in := store.RunInput{
-			Run: store.RunRecord{
+		in := db.RunInput{
+			Run: db.RunRecord{
 				Target: "home", Playbook: "site.yml",
 				StartedAt:  base.Add(time.Duration(i) * time.Hour),
 				FinishedAt: base.Add(time.Duration(i)*time.Hour + time.Minute),
 				Success:    true, Hosts: 1,
 			},
-			Hosts: []store.HostRunRecord{{Target: "home", Host: "h1", Status: status, Ok: 1}},
-			Tasks: []store.TaskStateRecord{{
+			Hosts: []db.HostRunRecord{{Target: "home", Host: "h1", Status: status, Ok: 1}},
+			Tasks: []db.TaskStateRecord{{
 				Target: "home", Host: "h1", Task: "Install nginx", Status: status,
 				LastDiff: "diff-" + status,
 			}},

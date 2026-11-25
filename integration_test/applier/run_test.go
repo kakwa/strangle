@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/kakwa/strangle/internal/cfg"
-	"github.com/kakwa/strangle/internal/store"
+	"github.com/kakwa/strangle/internal/db"
 	"go.uber.org/zap"
 )
 
@@ -63,8 +63,8 @@ func TestInFlightRunStateAndRunnerError(t *testing.T) {
 	ctx := context.Background()
 	st := testutil.OpenDB(t, "applier")
 	id := uint64(42)
-	if err := st.SaveRun(ctx, store.RunInput{Run: store.RunRecord{
-		ID: id, Target: "prod", Playbook: "site", State: store.RunStateQueued,
+	if err := st.SaveRun(ctx, db.RunInput{Run: db.RunRecord{
+		ID: id, Target: "prod", Playbook: "site", State: db.RunStateQueued,
 	}}); err != nil {
 		t.Fatalf("seed run: %v", err)
 	}
@@ -86,8 +86,8 @@ func TestInFlightRunStateAndRunnerError(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "worker socket closed") {
 		t.Fatalf("Trigger() error = %v, want the runner error", err)
 	}
-	if stateDuringRun != store.RunStateRunning {
-		t.Errorf("state during run = %q, want %q", stateDuringRun, store.RunStateRunning)
+	if stateDuringRun != db.RunStateRunning {
+		t.Errorf("state during run = %q, want %q", stateDuringRun, db.RunStateRunning)
 	}
 
 	run, err := st.Run(ctx, id)
@@ -98,7 +98,7 @@ func TestInFlightRunStateAndRunnerError(t *testing.T) {
 	if len(runs) != 1 || runs[0].ID != id {
 		t.Errorf("runs = %v, want the pre-created run ID to be reused", runs)
 	}
-	if run.State != store.RunStateCompleted || run.Success || run.ExitCode != 3 {
+	if run.State != db.RunStateCompleted || run.Success || run.ExitCode != 3 {
 		t.Errorf("recorded run = %+v, want a completed failed run", run)
 	}
 	if !strings.Contains(run.Output, "fatal: boom") ||
@@ -111,8 +111,8 @@ func TestCancellationIsRecorded(t *testing.T) {
 	ctx := context.Background()
 	st := testutil.OpenDB(t, "applier")
 	id := uint64(7)
-	if err := st.SaveRun(ctx, store.RunInput{Run: store.RunRecord{
-		ID: id, Target: "prod", Playbook: "site", State: store.RunStateQueued,
+	if err := st.SaveRun(ctx, db.RunInput{Run: db.RunRecord{
+		ID: id, Target: "prod", Playbook: "site", State: db.RunStateQueued,
 	}}); err != nil {
 		t.Fatalf("seed run: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestCancellationIsRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run(%d) error: %v", id, err)
 	}
-	if !run.Canceled || run.State != store.RunStateCancelled || run.Success {
+	if !run.Canceled || run.State != db.RunStateCancelled || run.Success {
 		t.Errorf("recorded run = %+v, want a cancelled, unsuccessful run", run)
 	}
 	if !strings.Contains(run.Output, "run canceled") {
@@ -181,7 +181,7 @@ func TestInventoryScopeMarksMissingHostsDisappeared(t *testing.T) {
 	if err != nil || len(hosts) != 3 {
 		t.Fatalf("ListHosts() = %v, %v; want all three inventory hosts", hosts, err)
 	}
-	byName := map[string]store.HostRecord{}
+	byName := map[string]db.HostRecord{}
 	for _, h := range hosts {
 		byName[h.Name] = h
 	}

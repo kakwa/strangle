@@ -8,19 +8,18 @@ import (
 	"github.com/kakwa/strangle/internal/cfg"
 	"github.com/kakwa/strangle/internal/db"
 	"github.com/kakwa/strangle/internal/maintenance"
-	"github.com/kakwa/strangle/internal/store"
 	"github.com/kakwa/strangle/internal/testutil"
 	"go.uber.org/zap"
 )
 
 func seedRun(t *testing.T, st *db.DB, id uint64, target string, finished time.Time) {
 	t.Helper()
-	run := store.RunRecord{
+	run := db.RunRecord{
 		ID: id, Target: target, Playbook: "site",
 		StartedAt: finished.Add(-time.Minute), FinishedAt: finished,
-		State: store.RunStateCompleted, Success: true,
+		State: db.RunStateCompleted, Success: true,
 	}
-	if err := st.SaveRun(context.Background(), store.RunInput{Run: run}); err != nil {
+	if err := st.SaveRun(context.Background(), db.RunInput{Run: run}); err != nil {
 		t.Fatalf("SaveRun(%d) error: %v", id, err)
 	}
 }

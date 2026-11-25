@@ -27,7 +27,6 @@ import (
 	"github.com/kakwa/strangle/internal/scheduler"
 	"github.com/kakwa/strangle/internal/server"
 	"github.com/kakwa/strangle/internal/sshpool"
-	"github.com/kakwa/strangle/internal/store"
 	"github.com/kakwa/strangle/internal/worker"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -176,7 +175,7 @@ func run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load collections into database: %w", err)
 	}
 
-	var st store.Store = d
+	var st db.Store = d
 	var users auth.UserStore = d.Users()
 	var tokens auth.TokenStore = d.Tokens()
 	var access auth.CollectionAccess = d.Access()
@@ -215,7 +214,7 @@ func run(cmd *cobra.Command, args []string) error {
 		return jobs
 	}
 	runScheduled := func(ctx context.Context, target, playbook string) error {
-		record := store.RunRecord{Target: target, Playbook: playbook, State: store.RunStateQueued}
+		record := db.RunRecord{Target: target, Playbook: playbook, State: db.RunStateQueued}
 		if err := st.CreateRun(ctx, &record); err != nil {
 			return err
 		}
@@ -382,7 +381,7 @@ func newLogger(level string) (*zap.Logger, error) {
 // playbook runs to finish and be recorded), then terminates the workers and
 // closes the store in that order: in-progress runs may still be writing to
 // the store while they finish, and they run inside the worker processes.
-func shutdown(stop context.CancelFunc, done, retentionDone, cleanupDone <-chan struct{}, mgr *worker.Manager, st store.Store, queue *riverqueue.Client, logger *zap.Logger) {
+func shutdown(stop context.CancelFunc, done, retentionDone, cleanupDone <-chan struct{}, mgr *worker.Manager, st db.Store, queue *riverqueue.Client, logger *zap.Logger) {
 	stop()
 	<-done
 	<-retentionDone
