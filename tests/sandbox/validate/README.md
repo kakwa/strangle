@@ -5,7 +5,7 @@ a sandboxed worker. It is **not** enabled in `config/collection.yml` by
 default; add it as a target when you want to verify a sandbox deployment:
 
 ```yaml
-targets:
+collections:
   - name: home                       # an ordinary collection
     path: /path/to/home
   - name: sandbox-validate

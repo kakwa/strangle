@@ -575,8 +575,8 @@ func readCollection(path string) (CollectionConfig, error) {
 // default org. Path and policy validation are done only by Load.
 func normalizeTargetSpecs(coll *CollectionConfig) error {
 	seen := map[string]struct{}{}
-	for i := range coll.Targets {
-		spec := &coll.Targets[i]
+	for i := range coll.Collections {
+		spec := &coll.Collections[i]
 		if spec.Name == "" {
 			return errors.New("collection: every target needs a name")
 		}
@@ -588,7 +588,7 @@ func normalizeTargetSpecs(coll *CollectionConfig) error {
 			spec.Org = DefaultOrg
 		}
 		if !validOrgName(spec.Org) {
-			return fmt.Errorf("collection: target %q: invalid org name %q", spec.Name, spec.Org)
+			return fmt.Errorf("collection: collection %q: invalid org name %q", spec.Name, spec.Org)
 		}
 	}
 	return nil
@@ -621,34 +621,34 @@ func Load(serverPath, collectionPath string) (Config, error) {
 	}
 
 	collDir := filepath.Dir(collectionPath)
-	for i, spec := range coll.Targets {
-		label := fmt.Sprintf("collection: target %q", spec.Name)
+	for i, spec := range coll.Collections {
+		label := fmt.Sprintf("collection: collection %q", spec.Name)
 		if spec.Path == "" {
 			return Config{}, fmt.Errorf("%s needs a path", label)
 		}
 		if err := validateRetention(label, &spec.Retention); err != nil {
 			return Config{}, err
 		}
-		coll.Targets[i].Retention = spec.Retention
+		coll.Collections[i].Retention = spec.Retention
 		if err := validateHostCleanup(label, &spec.HostCleanup); err != nil {
 			return Config{}, err
 		}
-		coll.Targets[i].HostCleanup = spec.HostCleanup
+		coll.Collections[i].HostCleanup = spec.HostCleanup
 	}
 
 	// Relative target paths resolve against the collection file's directory
 	// (not the working directory), so a collection.yml can be placed next to
 	// the targets it lists.
-	cfg.Targets = make([]TargetConfig, 0, len(coll.Targets))
-	for i := range coll.Targets {
-		spec := coll.Targets[i]
+	cfg.Targets = make([]TargetConfig, 0, len(coll.Collections))
+	for i := range coll.Collections {
+		spec := coll.Collections[i]
 		p := spec.Path
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(collDir, p)
 		}
 		path, err := filepath.Abs(p)
 		if err != nil {
-			return Config{}, fmt.Errorf("collection: target %q: %w", spec.Name, err)
+			return Config{}, fmt.Errorf("collection: collection %q: %w", spec.Name, err)
 		}
 		spec.Path = path
 		if spec.Git.IsSet() {
@@ -704,7 +704,7 @@ func LoadCollection(collectionPath string) ([]TargetSpec, error) {
 	if err := normalizeTargetSpecs(&coll); err != nil {
 		return nil, err
 	}
-	return coll.Targets, nil
+	return coll.Collections, nil
 }
 
 // loadTarget reads and validates the strangle.yml in the target directory.

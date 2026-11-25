@@ -290,6 +290,7 @@ func (a *Ansible) runPlaybook(ctx context.Context, target cfg.TargetConfig, pb c
 		State:        state,
 		Canceled:     canceled,
 		Check:        check,
+		Inventory:    pb.Inventory,
 	}
 
 	hostRuns := make([]store.HostRunRecord, 0, len(summaries))

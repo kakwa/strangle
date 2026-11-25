@@ -31,7 +31,7 @@ func apiTestConfigs(t *testing.T) (string, string) {
 	if err := os.WriteFile(serverPath, []byte("listen_addr: 127.0.0.1:1\ndatabase:\n  dsn: postgres://postgres@localhost/strangle\nauth:\n  cli_token: st_testtoken\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(collectionPath, []byte("targets:\n  - name: demo\n    org: lab\n    path: .\n"), 0o600); err != nil {
+	if err := os.WriteFile(collectionPath, []byte("collections:\n  - name: demo\n    org: lab\n    path: .\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return serverPath, collectionPath

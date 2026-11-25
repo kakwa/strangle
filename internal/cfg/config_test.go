@@ -41,12 +41,12 @@ func writeTree(t *testing.T, server, collection, strangle string) (string, strin
 
 const (
 	collOne = `
-targets:
+collections:
   - name: one
     path: __TARGET__
 `
 	collGit = `
-targets:
+collections:
   - name: one
     path: __TARGET__
     git:
@@ -217,7 +217,7 @@ retention:
   max_age: 48h
   max_count: 1000
 `, `
-targets:
+collections:
   - name: one
     path: __TARGET__
     retention:
@@ -271,7 +271,7 @@ host_cleanup:
   interval: 3h
   delay: 168h
 `, `
-targets:
+collections:
   - name: one
     path: __TARGET__
     host_cleanup:
@@ -507,7 +507,7 @@ playbooks:
 func TestLoadErrors(t *testing.T) {
 	const (
 		serverOK = `listen_addr: ":9000"`
-		collOK   = "targets:\n  - name: one\n    path: __TARGET__\n"
+		collOK   = "collections:\n  - name: one\n    path: __TARGET__\n"
 		strOK    = "playbooks:\n  - name: site\n    playbook: site.yml\n    inventory: inventory\n"
 	)
 
@@ -521,28 +521,28 @@ func TestLoadErrors(t *testing.T) {
 		{
 			name:     "empty collection",
 			server:   serverOK,
-			coll:     "targets: []\n",
+			coll:     "collections: []\n",
 			strangle: strOK,
-			want:     "targets is required",
+			want:     "collections is required",
 		},
 		{
 			name:     "target without name",
 			server:   serverOK,
-			coll:     "targets:\n  - path: x\n",
+			coll:     "collections:\n  - path: x\n",
 			strangle: strOK,
 			want:     "needs a name",
 		},
 		{
 			name:     "target without path",
 			server:   serverOK,
-			coll:     "targets:\n  - name: one\n",
+			coll:     "collections:\n  - name: one\n",
 			strangle: strOK,
 			want:     "needs a path",
 		},
 		{
 			name:     "duplicate target name",
 			server:   serverOK,
-			coll:     "targets:\n  - name: one\n    path: a\n  - name: one\n    path: b\n",
+			coll:     "collections:\n  - name: one\n    path: a\n  - name: one\n    path: b\n",
 			strangle: strOK,
 			want:     "duplicate target name",
 		},
@@ -663,7 +663,7 @@ func TestLoadErrors(t *testing.T) {
 func TestLoadRelativeTargetPath(t *testing.T) {
 	// A target path relative to the collection file's directory resolves
 	// against that directory, not the working directory.
-	serverPath, collectionPath := writeTree(t, "listen_addr: \":9000\"\n", "targets:\n  - name: one\n    path: proj\n", strangleMinimal)
+	serverPath, collectionPath := writeTree(t, "listen_addr: \":9000\"\n", "collections:\n  - name: one\n    path: proj\n", strangleMinimal)
 
 	cfg, err := Load(serverPath, collectionPath)
 	if err != nil {
@@ -686,7 +686,7 @@ func TestConfigTarget(t *testing.T) {
 
 func TestLoadServerCLIToken(t *testing.T) {
 	serverPath, _ := writeTree(t,
-		"auth:\n  token: sync-secret\n  cli_token: st_cli\n", "targets:\n  - name: one\n    path: __TARGET__\n", strangleMinimal)
+		"auth:\n  token: sync-secret\n  cli_token: st_cli\n", "collections:\n  - name: one\n    path: __TARGET__\n", strangleMinimal)
 	cfg, err := LoadServer(serverPath)
 	if err != nil {
 		t.Fatalf("LoadServer() error: %v", err)
@@ -698,7 +698,7 @@ func TestLoadServerCLIToken(t *testing.T) {
 
 func TestLoadCollectionAppliesOrgDefault(t *testing.T) {
 	_, collectionPath := writeTree(t, "listen_addr: \":9000\"\n", `
-targets:
+collections:
   - name: one
     path: __TARGET__
   - name: two

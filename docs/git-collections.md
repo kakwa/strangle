@@ -5,7 +5,7 @@ owns the checkout of its upstream repository and keeps it pinned to a tracked
 ref.
 
 ```yaml
-targets:
+collections:
   - name: site
     path: /opt/strangle/site        # the checkout directory
     git:

@@ -277,7 +277,7 @@ target git-backed. Relative `path` values resolve against this file's
 directory:
 
 ```yaml
-targets:
+collections:
   - name: home
     path: /path/to/ansible        # the project directory (contains strangle.yml)
     # git:                        # optional: upstream repository

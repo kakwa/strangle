@@ -45,6 +45,9 @@ type RunRecord struct {
 	Check bool `json:"check,omitempty"`
 	// JobID is the queue job that executes this run, when available.
 	JobID string `json:"job_id,omitempty"`
+	// Inventory is the inventory file/path used by this run. Together with
+	// Target and Playbook it identifies a host's context.
+	Inventory string `json:"inventory,omitempty"`
 }
 
 // HostRecord is a host's current state, scoped to the target it appears in.

@@ -146,7 +146,7 @@ the commands.
 The inventory of Ansible projects (**targets**) that strangle applies.
 
 ```yaml
-targets:
+collections:
   - name: home                     # identifier; unique within the collection
     path: /path/to/ansible         # the project directory (contains strangle.yml)
     git:                           # optional: upstream repository
@@ -169,7 +169,7 @@ A target can override the server's `retention.max_age` and
 git-backed target's `strangle.yml` reload.
 
 ```yaml
-targets:
+collections:
   - name: home
     path: /path/to/ansible
     retention:
@@ -184,7 +184,7 @@ interval) in collection.yml. This setting is server-side and survives a
 git-backed target's `strangle.yml` reload.
 
 ```yaml
-targets:
+collections:
   - name: home
     path: /path/to/ansible
     host_cleanup:

@@ -10,11 +10,16 @@ import (
 	"gorm.io/gorm"
 )
 
-// UserRecord is the users table: one row per local UI account.
+// UserRecord is the users table: one row per local UI account. OrgID is the
+// denormalized home org; Orgs and Groups are GORM many-to-many relations.
 type UserRecord struct {
-	ID   uint64 `gorm:"primaryKey"`
-	Name string `gorm:"size:255;uniqueIndex"`
-	Hash string `gorm:"size:512"` // argon2id PHC string
+	ID     uint64   `gorm:"primaryKey"`
+	Name   string   `gorm:"size:255;uniqueIndex"`
+	Hash   string   `gorm:"size:512"` // argon2id PHC string
+	OrgID  *uint64  `gorm:"index"`
+	Org    *Org     `gorm:"foreignKey:OrgID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;"`
+	Orgs   []*Org   `gorm:"many2many:org_users;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
+	Groups []*Group `gorm:"many2many:group_users;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
 }
 
 // TableName pins the table name; gorm's default for UserRecord would be

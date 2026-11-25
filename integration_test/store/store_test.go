@@ -236,9 +236,7 @@ func TestStoreFactsAreRefreshedOnlyWhenPresent(t *testing.T) {
 	if err := s.SaveRun(ctx, in); err != nil {
 		t.Fatalf("SaveRun() without facts: %v", err)
 	}
-	if got := string(host().Facts); got != string(facts) {
-		t.Errorf("Facts after run without facts = %s, want %s", got, facts)
-	}
+	testutil.AssertJSONEqual(t, host().Facts, facts)
 
 	updated := json.RawMessage(`{"ansible_hostname":"web1","os":"linux"}`)
 	in.Run = testRun("home", "site.yml", time.Now().UTC().Add(2*time.Hour))
@@ -246,9 +244,7 @@ func TestStoreFactsAreRefreshedOnlyWhenPresent(t *testing.T) {
 	if err := s.SaveRun(ctx, in); err != nil {
 		t.Fatalf("SaveRun() with updated facts: %v", err)
 	}
-	if got := string(host().Facts); got != string(updated) {
-		t.Errorf("Facts after refresh = %s, want %s", got, updated)
-	}
+	testutil.AssertJSONEqual(t, host().Facts, updated)
 }
 
 func TestStoreEmptyCollectionsAreNotNull(t *testing.T) {

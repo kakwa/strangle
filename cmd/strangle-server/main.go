@@ -163,6 +163,19 @@ func run(cmd *cobra.Command, args []string) error {
 		_ = mgr.Stop()
 		return fmt.Errorf("failed to open database: %w", err)
 	}
+
+	// collection.yml (including any git checkout refreshed above) is the
+	// source of truth for collections. Replace their database rows at startup
+	// so IDs, options and playbooks match the live configuration.
+	dctx, cancel = context.WithTimeout(ctx, 15*time.Second)
+	err = d.SyncCollections(dctx, collMgr.Targets())
+	cancel()
+	if err != nil {
+		_ = mgr.Stop()
+		_ = d.Close()
+		return fmt.Errorf("failed to load collections into database: %w", err)
+	}
+
 	var st store.Store = d
 	var users auth.UserStore = d.Users()
 	var tokens auth.TokenStore = d.Tokens()

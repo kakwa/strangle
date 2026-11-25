@@ -1,21 +1,21 @@
-# The Ansible projects (targets) strangle applies (collection.yml).
+# The Ansible projects (collections) strangle applies (collection.yml).
 # Loaded by default (override with -c).
 #
-# Each entry names a target and points at the directory of an Ansible
+# Each entry names a collection and points at the directory of an Ansible
 # project, which must contain its own strangle.yml with the project's named
 # playbooks (each with its own inventory and options). Relative paths resolve
-# against this file's directory. Targets run in list order, serialized through
-# the single embedded interpreter.
+# against this file's directory. Collections run in list order, serialized
+# through the single embedded interpreter.
 #
-# A target may carry a `git` upstream: strangle clones the repository into
+# A collection may carry a `git` upstream: strangle clones the repository into
 # `path` and pins it to the tracked ref (branch, tag or commit) on startup
-# and on every sync. POST /api/sync re-syncs one target (and, with a
-# `branch` field, switches the tracked branch). In a git target's
+# and on every sync. POST /api/sync re-syncs one collection (and, with a
+# `branch` field, switches the tracked branch). In a git collection's
 # strangle.yml the `working_dir`, `playbook` and `inventory` fields may use
 # `{{ .Branch }}` and `{{ .Name }}` templates, e.g. to load a different
 # inventory per branch.
 
-targets:
+collections:
   # The home.tf Ansible project. The optional `org` field groups collections
   # in the versioned API (/api/v1/orgs/{org}/collections/{name}); it defaults
   # to "default".

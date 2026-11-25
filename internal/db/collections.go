@@ -1,0 +1,199 @@
+package db
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/kakwa/strangle/internal/cfg"
+	"gorm.io/gorm"
+)
+
+// SyncCollections replaces the collections table with the contents of the
+// loaded collection.yml. Called at startup (after any git checkout has been
+// refreshed), so the file remains the source of truth while the database gets
+// stable IDs and foreign keys for hosts and runs.
+func (d *DB) SyncCollections(ctx context.Context, targets []cfg.TargetConfig) error {
+	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		orgIDs := map[string]uint64{cfg.DefaultOrg: defaultOrgID(tx)}
+		if orgIDs[cfg.DefaultOrg] == 0 {
+			return errors.New("default org is missing")
+		}
+
+		for _, t := range targets {
+			name := t.Org
+			if name == "" {
+				name = cfg.DefaultOrg
+			}
+			if _, ok := orgIDs[name]; ok {
+				continue
+			}
+			org, err := firstOrCreateOrg(tx, name)
+			if err != nil {
+				return err
+			}
+			orgIDs[name] = org.ID
+		}
+
+		kept := make(map[string]struct{}, len(targets))
+		for _, t := range targets {
+			orgName := t.Org
+			if orgName == "" {
+				orgName = cfg.DefaultOrg
+			}
+			orgID := orgIDs[orgName]
+
+			options := make(map[string]cfg.PlaybookOptions, len(t.Playbooks))
+			for _, pb := range t.Playbooks {
+				options[pb.Name] = pb.Options
+			}
+			settings := struct {
+				Path        string                `json:"path"`
+				Git         cfg.GitConfig         `json:"git,omitempty"`
+				Retention   cfg.RetentionConfig   `json:"retention,omitempty"`
+				HostCleanup cfg.HostCleanupConfig `json:"host_cleanup,omitempty"`
+			}{
+				Path: t.Path, Git: t.Git, Retention: t.Retention, HostCleanup: t.HostCleanup,
+			}
+
+			playbooks := t.Playbooks
+			if playbooks == nil {
+				playbooks = []cfg.PlaybookConfig{}
+			}
+			values := map[string]any{
+				"org_id":    orgID,
+				"path":      t.Path,
+				"options":   jsonBytes(options),
+				"playbooks": jsonBytes(playbooks),
+				"settings":  jsonBytes(settings),
+				"schedule":  t.Schedule,
+			}
+			var coll Collection
+			err := tx.Where("org_id = ? AND name = ?", orgID, t.Name).First(&coll).Error
+			switch {
+			case errors.Is(err, gorm.ErrRecordNotFound):
+				coll = Collection{OrgID: orgID, Name: t.Name}
+				for k, v := range values {
+					setCollectionField(&coll, k, v)
+				}
+				if err := tx.Create(&coll).Error; err != nil {
+					return fmt.Errorf("insert collection %q: %w", t.Name, err)
+				}
+			case err != nil:
+				return err
+			default:
+				// Overwrite every configured field, including empty ones: the
+				// YAML is authoritative for the whole row.
+				if err := tx.Model(&coll).Updates(values).Error; err != nil {
+					return fmt.Errorf("update collection %q: %w", t.Name, err)
+				}
+			}
+			kept[fmt.Sprintf("%d/%s", orgID, t.Name)] = struct{}{}
+		}
+
+		// Collections removed from the file are dropped with their hosts and
+		// history, so a reload cannot leave stale data behind.
+		var existing []Collection
+		if err := tx.Find(&existing).Error; err != nil {
+			return err
+		}
+		for _, coll := range existing {
+			if _, ok := kept[fmt.Sprintf("%d/%s", coll.OrgID, coll.Name)]; ok {
+				continue
+			}
+			if err := deleteCollection(tx, coll.ID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func setCollectionField(c *Collection, field string, value any) {
+	switch field {
+	case "org_id":
+		c.OrgID = value.(uint64)
+	case "path":
+		c.Path = value.(string)
+	case "options":
+		c.Options = value.([]byte)
+	case "playbooks":
+		c.Playbooks = value.([]byte)
+	case "settings":
+		c.Settings = value.([]byte)
+	case "schedule":
+		c.Schedule = value.(string)
+	}
+}
+
+func deleteCollection(tx *gorm.DB, id uint64) error {
+	var hosts []Host
+	if err := tx.Where("collection_id = ?", id).Find(&hosts).Error; err != nil {
+		return err
+	}
+	ids := make([]uint64, 0, len(hosts))
+	for _, h := range hosts {
+		ids = append(ids, h.ID)
+	}
+	if len(ids) > 0 {
+		for _, model := range []any{&HostRun{}, &TaskState{}, &TaskRunResult{}, &AnsibleRun{}} {
+			if err := tx.Where("host_id IN ?", ids).Delete(model).Error; err != nil {
+				return err
+			}
+		}
+	}
+	if err := tx.Where("collection_id = ?", id).Delete(&AnsibleRun{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Delete(&Host{}, "collection_id = ?", id).Error; err != nil {
+		return err
+	}
+	return tx.Delete(&Collection{}, "id = ?", id).Error
+}
+
+// ensureCollection returns the collection and org IDs for a run's target,
+// creating a placeholder collection when a run arrives before the startup
+// sync (as happens in tests and for ad-hoc targets).
+func ensureCollection(tx *gorm.DB, name string) (uint64, uint64, error) {
+	var coll Collection
+	err := tx.Where("name = ?", name).Order("org_id").First(&coll).Error
+	if err == nil {
+		return coll.ID, coll.OrgID, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, 0, err
+	}
+	orgID := defaultOrgID(tx)
+	if orgID == 0 {
+		return 0, 0, errors.New("default org is missing")
+	}
+	coll = Collection{OrgID: orgID, Name: name, Options: []byte("{}"), Playbooks: []byte("[]"), Settings: []byte("{}")}
+	if err := tx.Create(&coll).Error; err != nil {
+		return 0, 0, fmt.Errorf("insert collection %q: %w", name, err)
+	}
+	return coll.ID, orgID, nil
+}
+
+func defaultOrgID(tx *gorm.DB) uint64 {
+	org, err := firstOrCreateOrg(tx, cfg.DefaultOrg)
+	if err != nil {
+		return 0
+	}
+	return org.ID
+}
+
+func firstOrCreateOrg(tx *gorm.DB, name string) (Org, error) {
+	var org Org
+	err := tx.Where("name = ?", name).First(&org).Error
+	if err == nil {
+		return org, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return Org{}, err
+	}
+	org = Org{Name: name}
+	if err := tx.Create(&org).Error; err != nil {
+		return Org{}, fmt.Errorf("insert org %q: %w", name, err)
+	}
+	return org, nil
+}

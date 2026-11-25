@@ -33,7 +33,7 @@ grouped into organizations. An org comes from the optional `org` field of a
 collection entry and defaults to `default`:
 
 ```yaml
-targets:
+collections:
   - name: homelab                # /api/v1/orgs/default/collections/homelab
     path: ./ansible
   - name: edge

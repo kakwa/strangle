@@ -6,17 +6,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/kakwa/strangle/internal/cfg"
 	"github.com/kakwa/strangle/internal/store"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
-// Run is one playbook execution.
+// Run is the aggregate row for one playbook execution. Per-host results live
+// in ansible_runs; the aggregate is kept for the run listing APIs.
 type Run struct {
 	ID           uint64 `gorm:"primaryKey"`
 	Target       string `gorm:"size:255;index"`
@@ -34,26 +37,7 @@ type Run struct {
 	Canceled     bool
 	Check        bool
 	JobID        string `gorm:"size:64;index"`
-}
-
-// Host is the current state of a host within one target.
-type Host struct {
-	ID            uint64 `gorm:"primaryKey"`
-	Target        string `gorm:"size:255;uniqueIndex:idx_host_target_name"`
-	Name          string `gorm:"size:255;uniqueIndex:idx_host_target_name"`
-	IP            string
-	User          string
-	Groups        string `gorm:"size:2048"` // comma-separated group names
-	InInventory   bool
-	Active        bool
-	FirstSeenAt   time.Time
-	LastSeenAt    time.Time
-	LastRunAt     time.Time
-	LastStatus    string
-	LastChangeAt  *time.Time
-	DisappearedAt *time.Time
-	// Facts is the latest ansible_facts blob (raw JSON) for this host.
-	Facts []byte `gorm:"type:jsonb"`
+	Inventory    string `gorm:"size:1024"`
 }
 
 // HostRun is a host's recap line for one run.
@@ -122,15 +106,28 @@ func Open(ctx context.Context, dsn string) (*DB, error) {
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
 
-	if err := gdb.WithContext(ctx).AutoMigrate(&Run{}, &Host{}, &HostRun{}, &TaskState{}, &TaskRunResult{}, &UserRecord{}, &TokenRecord{}, &CollectionMemberRecord{}); err != nil {
+	// Associations are migrated too: orgs/groups/users (and their join
+	// tables), collections, context-scoped hosts and per-host ansible runs.
+	if err := gdb.WithContext(ctx).AutoMigrate(
+		&Org{}, &Group{}, &UserRecord{}, &Collection{}, &Host{}, &AnsibleRun{},
+		&Run{}, &HostRun{}, &TaskState{}, &TaskRunResult{}, &TokenRecord{}, &CollectionMemberRecord{},
+	); err != nil {
 		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
 
-	// AutoMigrate never drops indexes. Remove the legacy unique index on
-	// hosts.name from single-target builds; hosts are now scoped per target
-	// (idx_host_target_name).
-	if err := gdb.WithContext(ctx).Exec("DROP INDEX IF EXISTS idx_hosts_name").Error; err != nil {
-		return nil, fmt.Errorf("drop legacy hosts index: %w", err)
+	// AutoMigrate never drops indexes. Replace the old per-target host index
+	// with the context key (collection, hostname, playbook, inventory).
+	for _, idx := range []string{"idx_hosts_name", "idx_host_target_name"} {
+		if err := gdb.WithContext(ctx).Exec("DROP INDEX IF EXISTS " + idx).Error; err != nil {
+			return nil, fmt.Errorf("drop legacy hosts index: %w", err)
+		}
+	}
+
+	// Every installation has the default org, even before the collection
+	// file is loaded. Collections without an explicit org belong to it.
+	if err := gdb.WithContext(ctx).Where("name = ?", cfg.DefaultOrg).
+		FirstOrCreate(&Org{}, Org{Name: cfg.DefaultOrg}).Error; err != nil {
+		return nil, fmt.Errorf("initialize default org: %w", err)
 	}
 	return &DB{db: gdb}, nil
 }
@@ -171,7 +168,7 @@ func (d *DB) UpdateRun(ctx context.Context, in store.RunRecord) error {
 		"finished_at": run.FinishedAt, "duration_ms": run.DurationMS, "exit_code": run.ExitCode,
 		"success": run.Success, "hosts": run.Hosts, "changed_hosts": run.ChangedHosts,
 		"failed_hosts": run.FailedHosts, "output": run.Output, "state": run.State,
-		"canceled": run.Canceled, "check": run.Check, "job_id": run.JobID,
+		"canceled": run.Canceled, "check": run.Check, "job_id": run.JobID, "inventory": run.Inventory,
 	})
 	if res.Error != nil {
 		return res.Error
@@ -213,7 +210,7 @@ func (d *DB) SaveRun(ctx context.Context, in store.RunInput) error {
 					"finished_at": run.FinishedAt, "duration_ms": run.DurationMS, "exit_code": run.ExitCode,
 					"success": run.Success, "hosts": run.Hosts, "changed_hosts": run.ChangedHosts,
 					"failed_hosts": run.FailedHosts, "output": run.Output, "state": run.State,
-					"canceled": run.Canceled, "job_id": run.JobID,
+					"canceled": run.Canceled, "job_id": run.JobID, "inventory": run.Inventory,
 				}).Error; err != nil {
 					return fmt.Errorf("update run: %w", err)
 				}
@@ -246,13 +243,18 @@ func (d *DB) SaveRun(ctx context.Context, in store.RunInput) error {
 		}
 
 		target := in.Run.Target
+		collectionID, orgID, err := ensureCollection(tx, target)
+		if err != nil {
+			return err
+		}
 
-		// Hosts are scoped per target: every lookup is qualified with the
-		// run's target so names can repeat across targets.
+		// A host is identified by collection + hostname + playbook + inventory:
+		// the same hostname seen in another context is a different row.
 		hostIDs := map[string]uint64{}
 		if len(nameList) > 0 {
 			var existing []Host
-			if err := tx.Where("target = ? AND name IN ?", target, nameList).Find(&existing).Error; err != nil {
+			if err := tx.Where("collection_id = ? AND playbook = ? AND inventory = ? AND name IN ?",
+				collectionID, in.Run.Playbook, in.Run.Inventory, nameList).Find(&existing).Error; err != nil {
 				return err
 			}
 			for _, h := range existing {
@@ -262,7 +264,11 @@ func (d *DB) SaveRun(ctx context.Context, in store.RunInput) error {
 				if _, ok := hostIDs[n]; ok {
 					continue
 				}
-				h := Host{Target: target, Name: n, FirstSeenAt: run.FinishedAt}
+				h := Host{
+					OrgID: orgID, CollectionID: collectionID, Target: target,
+					Name: n, Playbook: in.Run.Playbook, Inventory: in.Run.Inventory,
+					FirstSeenAt: run.FinishedAt,
+				}
 				if err := tx.Create(&h).Error; err != nil {
 					return fmt.Errorf("insert host %q: %w", n, err)
 				}
@@ -270,7 +276,8 @@ func (d *DB) SaveRun(ctx context.Context, in store.RunInput) error {
 			}
 		}
 
-		// Inventory snapshot: update known fields and membership.
+		// Inventory snapshot: update known fields and membership in this
+		// context only.
 		for _, ih := range in.Inventory {
 			updates := map[string]any{
 				"ip":           ih.IP,
@@ -278,16 +285,18 @@ func (d *DB) SaveRun(ctx context.Context, in store.RunInput) error {
 				"groups":       strings.Join(ih.Groups, ","),
 				"in_inventory": true,
 			}
-			if err := tx.Model(&Host{}).Where("target = ? AND name = ?", target, ih.Name).Updates(updates).Error; err != nil {
+			if err := tx.Model(&Host{}).Where("id = ?", hostIDs[ih.Name]).Updates(updates).Error; err != nil {
 				return err
 			}
 		}
 		if len(in.Inventory) > 0 {
-			invNames := make([]string, 0, len(in.Inventory))
+			invHostIDs := make([]uint64, 0, len(in.Inventory))
 			for _, ih := range in.Inventory {
-				invNames = append(invNames, ih.Name)
+				invHostIDs = append(invHostIDs, hostIDs[ih.Name])
 			}
-			if err := tx.Model(&Host{}).Where("target = ? AND name NOT IN ?", target, invNames).
+			if err := tx.Model(&Host{}).
+				Where("collection_id = ? AND playbook = ? AND inventory = ? AND id NOT IN ?",
+					collectionID, in.Run.Playbook, in.Run.Inventory, invHostIDs).
 				UpdateColumn("in_inventory", false).Error; err != nil {
 				return err
 			}
@@ -314,6 +323,38 @@ func (d *DB) SaveRun(ctx context.Context, in store.RunInput) error {
 			hr := toHostRunModel(run, hostIDs[h.Host], h)
 			if err := tx.Create(&hr).Error; err != nil {
 				return fmt.Errorf("insert host run: %w", err)
+			}
+		}
+
+		// Per-host run history: tasks and recap stats are stored as jsonb on
+		// ansible_runs, linked to the host, collection and org.
+		tasksByHost := map[string][]AnsibleTask{}
+		for _, t := range in.Tasks {
+			tasksByHost[t.Host] = append(tasksByHost[t.Host], AnsibleTask{
+				Task: t.Task, Status: t.Status, Diff: t.LastDiff, Error: t.LastError,
+			})
+		}
+		mode := "normal"
+		if in.Run.Check {
+			mode = "check"
+		}
+		for _, h := range in.Hosts {
+			ar := AnsibleRun{
+				OrgID: orgID, CollectionID: collectionID, HostID: hostIDs[h.Host],
+				RunID: run.ID, Mode: mode,
+				Tasks:     jsonBytes(tasksByHost[h.Host]),
+				Status:    store.HostStatus(h.Ok, h.Changed, h.Failed, h.Unreachable),
+				Success:   run.Success,
+				StartedAt: run.StartedAt, FinishedAt: run.FinishedAt,
+			}
+			ar.Stats = jsonBytes(AnsibleStats{
+				Mode: mode, Status: ar.Status, Ok: h.Ok, Changed: h.Changed,
+				Failed: h.Failed, Unreachable: h.Unreachable, Skipped: h.Skipped,
+				Rescued: h.Rescued, Ignored: h.Ignored, DurationMS: run.DurationMS,
+				Success: run.Success,
+			})
+			if err := tx.Create(&ar).Error; err != nil {
+				return fmt.Errorf("insert ansible run: %w", err)
 			}
 		}
 
@@ -438,7 +479,11 @@ func (d *DB) Run(ctx context.Context, id uint64) (store.RunRecord, error) {
 
 func (d *DB) ListHosts(ctx context.Context) ([]store.HostRecord, error) {
 	var hosts []Host
-	if err := d.db.WithContext(ctx).Order("target, name").Find(&hosts).Error; err != nil {
+	// The same hostname can have one row per playbook/inventory context; the
+	// host view only shows its latest appearance per collection.
+	if err := d.db.WithContext(ctx).
+		Raw("SELECT DISTINCT ON (target, name) * FROM hosts ORDER BY target, name, last_run_at DESC, id DESC").
+		Scan(&hosts).Error; err != nil {
 		return nil, err
 	}
 	out := make([]store.HostRecord, 0, len(hosts))
@@ -463,9 +508,9 @@ func (d *DB) HostRuns(ctx context.Context, host string, limit int) ([]store.Host
 	q := d.db.WithContext(ctx).Model(&HostRun{}).
 		Joins("JOIN hosts h ON h.id = host_runs.host_id").
 		Joins("JOIN runs r ON r.id = host_runs.run_id").
-		Select("host_runs.*, h.name AS hostname, h.target AS hosttarget, r.playbook, r.started_at, r.duration_ms, r.exit_code, r.success").
+		Select("DISTINCT ON (r.id) host_runs.*, h.name AS hostname, h.target AS hosttarget, r.playbook, r.started_at, r.duration_ms, r.exit_code, r.success").
 		Where("h.name = ?", host).
-		Order("host_runs.run_id DESC")
+		Order("r.id DESC")
 	if limit > 0 {
 		q = q.Limit(limit)
 	}
@@ -503,16 +548,41 @@ func (d *DB) HostChanges(ctx context.Context, host string, limit int) ([]store.T
 		HostTarget string `gorm:"column:hosttarget"`
 	}
 	var rows []row
-	q := d.db.WithContext(ctx).Model(&TaskState{}).
+	if err := d.db.WithContext(ctx).Model(&TaskState{}).
 		Joins("JOIN hosts h ON h.id = task_states.host_id").
 		Select("task_states.*, h.name AS hostname, h.target AS hosttarget").
 		Where("h.name = ?", host).
-		Order("COALESCE(task_states.last_changed_at, task_states.last_run_at) DESC")
-	if limit > 0 {
-		q = q.Limit(limit)
-	}
-	if err := q.Find(&rows).Error; err != nil {
+		Find(&rows).Error; err != nil {
 		return nil, err
+	}
+	// Keep the newest state per (target, hostname, task) when a hostname has
+	// rows in several contexts, then restore the recency ordering.
+	latest := map[string]row{}
+	for _, r := range rows {
+		key := r.HostTarget + "\x00" + r.HostName + "\x00" + r.Task
+		prev, ok := latest[key]
+		if !ok || r.LastRunAt.After(prev.LastRunAt) ||
+			(r.LastRunAt.Equal(prev.LastRunAt) && r.ID > prev.ID) {
+			latest[key] = r
+		}
+	}
+	rows = rows[:0]
+	for _, r := range latest {
+		rows = append(rows, r)
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		a := rows[i].LastChangedAt
+		if a == nil {
+			a = &rows[i].LastRunAt
+		}
+		b := rows[j].LastChangedAt
+		if b == nil {
+			b = &rows[j].LastRunAt
+		}
+		return a.After(*b)
+	})
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
 	}
 	out := make([]store.TaskStateRecord, 0, len(rows))
 	for _, r := range rows {
@@ -702,6 +772,7 @@ func (d *DB) PruneHosts(ctx context.Context, target string, delay time.Duration)
 		{"host runs", &HostRun{}},
 		{"task results", &TaskRunResult{}},
 		{"task states", &TaskState{}},
+		{"ansible runs", &AnsibleRun{}},
 	} {
 		if err := tx.Where("host_id IN ?", ids).Delete(table.model).Error; err != nil {
 			tx.Rollback()
@@ -723,31 +794,28 @@ func (d *DB) Stats(ctx context.Context) (*store.Stats, error) {
 	st := &store.Stats{PerPlaybook: []store.PlaybookStats{}}
 
 	{
-		// Each count is built from a fresh statement: reusing one *gorm.DB
-		// across queries accumulates WHERE clauses.
-		var total, inInv, active, gone int64
-		if err := d.db.WithContext(ctx).Model(&Host{}).
-			Count(&total).Error; err != nil {
-			return nil, err
-		}
-		if err := d.db.WithContext(ctx).Model(&Host{}).
-			Where("in_inventory").Count(&inInv).Error; err != nil {
-			return nil, err
-		}
-		if err := d.db.WithContext(ctx).Model(&Host{}).
-			Where("active").Count(&active).Error; err != nil {
-			return nil, err
-		}
-		if err := d.db.WithContext(ctx).Model(&Host{}).
-			Where("in_inventory AND NOT active").
-			Count(&gone).Error; err != nil {
+		// A hostname may have one row per playbook/inventory context, but the
+		// dashboard counts each (target, hostname) once.
+		row := struct {
+			Total  int64
+			InInv  int64
+			Active int64
+			Gone   int64
+		}{}
+		err := d.db.WithContext(ctx).Model(&Host{}).
+			Select(`COUNT(DISTINCT (target, name)) AS total,
+				COUNT(DISTINCT (target, name)) FILTER (WHERE in_inventory) AS in_inv,
+				COUNT(DISTINCT (target, name)) FILTER (WHERE active) AS active,
+				COUNT(DISTINCT (target, name)) FILTER (WHERE in_inventory AND NOT active) AS gone`).
+			Scan(&row).Error
+		if err != nil {
 			return nil, err
 		}
 		st.Hosts = store.HostsStats{
-			Total:       int(total),
-			InInventory: int(inInv),
-			Active:      int(active),
-			Disappeared: int(gone),
+			Total:       int(row.Total),
+			InInventory: int(row.InInv),
+			Active:      int(row.Active),
+			Disappeared: int(row.Gone),
 		}
 	}
 
@@ -828,6 +896,7 @@ func toRunModel(r store.RunRecord) Run {
 		Canceled:     r.Canceled,
 		Check:        r.Check,
 		JobID:        r.JobID,
+		Inventory:    r.Inventory,
 	}
 }
 
@@ -849,6 +918,7 @@ func fromRunModel(r Run) store.RunRecord {
 		Canceled:     r.Canceled,
 		Check:        r.Check,
 		JobID:        r.JobID,
+		Inventory:    r.Inventory,
 	}
 }
 
