@@ -8,6 +8,7 @@
 
 import { createServer } from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
+import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -172,6 +173,37 @@ const PLAYBOOKS = {
   ],
 }
 
+// --- auth (mirrors internal/server) ----------------------------------------
+//
+// The mock enforces the same contract as the real server: with a user
+// configured, every /api/* request needs a valid session cookie, except
+// health, login, logout and me. The single account is admin/secret.
+
+const SESSION_COOKIE = 'strangle_session'
+const USERS = { admin: 'secret' }
+const SESSION_TTL_MS = 12 * HOUR
+const sessions = new Map() // token -> { username, expires }
+
+function parseCookies(header) {
+  const out = {}
+  for (const part of (header || '').split(';')) {
+    const i = part.indexOf('=')
+    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim())
+  }
+  return out
+}
+
+function sessionOf(req) {
+  const tok = parseCookies(req.headers.cookie)[SESSION_COOKIE]
+  if (!tok || !sessions.has(tok)) return null
+  const s = sessions.get(tok)
+  if (Date.now() > s.expires) {
+    sessions.delete(tok)
+    return null
+  }
+  return s
+}
+
 function json(res, status, body) {
   res.writeHead(status, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify(body))
@@ -181,6 +213,47 @@ function handleApi(req, res, url) {
   const p = url.pathname
   if (req.method === 'GET' && p === '/api/health') {
     return json(res, 200, { status: 'ok' })
+  }
+  if (req.method === 'POST' && p === '/api/login') {
+    let body = ''
+    req.on('data', (c) => (body += c))
+    req.on('end', () => {
+      let creds
+      try {
+        creds = JSON.parse(body || '{}')
+      } catch {
+        return json(res, 400, { error: 'invalid JSON' })
+      }
+      if (typeof creds.username !== 'string' || USERS[creds.username] !== creds.password) {
+        return json(res, 401, { error: 'invalid username or password' })
+      }
+      const token = randomBytes(32).toString('hex')
+      sessions.set(token, { username: creds.username, expires: Date.now() + SESSION_TTL_MS })
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Set-Cookie': `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=43200`,
+      })
+      res.end(JSON.stringify({ authenticated: true, username: creds.username }))
+    })
+    return
+  }
+  if (req.method === 'POST' && p === '/api/logout') {
+    const tok = parseCookies(req.headers.cookie)[SESSION_COOKIE]
+    if (tok) sessions.delete(tok)
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Set-Cookie': `${SESSION_COOKIE}=; Path=/; Max-Age=0`,
+    })
+    res.end(JSON.stringify({ status: 'logged out' }))
+    return
+  }
+  const me = sessionOf(req)
+  if (req.method === 'GET' && p === '/api/me') {
+    if (!me) return json(res, 401, { error: 'not authenticated' })
+    return json(res, 200, { authenticated: true, username: me.username })
+  }
+  if (!me) {
+    return json(res, 401, { error: 'not authenticated' })
   }
   if (req.method === 'GET' && p === '/api/stats') {
     return json(res, 200, STATS)

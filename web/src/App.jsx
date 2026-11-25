@@ -37,6 +37,8 @@ import {
   useParams,
 } from 'react-router-dom'
 import { DoubleNavbar } from './DoubleNavbar'
+import LoginScreen from './LoginScreen'
+import { fetchMe, logout } from './auth'
 
 const POLL_INTERVAL_MS = 10_000
 
@@ -689,6 +691,53 @@ function HostDetailRoute({ hosts, onBack }) {
 }
 
 export default function App() {
+  // undefined: checking; null: auth on, not logged in; object: who we are.
+  const [me, setMe] = useState(undefined)
+  const [loadError, setLoadError] = useState(null)
+
+  const loadMe = useCallback(async () => {
+    try {
+      setMe(await fetchMe())
+    } catch (err) {
+      setLoadError(err.message)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadMe()
+  }, [loadMe])
+
+  if (loadError) {
+    return (
+      <Center h="100vh">
+        <Alert color="red" title="Could not reach the server">
+          {loadError}
+        </Alert>
+      </Center>
+    )
+  }
+  if (me === undefined) {
+    return (
+      <Center h="100vh">
+        <Loader />
+      </Center>
+    )
+  }
+  if (me === null) {
+    return <LoginScreen onSuccess={setMe} />
+  }
+  return (
+    <AppInner
+      user={me.username}
+      onLogout={async () => {
+        await logout()
+        setMe(null)
+      }}
+    />
+  )
+}
+
+function AppInner({ user, onLogout }) {
   const [stats, setStats] = useState(null)
   const [runs, setRuns] = useState([])
   const [hosts, setHosts] = useState([])
@@ -810,7 +859,19 @@ export default function App() {
             />
             <Title order={4}>{headerTitle}</Title>
           </Group>
-          <ColorSchemeToggle />
+          <Group gap="sm">
+            {user && (
+              <>
+                <Text size="sm" c="dimmed">
+                  {user}
+                </Text>
+                <Button size="xs" variant="subtle" onClick={onLogout}>
+                  Log out
+                </Button>
+              </>
+            )}
+            <ColorSchemeToggle />
+          </Group>
         </Group>
       </AppShell.Header>
 

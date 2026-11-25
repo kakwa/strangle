@@ -27,7 +27,26 @@ Process-level settings for the master process.
 | `interval` | `15m` | How often a full cycle over every target's playbooks is run. A cycle runs immediately at startup, then on every tick. |
 | `workers` | `1` | Worker child processes. Each owns one embedded Ansible interpreter, so this is the maximum number of concurrent playbook runs. |
 | `database.dsn` | — | PostgreSQL DSN. Without a DSN an in-memory store is used (history is lost on restart) and runs execute directly instead of through the job queue. |
-| `auth.token` | — | When set, `POST /api/sync` requires the token, either as `Authorization: Bearer <token>` or as the webhook-friendly `X-Strangle-Token: <token>` header. Other endpoints are not authenticated yet. |
+| `auth.token` | — | When set, `POST /api/sync` (without a UI session) requires the token, either as `Authorization: Bearer <token>` or as the webhook-friendly `X-Strangle-Token: <token>` header. Independent of the UI authentication below. |
+
+## UI authentication
+
+UI authentication is not a config flag: it is **on when at least one local
+account exists**, and off otherwise (open server, with a startup warning).
+Accounts live in the `users` table of the configured database, so a DSN in
+`server.yml` is required to manage them.
+
+```sh
+# create the first account (enables authentication from the next restart on)
+strangle user add admin --password-stdin
+strangle user list
+strangle user remove admin
+```
+
+Passwords are hashed with argon2id and stored in the `PHC` format. With
+authentication on, every `/api/*` request needs a valid session cookie
+(12 h, in memory), except `GET /api/health`, `POST /api/login`,
+`POST /api/logout` and `GET /api/me`; see [the API reference](api.md#authentication).
 
 ## collection.yml
 

@@ -421,6 +421,24 @@ func Load(serverPath, collectionPath string) (Config, error) {
 	return cfg, nil
 }
 
+// LoadServer reads only the server.yml file, without a collection. It is
+// used by commands that need server-level settings (like the DSN) without
+// resolving the full target inventory.
+func LoadServer(serverPath string) (ServerConfig, error) {
+	var cfg ServerConfig
+	data, err := os.ReadFile(serverPath)
+	if err != nil {
+		return ServerConfig{}, fmt.Errorf("read server config %q: %w", serverPath, err)
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return ServerConfig{}, fmt.Errorf("parse server config %q: %w", serverPath, err)
+	}
+	if err := cfg.validate(); err != nil {
+		return ServerConfig{}, err
+	}
+	return cfg, nil
+}
+
 // loadTarget reads and validates the strangle.yml in the target directory.
 func loadTarget(spec TargetSpec, path string) (TargetConfig, error) {
 	return LoadTarget(spec, path, nil)

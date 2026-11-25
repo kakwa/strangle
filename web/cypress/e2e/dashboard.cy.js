@@ -2,6 +2,7 @@
 // sidebar navigation and anchor links.
 describe('Dashboard', () => {
   beforeEach(() => {
+    cy.login()
     cy.visit('/')
     cy.get('h4').contains('Dashboard').should('be.visible')
   })

@@ -6,6 +6,10 @@ describe('Dark mode', () => {
     cy.clearLocalStorage()
   })
 
+  beforeEach(() => {
+    cy.login()
+  })
+
   it('toggles the theme and persists it across a reload', () => {
     cy.visit('/')
 

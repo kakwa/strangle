@@ -3,6 +3,7 @@
 // it up).
 describe('Playbooks', () => {
   beforeEach(() => {
+    cy.login()
     cy.visit('/playbooks')
     cy.contains('h4', 'alpha').should('be.visible')
     cy.contains('h4', 'beta').should('be.visible')

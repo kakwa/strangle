@@ -1,6 +1,7 @@
 // Hosts list: rows, inventory/disappeared badges, filters, navigation.
 describe('Hosts', () => {
   beforeEach(() => {
+    cy.login()
     cy.visit('/hosts')
     cy.get('h4').contains('Hosts').should('be.visible')
   })

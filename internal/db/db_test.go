@@ -24,7 +24,7 @@ func openTestDB(t *testing.T) *DB {
 		t.Fatalf("Open() error: %v", err)
 	}
 	ctx := context.Background()
-	for _, table := range []string{"task_states", "host_runs", "hosts", "runs"} {
+	for _, table := range []string{"task_states", "host_runs", "hosts", "runs", "users"} {
 		if err := d.db.WithContext(ctx).Exec("TRUNCATE " + table + " CASCADE").Error; err != nil {
 			t.Fatalf("truncate %s: %v", table, err)
 		}

@@ -4,18 +4,67 @@ All endpoints are served by the master process, next to the web UI, on the
 address from `server.yml` (`listen_addr`, default `:8080`). Responses are
 JSON; errors are `{"error": "<message>"}` with the corresponding status code.
 
-Only `POST /api/sync` is authenticated, and only when `auth.token` is set:
-it then requires `Authorization: Bearer <token>` or, webhook-friendly,
+## Authentication
+
+There are two independent mechanisms:
+
+**UI authentication (session cookie).** When at least one local account
+exists (see [configuration](configuration.md#ui-authentication)), every
+`/api/*` request needs a valid session cookie, except the open endpoints:
+`GET /api/health`, `POST /api/login`, `POST /api/logout` and `GET /api/me`.
+Sessions live 12 hours and are held in the master's memory (a master
+restart logs everyone out). Static UI files are always served; the app
+itself gates on `GET /api/me`.
+
+**Sync token (webhooks).** Independently of UI authentication, when
+`auth.token` is set `POST /api/sync` accepts
+`Authorization: Bearer <token>` or, webhook-friendly,
 `X-Strangle-Token: <token>` (the bearer header wins when both are present;
-the comparison is constant-time).
+the comparison is constant-time). A valid UI session also works on
+`/api/sync`.
 
 ## GET /api/health
 
-Liveness.
+Liveness. Open, even when UI authentication is on.
 
 ```json
 {"status": "ok"}
 ```
+
+## POST /api/login
+
+Authenticate a local account and start a session. The session cookie
+(`strangle_session`, HttpOnly, SameSite=Lax, 12 h) is set on success.
+
+```json
+{"username": "admin", "password": "..."}
+```
+
+`200` returns the same body as `GET /api/me`. Errors: `400` invalid JSON,
+`401` `invalid username or password` (returned for both an unknown username
+and a wrong password, to prevent account enumeration), and `401`
+`authentication is not enabled: no users are configured (strangle user add
+<name> --password <pw>)` when no account exists.
+
+## POST /api/logout
+
+End the session carried by the request cookie and clear the cookie. Always
+`200`:
+
+```json
+{"status": "logged out"}
+```
+
+## GET /api/me
+
+Answer "who is logged in?" and double as the UI's probe for whether
+authentication is on at all:
+
+- `200 {"authenticated": false, "username": null}` — authentication is off
+  (open server).
+- `200 {"authenticated": true, "username": "admin"}` — valid session.
+- `401 {"error": "not authenticated"}` — authentication is on and no valid
+  session cookie is present (the UI shows its login screen).
 
 ## GET /api/stats
 
@@ -200,10 +249,12 @@ curl -X POST localhost:8080/api/sync \
 {"target": "site", "rev": "9f2c1ab...", "changed": true}
 ```
 
-Errors: `401` missing/invalid token (when `auth.token` is set), `404`
-unknown target, `400` target without a git upstream, `502` a git failure
-(network, auth, broken `strangle.yml`). When no git-backed target is
-configured, the endpoint returns `404`.
+Errors: `401` when the request carries neither a valid UI session nor a
+matching sync token (when `auth.token` is set); with no users and no token
+the endpoint is open. Otherwise `404` unknown target, `400` target without
+a git upstream, `502` a git failure (network, auth, broken
+`strangle.yml`). When no git-backed target is configured, the endpoint
+returns `404`.
 
 ## Host keys (SSH transport only)
 

@@ -1,6 +1,10 @@
 // Host detail: bookmarkable URL, runs table, task changes accordion with
 // colored diffs and errors, back navigation.
 describe('Host detail', () => {
+  beforeEach(() => {
+    cy.login()
+  })
+
   it('renders from a bookmarkable URL', () => {
     cy.visit('/hosts/web-01')
     cy.get('h4').contains('web-01').should('be.visible')

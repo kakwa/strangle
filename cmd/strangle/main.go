@@ -7,17 +7,20 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/kakwa/strangle/internal/ansible"
 	"github.com/kakwa/strangle/internal/applier"
+	"github.com/kakwa/strangle/internal/auth"
 	"github.com/kakwa/strangle/internal/collection"
 	"github.com/kakwa/strangle/internal/config"
 	"github.com/kakwa/strangle/internal/db"
@@ -58,6 +61,7 @@ func main() {
 	root.Flags().StringVarP(&collectionConfigPath, "collection-config", "c", "config/collection.yml", "path to the collection configuration file")
 
 	root.AddCommand(workerCmd())
+	root.AddCommand(userCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -78,6 +82,133 @@ func workerCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&collectionConfigPath, "collection-config", "c", "config/collection.yml", "path to the collection configuration file")
 	_ = cmd.MarkFlagRequired("socket")
 	return cmd
+}
+
+// userCmd manages the local UI accounts stored in the database users table:
+//
+//	strangle user add <name> --password <pw>
+//	strangle user add <name> --password-stdin
+//	strangle user list
+//	strangle user remove <name>
+//
+// Accounts are provisioned out of band, not through the API. Once the first
+// account exists, the web UI requires a login.
+func userCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "user",
+		Short: "Manage local UI accounts (stored in the database users table).",
+	}
+	// The accounts live in the configured database, so the subcommands need
+	// the server file to find the DSN.
+	cmd.PersistentFlags().StringVarP(&serverConfigPath, "server-config", "s",
+		"config/server.yml", "path to the server configuration file")
+	var password string
+	var passwordStdin bool
+
+	add := &cobra.Command{
+		Use:   "add <name>",
+		Short: "Create a UI account.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var pw string
+			switch {
+			case passwordStdin:
+				pw = readPasswordStdin()
+			case password != "":
+				pw = password
+			default:
+				return errors.New("provide the password with --password or --password-stdin")
+			}
+			if pw == "" {
+				return errors.New("the password must not be empty")
+			}
+			hash, err := auth.HashPassword(pw)
+			if err != nil {
+				return err
+			}
+			users, err := openUserStore()
+			if err != nil {
+				return err
+			}
+			if err := users.CreateUser(context.Background(), args[0], hash); err != nil {
+				return err
+			}
+			fmt.Printf("created user %q\n", args[0])
+			return nil
+		},
+	}
+	add.Flags().StringVar(&password, "password", "", "the account password (or use --password-stdin)")
+	add.Flags().BoolVar(&passwordStdin, "password-stdin", false, "read the password from a line of stdin")
+
+	list := &cobra.Command{
+		Use:   "list",
+		Short: "List UI accounts.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			users, err := openUserStore()
+			if err != nil {
+				return err
+			}
+			all, err := users.ListUsers(context.Background())
+			if err != nil {
+				return err
+			}
+			for _, u := range all {
+				fmt.Println(u.Name)
+			}
+			return nil
+		},
+	}
+
+	remove := &cobra.Command{
+		Use:   "remove <name>",
+		Short: "Delete a UI account.",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			users, err := openUserStore()
+			if err != nil {
+				return err
+			}
+			if err := users.RemoveUser(context.Background(), args[0]); err != nil {
+				if errors.Is(err, auth.ErrNotFound) {
+					return fmt.Errorf("user %q not found", args[0])
+				}
+				return err
+			}
+			fmt.Printf("removed user %q\n", args[0])
+			return nil
+		},
+	}
+
+	cmd.AddCommand(add, list, remove)
+	return cmd
+}
+
+// openUserStore opens the users table from the configured server file. UI
+// accounts only exist when a database is configured.
+func openUserStore() (auth.UserStore, error) {
+	cfg, err := config.LoadServer(serverConfigPath)
+	if err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+	if cfg.Database.DSN == "" {
+		return nil, errors.New("no database.dsn in server.yml: UI accounts are stored in the database")
+	}
+	d, err := db.Open(context.Background(), cfg.Database.DSN)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+	return d.Users(), nil
+}
+
+// readPasswordStdin reads one line from stdin and strips the trailing
+// newline (and carriage return).
+func readPasswordStdin() string {
+	sc := bufio.NewScanner(os.Stdin)
+	if !sc.Scan() {
+		return ""
+	}
+	return strings.TrimRight(sc.Text(), "\r\n")
 }
 
 func run(cmd *cobra.Command, args []string) error {
@@ -131,6 +262,7 @@ func run(cmd *cobra.Command, args []string) error {
 	}()
 
 	var st store.Store
+	var users auth.UserStore
 	if cfg.Server.Database.DSN != "" {
 		dctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		d, err := db.Open(dctx, cfg.Server.Database.DSN)
@@ -140,6 +272,7 @@ func run(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to open database: %w", err)
 		}
 		st = d
+		users = d.Users()
 		logger.Info("using PostgreSQL store")
 	} else {
 		st = store.NewMem()
@@ -193,7 +326,7 @@ func run(cmd *cobra.Command, args []string) error {
 	if collMgr.HasGit() {
 		syncer = collMgr
 	}
-	srv := server.New(cfg.Server.ListenAddr, apr, st, multi, enqueue, mgr, syncer, cfg.Server.Auth.Token, logger)
+	srv := server.New(cfg.Server.ListenAddr, apr, st, multi, enqueue, mgr, syncer, users, cfg.Server.Auth.Token, logger)
 
 	done := make(chan struct{})
 	go func() {

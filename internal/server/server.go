@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/internal/applier"
+	"github.com/kakwa/strangle/internal/auth"
 	"github.com/kakwa/strangle/internal/collection"
 	"github.com/kakwa/strangle/internal/config"
 	"github.com/kakwa/strangle/internal/sshpool"
@@ -57,6 +58,9 @@ type Server struct {
 	run       RunEnqueuer
 	workers   WorkerReporter
 	syncer    Syncer
+	users     auth.UserStore
+	sessions  *auth.Sessions
+	authOn    bool
 	authToken string
 	logger    *zap.Logger
 }
@@ -81,14 +85,20 @@ var uiFS = func() fs.FS {
 	return ui
 }()
 
+// SessionCookie is the name of the cookie carrying a UI session token.
+const SessionCookie = "strangle_session"
+
 // New returns a Server. The web UI is embedded in the binary; build it with
 // `make web` (or `make build`) before compiling. ssh may be nil when no
 // target uses the Go-managed SSH transport. run accepts manual playbook runs
 // (a river job in production, a direct run without a database). workers may
 // be nil when no worker pool is managed. syncer may be nil when no target
-// has a git upstream. authToken, when non-empty, is required as a bearer
-// token on the sync endpoint (webhook protection).
-func New(addr string, apr *applier.Ansible, st store.Store, ssh *sshpool.Multi, run RunEnqueuer, workers WorkerReporter, syncer Syncer, authToken string, logger *zap.Logger) *Server {
+// has a git upstream. users, when non-nil, is the store of UI accounts; UI
+// authentication is enforced as soon as it holds at least one user (see
+// Routes). authToken, when non-empty, is accepted as a bearer token on the
+// sync endpoint (machine-to-machine webhook protection, in addition to a
+// valid UI session).
+func New(addr string, apr *applier.Ansible, st store.Store, ssh *sshpool.Multi, run RunEnqueuer, workers WorkerReporter, syncer Syncer, users auth.UserStore, authToken string, logger *zap.Logger) *Server {
 	return &Server{
 		addr:      addr,
 		applier:   apr,
@@ -97,18 +107,97 @@ func New(addr string, apr *applier.Ansible, st store.Store, ssh *sshpool.Multi, 
 		run:       run,
 		workers:   workers,
 		syncer:    syncer,
+		users:     users,
 		authToken: authToken,
 		logger:    logger,
 	}
 }
 
 // Routes builds the HTTP handler: the /api endpoints plus the web UI.
+//
+// UI authentication is enforced when a user store is configured and holds
+// at least one user: every /api/* request then needs a valid session,
+// except the login endpoints and GET /api/health (liveness). Without users
+// the server runs open and logs a warning pointing at `strangle user add`.
 func (s *Server) Routes() http.Handler {
+	s.initAuth()
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
+
+	// --- UI authentication -------------------------------------------------
+
+	// POST /api/login authenticates a local user and starts a session.
+	mux.HandleFunc("POST /api/login", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if !s.authOn || s.users == nil {
+			writeError(w, http.StatusUnauthorized,
+				errors.New("authentication is not enabled: no users are configured (strangle user add <name> --password <pw>)"))
+			return
+		}
+		user, err := s.users.GetUser(r.Context(), req.Username)
+		if err != nil || !auth.VerifyPassword(user.Hash, req.Password) {
+			// Same error for unknown user and wrong password: no account
+			// enumeration.
+			writeError(w, http.StatusUnauthorized, errors.New("invalid username or password"))
+			return
+		}
+		token := s.sessions.Create(user.Name)
+		http.SetCookie(w, &http.Cookie{
+			Name:     SessionCookie,
+			Value:    token,
+			Path:     "/",
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+			MaxAge:   int(auth.SessionTTL.Seconds()),
+		})
+		s.logger.Info("user logged in", zap.String("username", user.Name))
+		writeJSON(w, http.StatusOK, meResponse{Authenticated: true, Username: user.Name})
+	})
+
+	// POST /api/logout ends the session carried by the request cookie.
+	mux.HandleFunc("POST /api/logout", func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie(SessionCookie); err == nil && s.sessions != nil {
+			s.sessions.Destroy(c.Value)
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:   SessionCookie,
+			Value:  "",
+			Path:   "/",
+			MaxAge: -1,
+		})
+		writeJSON(w, http.StatusOK, map[string]string{"status": "logged out"})
+	})
+
+	// GET /api/me answers "who is logged in?" and doubles as the UI's probe
+	// for whether authentication is on at all:
+	//   200 {authenticated: false}          auth off (open server)
+	//   200 {authenticated: true, username} valid session
+	//   401                                 auth on, no valid session
+	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
+		if !s.authOn {
+			writeJSON(w, http.StatusOK, meResponse{})
+			return
+		}
+		sess, ok := s.sessionFrom(r)
+		if !ok {
+			writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+			return
+		}
+		writeJSON(w, http.StatusOK, meResponse{Authenticated: true, Username: sess.Username})
+	})
+
+	// --- data endpoints ----------------------------------------------------
 
 	mux.HandleFunc("GET /api/stats", func(w http.ResponseWriter, r *http.Request) {
 		stats, err := s.store.Stats(r.Context())
@@ -245,15 +334,16 @@ func (s *Server) Routes() http.Handler {
 
 	// /api/sync is the webhook for git-backed collections: it moves the
 	// target's checkout to its tracked ref (or to the given branch, which
-	// becomes the new tracked ref) and reloads its strangle.yml. When
-	// auth.token is set in server.yml, a matching bearer token is required.
+	// becomes the new tracked ref) and reloads its strangle.yml. A valid UI
+	// session is always accepted; when auth.token is set in server.yml, a
+	// matching bearer token is also accepted (machine-to-machine webhooks).
 	mux.HandleFunc("POST /api/sync", func(w http.ResponseWriter, r *http.Request) {
 		if s.syncer == nil {
 			writeError(w, http.StatusNotFound, errors.New("no git-backed collection is configured"))
 			return
 		}
-		if s.authToken != "" && !s.bearerTokenOK(r) {
-			writeError(w, http.StatusUnauthorized, errors.New("missing or invalid bearer token"))
+		if !s.syncAllowed(r) {
+			writeError(w, http.StatusUnauthorized, errors.New("missing or invalid session or bearer token"))
 			return
 		}
 		var req struct {
@@ -352,7 +442,99 @@ func (s *Server) Routes() http.Handler {
 
 	mux.Handle("/", spaHandler(uiFS))
 
-	return mux
+	// When authentication is on, every /api/* request (except the login
+	// endpoints and health) needs a valid session. Static UI files are
+	// served unconditionally: the app itself gates on GET /api/me.
+	return s.requireAuth(mux)
+}
+
+// initAuth sets up the session table and decides, once, whether UI
+// authentication is enforced: a user store must be configured and hold at
+// least one user. Without that the API runs open (dev mode, fresh install).
+// It is idempotent, so Routes() can be called repeatedly.
+func (s *Server) initAuth() {
+	if s.sessions != nil || s.users == nil {
+		return
+	}
+	s.sessions = auth.NewSessions()
+	n, err := s.users.Count(context.Background())
+	switch {
+	case err != nil:
+		s.logger.Warn("cannot count users; running open", zap.Error(err))
+	case n == 0:
+		s.logger.Warn("no users configured; the API is open. Create the first account with: strangle user add <name> --password <pw>")
+	default:
+		s.authOn = true
+		s.logger.Info("UI authentication enabled", zap.Int("users", n))
+	}
+}
+
+// meResponse is the body of /api/me.
+type meResponse struct {
+	Authenticated bool   `json:"authenticated"`
+	Username      string `json:"username,omitempty"`
+}
+
+// requireAuth wraps next, rejecting /api/* requests without a valid session
+// when authentication is on. The open endpoints are GET /api/health
+// (liveness), POST /api/login, POST /api/logout and GET /api/me.
+func (s *Server) requireAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.authOn && strings.HasPrefix(r.URL.Path, "/api/") {
+			_, ok := s.sessionFrom(r)
+			// Machine-to-machine webhooks may use the configured sync token
+			// instead of a UI session.
+			syncOK := r.URL.Path == "/api/sync" && r.Method == http.MethodPost && s.syncAllowed(r)
+			if !ok && !s.authOpen(r) && !syncOK {
+				writeError(w, http.StatusUnauthorized, errors.New("not authenticated"))
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// authOpen lists the /api endpoints reachable without a session.
+func (s *Server) authOpen(r *http.Request) bool {
+	switch {
+	case r.URL.Path == "/api/health" && r.Method == http.MethodGet:
+		return true
+	case r.URL.Path == "/api/login" && r.Method == http.MethodPost:
+		return true
+	case r.URL.Path == "/api/logout" && r.Method == http.MethodPost:
+		return true
+	case r.URL.Path == "/api/me" && r.Method == http.MethodGet:
+		return true
+	}
+	return false
+}
+
+// syncAllowed reports whether r may use POST /api/sync: a valid UI session
+// always works, and the configured sync token works when it is set.
+func (s *Server) syncAllowed(r *http.Request) bool {
+	if _, ok := s.sessionFrom(r); ok {
+		return true
+	}
+	if s.authToken == "" {
+		return !s.authOn
+	}
+	return s.bearerTokenOK(r)
+}
+
+// sessionFrom resolves the session carried by the request cookie, if any.
+func (s *Server) sessionFrom(r *http.Request) (*auth.Session, bool) {
+	if s.sessions == nil {
+		return nil, false
+	}
+	c, err := r.Cookie(SessionCookie)
+	if err != nil || c.Value == "" {
+		return nil, false
+	}
+	sess := s.sessions.Lookup(c.Value)
+	if sess == nil {
+		return nil, false
+	}
+	return sess, true
 }
 
 // ListenAndServe runs the HTTP server until ctx is canceled,

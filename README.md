@@ -90,7 +90,10 @@ docs/                documentation: architecture, configuration, API, git collec
 
 ## API (summary)
 
-- `GET /api/health`      — liveness
+- `GET /api/health`      — liveness (open, no auth)
+- `POST /api/login`      — authenticate a local account, sets a 12 h session cookie
+- `POST /api/logout`     — end the session
+- `GET /api/me`          — who is logged in; the UI's auth probe
 - `GET /api/stats`       — fleet statistics (hosts, active, disappeared, run counts, durations)
 - `GET /api/runs`        — runs, newest first (`?limit=`)
 - `GET /api/hosts`       — all hosts with their last status and disappearance state
@@ -101,8 +104,8 @@ docs/                documentation: architecture, configuration, API, git collec
 - `POST /api/run`        — body `{"target": "demo", "playbook": "demo"}`; starts the
   run in the background and returns `202`
 - `POST /api/sync`       — body `{"target": "...", "branch": "..."}`; re-syncs a
-  git-backed target, optionally switching the tracked branch. Requires the
-  configured token when `auth.token` is set
+  git-backed target, optionally switching the tracked branch. Accepts a UI
+  session or the configured token when `auth.token` is set
 - `GET /api/hostkeys`    — host keys pending approval (SSH transport only)
 - `POST /api/hostkeys/accept` / `POST /api/hostkeys/reject`
 - `GET /api/ssh/stats`   — SSH pool counters per scope
@@ -112,7 +115,9 @@ Full request/response examples: [docs/api.md](docs/api.md).
 ## Web UI
 
 Single-page app (React + Mantine) with bookmarkable routes, polled every 10
-seconds:
+seconds. When UI authentication is on (see below), an unauthenticated visit
+shows a login screen; the header shows the signed-in user and a log-out
+button:
 
 - `/` — **Dashboard**: fleet stats and the most recent runs.
 - `/hosts` — **Hosts**: the host table with last status and disappearance state.
@@ -140,7 +145,20 @@ strangle [-s config/server.yml] [-c config/collection.yml]
 | `interval`      | `15m`           | How often a full cycle over every target is run |
 | `workers`       | `1`             | Worker child processes (one embedded interpreter each) |
 | `database.dsn`  | —               | PostgreSQL DSN; without a DSN an in-memory store is used |
-| `auth.token`    | —               | Bearer token required by `POST /api/sync` |
+| `auth.token`    | —               | Bearer token for `POST /api/sync` (webhook), independent of UI authentication |
+
+### UI authentication
+
+No flag: UI authentication is **on as soon as at least one local account
+exists** (accounts live in the configured database, so a DSN is required).
+While on, every `/api/*` endpoint needs a valid 12-hour session cookie,
+except health, login, logout and me. Manage accounts:
+
+```sh
+strangle user add <name> --password-stdin
+strangle user list
+strangle user remove <name>
+```
 
 ### collection.yml — the targets
 

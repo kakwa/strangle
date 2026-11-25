@@ -20,8 +20,12 @@ database:
 # so more workers allow more concurrent runs. Defaults to 1.
 workers: 2
 
-# API authentication. When set, POST /api/sync (the git collection webhook)
-# requires the token as a bearer token: `Authorization: Bearer <token>` or
-# the `X-Strangle-Token` header. Other endpoints are not gated yet.
+# Webhook token for the git-collection sync endpoint. When set, POST /api/sync
+# (without a UI session) requires the token: `Authorization: Bearer <token>`
+# or the `X-Strangle-Token` header.
+#
+# UI authentication is a separate mechanism with no flag: it is on as soon as
+# at least one local account exists. Accounts live in the database above:
+#   strangle user add <name> --password-stdin
 # auth:
 #   token: change-me
