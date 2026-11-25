@@ -59,7 +59,7 @@ func TestTokensCRUDWithSession(t *testing.T) {
 		t.Fatalf("POST /api/tokens = %d, want %d, body %s", rec.Code, http.StatusCreated, rec.Body.String())
 	}
 	var created struct {
-		Raw   string     `json:"raw"`
+		Raw   string      `json:"raw"`
 		Token *auth.Token `json:"token"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&created); err != nil {

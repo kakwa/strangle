@@ -74,11 +74,11 @@ func Parse(output string) (summaries []HostSummary, tasks []TaskResult) {
 	lines := strings.Split(ansiRE.ReplaceAllString(output, ""), "\n")
 
 	var (
-		currentTask   string
-		inRecap       bool
-		inJSON        bool
+		currentTask    string
+		inRecap        bool
+		inJSON         bool
 		collectingDiff bool
-		pendingDiff   []string
+		pendingDiff    []string
 	)
 
 	flushDiff := func(tr *TaskResult) {
@@ -146,7 +146,7 @@ func Parse(output string) (summaries []HostSummary, tasks []TaskResult) {
 		}
 		if strings.HasPrefix(trimmed, "TASK [") {
 			if end := strings.Index(trimmed, "]"); end > 0 {
-				currentTask = strings.TrimSpace(trimmed[len("TASK [") : end])
+				currentTask = strings.TrimSpace(trimmed[len("TASK ["):end])
 			} else {
 				currentTask = ""
 			}

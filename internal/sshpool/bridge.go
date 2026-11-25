@@ -72,11 +72,11 @@ func NewBridge(multi *Multi) (*Bridge, error) {
 
 	b := &Bridge{
 		multi: multi,
-		reqR:    os.NewFile(uintptr(reqFDs[0]), "strangle-ssh-req-r"),
-		reqW:    os.NewFile(uintptr(reqFDs[1]), "strangle-ssh-req-w"),
-		respR:   os.NewFile(uintptr(respFDs[0]), "strangle-ssh-resp-r"),
-		respW:   os.NewFile(uintptr(respFDs[1]), "strangle-ssh-resp-w"),
-		lock:    lock,
+		reqR:  os.NewFile(uintptr(reqFDs[0]), "strangle-ssh-req-r"),
+		reqW:  os.NewFile(uintptr(reqFDs[1]), "strangle-ssh-req-w"),
+		respR: os.NewFile(uintptr(respFDs[0]), "strangle-ssh-resp-r"),
+		respW: os.NewFile(uintptr(respFDs[1]), "strangle-ssh-resp-w"),
+		lock:  lock,
 	}
 	go b.serve()
 	return b, nil
