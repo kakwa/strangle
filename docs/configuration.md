@@ -36,6 +36,7 @@ Process-level settings for the master process.
 | `retention.max_count` | — | Keep only the newest N finished runs per collection. Can be combined with `max_age`. |
 | `host_cleanup.interval` | `1h` | How often stale hosts are removed. Only used when `delay` is set. |
 | `host_cleanup.delay` | — | Remove a host once it is no longer in its collection's inventory and its last sight is older than this duration. |
+| `tls.cert_file` / `tls.key_file` | — | Serve the API and UI over HTTPS. Both files are required; otherwise the server uses plain HTTP. |
 
 ### Run retention
 
@@ -56,6 +57,14 @@ latest task states and per-task history are removed with them. Host names are
 scoped by collection, so a same-named host in another collection is kept. The
 delay can be overridden per collection in collection.yml; the cadence stays
 process-wide.
+
+### HTTPS
+
+Set both `tls.cert_file` and `tls.key_file` in server.yml to serve the API and
+the embedded web UI over HTTPS on `listen_addr`. Paths are read by the master
+at startup; a partial configuration is rejected. Without TLS the server keeps
+listening in plain HTTP, so terminate TLS in a reverse proxy when deploying
+that way.
 
 ### Collection sandboxing
 

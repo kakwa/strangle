@@ -58,3 +58,9 @@ workers: 2
 # host_cleanup:
 #   interval: 1h
 #   delay: 720h         # 30 days
+
+# Serve the API and web UI over HTTPS. Both files are required; without them
+# the server keeps using plain HTTP on listen_addr.
+# tls:
+#   cert_file: /etc/strangle/tls.crt
+#   key_file: /etc/strangle/tls.key

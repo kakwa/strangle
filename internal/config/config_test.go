@@ -235,6 +235,33 @@ targets:
 	}
 }
 
+func TestLoadTLS(t *testing.T) {
+	serverPath, collectionPath := writeTree(t, `
+tls:
+  cert_file: /etc/strangle/tls.crt
+  key_file: /etc/strangle/tls.key
+`, collOne, strangleMinimal)
+	cfg, err := Load(serverPath, collectionPath)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Server.TLS.CertFile != "/etc/strangle/tls.crt" ||
+		cfg.Server.TLS.KeyFile != "/etc/strangle/tls.key" {
+		t.Fatalf("TLS config = %+v", cfg.Server.TLS)
+	}
+}
+
+func TestLoadRejectsPartialTLS(t *testing.T) {
+	serverPath, collectionPath := writeTree(t, `
+tls:
+  cert_file: /etc/strangle/tls.crt
+`, collOne, strangleMinimal)
+	if _, err := Load(serverPath, collectionPath); err == nil ||
+		!strings.Contains(err.Error(), "tls.cert_file") {
+		t.Fatalf("Load() error = %v, want a partial TLS config error", err)
+	}
+}
+
 func TestLoadHostCleanup(t *testing.T) {
 	serverPath, collectionPath := writeTree(t, `
 host_cleanup:

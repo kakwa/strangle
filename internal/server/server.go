@@ -66,21 +66,32 @@ func WithCollectionAccess(a auth.CollectionAccess) Option {
 	return func(s *Server) { s.access = a }
 }
 
+// WithTLS enables HTTPS on ListenAndServe. Both files must be set; a single
+// file is a configuration error reported when the server starts.
+func WithTLS(certFile, keyFile string) Option {
+	return func(s *Server) {
+		s.tlsCertFile = certFile
+		s.tlsKeyFile = keyFile
+	}
+}
+
 type Server struct {
-	addr      string
-	applier   *applier.Ansible
-	store     store.Store
-	ssh       *sshpool.Multi
-	run       RunEnqueuer
-	workers   WorkerReporter
-	syncer    Syncer
-	users     auth.UserStore
-	tokens    auth.TokenStore
-	sessions  *auth.Sessions
-	authOn    bool
-	authToken string
-	access    auth.CollectionAccess
-	logger    *zap.Logger
+	addr        string
+	applier     *applier.Ansible
+	store       store.Store
+	ssh         *sshpool.Multi
+	run         RunEnqueuer
+	workers     WorkerReporter
+	syncer      Syncer
+	users       auth.UserStore
+	tokens      auth.TokenStore
+	sessions    *auth.Sessions
+	authOn      bool
+	authToken   string
+	access      auth.CollectionAccess
+	tlsCertFile string
+	tlsKeyFile  string
+	logger      *zap.Logger
 }
 
 // playbookInfo describes one configured job with its latest run outcome.
@@ -995,9 +1006,22 @@ func (s *Server) userFrom(r *http.Request) (string, bool) {
 	return tok.Owner, true
 }
 
-// ListenAndServe runs the HTTP server until ctx is canceled,
-// then gracefully shuts it down.
+// tlsFiles validates the TLS option. Requiring both paths avoids silently
+// falling back to plain HTTP when only half of a keypair is configured.
+func (s *Server) tlsFiles() (string, string, error) {
+	if (s.tlsCertFile == "") != (s.tlsKeyFile == "") {
+		return "", "", errors.New("tls: cert_file and key_file must be set together")
+	}
+	return s.tlsCertFile, s.tlsKeyFile, nil
+}
+
+// ListenAndServe runs the HTTP server until ctx is canceled, then gracefully
+// shuts it down. With WithTLS configured it serves HTTPS instead of HTTP.
 func (s *Server) ListenAndServe(ctx context.Context) error {
+	certFile, keyFile, err := s.tlsFiles()
+	if err != nil {
+		return err
+	}
 	srv := &http.Server{Addr: s.addr, Handler: s.Routes()}
 
 	go func() {
@@ -1007,7 +1031,11 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	err := srv.ListenAndServe()
+	if certFile != "" {
+		err = srv.ListenAndServeTLS(certFile, keyFile)
+	} else {
+		err = srv.ListenAndServe()
+	}
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}

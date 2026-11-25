@@ -88,6 +88,15 @@ type ServerConfig struct {
 	// HostCleanup is the default policy for removing hosts that are no
 	// longer in a collection's inventory and have not been seen for a while.
 	HostCleanup HostCleanupConfig `yaml:"host_cleanup,omitempty"`
+	// TLS enables HTTPS for the HTTP server. Both files must be set.
+	TLS TLSConfig `yaml:"tls,omitempty"`
+}
+
+// TLSConfig points at the certificate and private key used by the HTTP
+// server. Both paths must be set; leaving them empty keeps plain HTTP.
+type TLSConfig struct {
+	CertFile string `yaml:"cert_file,omitempty"`
+	KeyFile  string `yaml:"key_file,omitempty"`
 }
 
 // HostCleanupConfig controls automatic host removal. Delay is the minimum
@@ -1105,7 +1114,13 @@ func (s *ServerConfig) validate() error {
 	if err := validateRetention("server", &s.Retention); err != nil {
 		return err
 	}
-	return validateHostCleanup("server", &s.HostCleanup)
+	if err := validateHostCleanup("server", &s.HostCleanup); err != nil {
+		return err
+	}
+	if (s.TLS.CertFile == "") != (s.TLS.KeyFile == "") {
+		return errors.New("server: tls.cert_file and tls.key_file must be set together")
+	}
+	return nil
 }
 
 // validateRetention rejects negative limits and gives an enabled policy a

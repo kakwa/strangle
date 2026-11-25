@@ -609,7 +609,8 @@ func run(cmd *cobra.Command, args []string) error {
 		syncer = collMgr
 	}
 	srv := server.New(cfg.Server.ListenAddr, apr, st, multi, enqueue, mgr, syncer, users, tokens, cfg.Server.Auth.Token, logger,
-		server.WithCollectionAccess(access))
+		server.WithCollectionAccess(access),
+		server.WithTLS(cfg.Server.TLS.CertFile, cfg.Server.TLS.KeyFile))
 
 	done := make(chan struct{})
 	go func() {
