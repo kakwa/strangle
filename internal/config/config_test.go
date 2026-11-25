@@ -343,6 +343,87 @@ playbooks:
 	}
 }
 
+func TestLoadNotifications(t *testing.T) {
+	serverPath, collectionPath := writeTree(t, "", `
+targets:
+  - name: one
+    path: __TARGET__
+    notifications:
+      - type: webhook
+        url: https://hooks.example.com/strangle
+        headers:
+          Authorization: Bearer secret
+        timeout: 2s
+      - type: slack
+        url: https://hooks.slack.com/services/T/B/X
+      - type: email
+        from: strangle@example.com
+        to:
+          - ops@example.com
+          - oncall@example.com
+        smtp: smtp.example.com:587
+        username: strangle
+        password_file: smtp.secret
+`, strangleMinimal)
+	writeFile(t, filepath.Join(filepath.Dir(collectionPath), "smtp.secret"), "s3cr3t\n")
+
+	cfg, err := Load(serverPath, collectionPath)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	got := cfg.Targets[0].Notifications
+	if len(got) != 3 {
+		t.Fatalf("len(Notifications) = %d, want 3", len(got))
+	}
+	if got[0].Type != NotificationWebhook || got[0].URL != "https://hooks.example.com/strangle" ||
+		got[0].Headers["Authorization"] != "Bearer secret" || got[0].Timeout != 2*time.Second {
+		t.Errorf("webhook = %+v", got[0])
+	}
+	if got[1].Type != NotificationSlack || got[1].Timeout != 10*time.Second {
+		t.Errorf("slack = %+v", got[1])
+	}
+	if got[2].Type != NotificationEmail || got[2].From != "strangle@example.com" ||
+		!slices.Equal(got[2].To, []string{"ops@example.com", "oncall@example.com"}) ||
+		got[2].SMTP != "smtp.example.com:587" || got[2].Username != "strangle" ||
+		got[2].Password != "s3cr3t" {
+		t.Errorf("email = %+v", got[2])
+	}
+}
+
+func TestLoadNotificationErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		spec string
+		want string
+	}{
+		{"unknown type", `type: pager`, "type must be one of"},
+		{"missing url", `type: webhook`, "requires a url"},
+		{"relative url", "type: webhook\nurl: /hooks/strangle", "absolute http(s) URL"},
+		{"bad header", "type: webhook\nurl: https://example.com/hook\nheaders:\n  Bad:Header: x", "invalid header"},
+		{"bad timeout", "type: webhook\nurl: https://example.com/hook\ntimeout: nope", "positive duration"},
+		{"email missing to", "type: email\nfrom: a@example.com\nsmtp: example.com:25", "at least one"},
+		{"email bad from", "type: email\nfrom: nope\nsmtp: example.com:25\nto: [a@example.com]", "invalid email address"},
+		{"email bad smtp", "type: email\nfrom: a@example.com\nto: [b@example.com]\nsmtp: example.com", "host:port"},
+		{"both passwords", "type: email\nfrom: a@example.com\nto: [b@example.com]\nsmtp: example.com:25\nusername: a\npassword: x\npassword_file: secret", "not both"},
+		{"password without username", "type: email\nfrom: a@example.com\nto: [b@example.com]\nsmtp: example.com:25\npassword: x", "requires a username"},
+		{"missing password file", "type: email\nfrom: a@example.com\nto: [b@example.com]\nsmtp: example.com:25\nusername: a\npassword_file: missing", "read password_file"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			collection := "targets:\n  - name: one\n    path: __TARGET__\n    notifications:\n      - " +
+				strings.ReplaceAll(tc.spec, "\n", "\n        ")
+			serverPath, collectionPath := writeTree(t, "", collection, strangleMinimal)
+			_, err := Load(serverPath, collectionPath)
+			if err == nil {
+				t.Fatal("Load() error = nil, want a notification error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("Load() error = %q, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoadServerSandbox(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "server.yml")

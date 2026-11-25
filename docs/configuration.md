@@ -123,6 +123,48 @@ targets:
   and on every `POST /api/sync`. See
   [git-backed collections](git-collections.md).
 
+### Failure notifications
+
+A target can declare any number of notifiers. They fire when a run finishes
+with a non-zero Ansible exit code or a runner error; successful runs are
+silent. Notifications belong in collection.yml, never in a git-backed
+`strangle.yml`, so repository content cannot redirect credentials.
+
+```yaml
+targets:
+  - name: home
+    path: /path/to/ansible
+    notifications:
+      - type: webhook                       # any HTTP endpoint
+        url: https://example.com/strangle-hook
+        headers:                            # optional extra request headers
+          Authorization: Bearer secret
+        timeout: 5s                         # default: 10s
+      - type: slack                         # Slack incoming webhook
+        url: https://hooks.slack.com/services/T/B/X
+      - type: email
+        from: strangle@example.com
+        to: [ops@example.com, oncall@example.com]
+        smtp: smtp.example.com:587          # host:port
+        username: strangle                  # optional
+        password_file: /run/secrets/smtp    # or `password`, not both
+```
+
+| Field | Applies to | Meaning |
+|-------|-----------|---------|
+| `type` | all | `webhook`, `slack` or `email` |
+| `url` | webhook, slack | absolute `http`/`https` URL; notified with `POST` |
+| `headers` | webhook, slack | extra HTTP headers (e.g. a bearer token) |
+| `from`, `to`, `smtp` | email | sender, recipients and `host:port` of the SMTP server |
+| `username`, `password` / `password_file` | email | optional SMTP PLAIN auth; a relative `password_file` resolves against collection.yml |
+| `timeout` | all | per-notifier timeout, default `10s` |
+
+Webhooks receive a JSON object with `event` (`run_failed`), `org`,
+`collection`, `playbook`, timestamps, `duration_ms`, `exit_code`, host counts
+and a bounded tail of the playbook output (4 KB). Slack and email receive the
+same information in a human-readable message. Notifiers run in parallel and
+their failures are logged but never change the recorded run result.
+
 ## strangle.yml (one per target)
 
 Lives at the root of the target directory. It names the jobs of the target;

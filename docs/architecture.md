@@ -104,6 +104,13 @@ everything through the `store.Store` interface.
 After a git sync, the master calls `UpdateTargets` with the reloaded targets,
 so a branch switch or a changed `strangle.yml` takes effect from the next run.
 
+When a run fails, `internal/notify` fans the result out to the notifiers
+configured on that collection in collection.yml: generic HTTP webhook, Slack
+incoming webhook or SMTP email. Notifiers are independent, time out
+individually and are best-effort — a broken endpoint cannot change the
+recorded run result. Notification settings are kept across git syncs because
+they are server-side configuration, not repository content.
+
 ## The store
 
 `store.Store` is the persistence interface with two implementations:

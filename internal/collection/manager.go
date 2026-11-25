@@ -206,10 +206,23 @@ func (m *Manager) Reload() error {
 // loadTargetLocked reads the target's strangle.yml from its checkout
 // directory, applying branch templating. The caller must hold m.mu.
 func (m *Manager) loadTargetLocked(name, ref string) (config.TargetConfig, error) {
-	t := m.targets[name]
-	spec := config.TargetSpec{Name: t.Name, Path: t.Path, Git: t.Git}
-	return config.LoadTarget(spec, t.Path, map[string]string{
-		"Name":   t.Name,
+	previous := m.targets[name]
+	spec := config.TargetSpec{
+		Name: previous.Name,
+		Org:  previous.Org,
+		Path: previous.Path,
+		Git:  previous.Git,
+	}
+	t, err := config.LoadTarget(spec, previous.Path, map[string]string{
+		"Name":   previous.Name,
 		"Branch": ref,
 	})
+	if err != nil {
+		return config.TargetConfig{}, err
+	}
+	// Notification settings (and credentials) come from collection.yml, not
+	// from the repository, so a sync must not drop them when replacing the
+	// resolved target with the freshly loaded strangle.yml.
+	t.Notifications = previous.Notifications
+	return t, nil
 }

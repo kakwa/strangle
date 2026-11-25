@@ -24,6 +24,7 @@ import (
 	"github.com/kakwa/strangle/internal/collection"
 	"github.com/kakwa/strangle/internal/config"
 	"github.com/kakwa/strangle/internal/db"
+	"github.com/kakwa/strangle/internal/notify"
 	"github.com/kakwa/strangle/internal/riverqueue"
 	"github.com/kakwa/strangle/internal/sandbox"
 	"github.com/kakwa/strangle/internal/scheduler"
@@ -546,7 +547,7 @@ func run(cmd *cobra.Command, args []string) error {
 		logger.Warn("no database DSN configured, using in-memory store")
 	}
 
-	apr := applier.NewAnsible(collMgr.Targets(), mgr, st, logger)
+	apr := applier.NewAnsible(collMgr.Targets(), mgr, st, logger, notify.New(logger))
 
 	// With a database, playbook runs flow through a postgres-backed River
 	// queue and a River client in this process dispatches them to the worker

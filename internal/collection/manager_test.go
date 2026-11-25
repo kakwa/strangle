@@ -118,9 +118,15 @@ func newFixture(t *testing.T) (*Manager, string, map[string]string) {
 	origin, revs := newOrigin(t)
 	checkoutDir := filepath.Join(t.TempDir(), "checkout")
 	targets := []config.TargetConfig{{
-		Name:       "one",
-		Path:       checkoutDir,
-		Git:        config.GitConfig{URL: origin, Branch: "main"},
+		Name: "one",
+		Org:  "lab",
+		Path: checkoutDir,
+		Git:  config.GitConfig{URL: origin, Branch: "main"},
+		Notifications: []config.NotificationConfig{{
+			Type:    config.NotificationWebhook,
+			URL:     "https://example.com/hook",
+			Timeout: time.Second,
+		}},
 		WorkingDir: checkoutDir,
 	}}
 	m := New(targets, zap.NewNop())
@@ -176,6 +182,12 @@ func TestInitialSync(t *testing.T) {
 	}
 	if len(tgt.Playbooks) != 1 || tgt.Playbooks[0].Name != "site" {
 		t.Errorf("good target playbooks = %+v, want [site]", tgt.Playbooks)
+	}
+	if len(tgt.Notifications) != 1 || tgt.Notifications[0].URL != "https://example.com/hook" {
+		t.Errorf("good target notifications were lost on sync: %+v", tgt.Notifications)
+	}
+	if tgt.Org != "lab" {
+		t.Errorf("Org = %q, want lab (preserved across sync)", tgt.Org)
 	}
 
 	st, ok := m.GitStatus("one")

@@ -12,6 +12,7 @@ import (
 
 	"github.com/kakwa/strangle/internal/config"
 	"github.com/kakwa/strangle/internal/inventory"
+	"github.com/kakwa/strangle/internal/notify"
 	"github.com/kakwa/strangle/internal/parser"
 	"github.com/kakwa/strangle/internal/store"
 	"go.uber.org/zap"
@@ -29,21 +30,27 @@ type Executor interface {
 // Ansible applies playbooks for every configured target by dispatching each
 // run to a worker process and records the results in a store.
 type Ansible struct {
-	mu      sync.RWMutex
-	targets map[string]config.TargetConfig
-	exec    Executor
-	store   store.Store
-	logger  *zap.Logger
+	mu       sync.RWMutex
+	targets  map[string]config.TargetConfig
+	exec     Executor
+	store    store.Store
+	notifier notify.FailureNotifier
+	logger   *zap.Logger
 }
 
 // NewAnsible returns an Applier for the given targets. Runs are executed by
-// the given executor (a pool of worker processes in production).
-func NewAnsible(targets []config.TargetConfig, exec Executor, st store.Store, logger *zap.Logger) *Ansible {
+// the given executor (a pool of worker processes in production). An optional
+// failure notifier sends collection-configured notifications for failed runs;
+// callers that do not care about notifications can omit it.
+func NewAnsible(targets []config.TargetConfig, exec Executor, st store.Store, logger *zap.Logger, notifier ...notify.FailureNotifier) *Ansible {
 	a := &Ansible{
 		targets: map[string]config.TargetConfig{},
 		exec:    exec,
 		store:   st,
 		logger:  logger,
+	}
+	if len(notifier) > 0 {
+		a.notifier = notifier[0]
 	}
 	for _, t := range targets {
 		a.targets[t.Name] = t
@@ -192,7 +199,7 @@ func (a *Ansible) runTarget(ctx context.Context, t config.TargetConfig, firstErr
 			zap.String("playbook", pb.Name),
 			zap.String("file", pb.PlaybookPath()),
 		)
-		if err := a.runPlaybook(ctx, t.Name, pb, sshScope, scopeNames(inv, pb.PlaybookPath()), invHosts); err != nil {
+		if err := a.runPlaybook(ctx, t, pb, sshScope, scopeNames(inv, pb.PlaybookPath()), invHosts); err != nil {
 			a.logger.Error("playbook failed",
 				zap.String("target", t.Name),
 				zap.String("playbook", pb.Name),
@@ -211,13 +218,13 @@ func (a *Ansible) runTarget(ctx context.Context, t config.TargetConfig, firstErr
 
 // runPlaybook dispatches one playbook to the worker pool, parses the output
 // and persists the results.
-func (a *Ansible) runPlaybook(ctx context.Context, collection string, pb config.PlaybookConfig, sshScope string, scope []string, invHosts []store.InventoryHost) error {
+func (a *Ansible) runPlaybook(ctx context.Context, target config.TargetConfig, pb config.PlaybookConfig, sshScope string, scope []string, invHosts []store.InventoryHost) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
 	started := time.Now().UTC()
-	exitCode, output, runErr := a.exec.RunPlaybook(ctx, collection, sshScope, pb.WorkingDir, pb.Args()...)
+	exitCode, output, runErr := a.exec.RunPlaybook(ctx, target.Name, sshScope, pb.WorkingDir, pb.Args()...)
 	finished := time.Now().UTC()
 
 	if runErr != nil {
@@ -292,6 +299,18 @@ func (a *Ansible) runPlaybook(ctx context.Context, collection string, pb config.
 		zap.Int("hosts", run.Hosts),
 		zap.Int64("duration_ms", run.DurationMS),
 	)
+
+	if !run.Success && a.notifier != nil {
+		// A broken notification endpoint must not change the recorded run
+		// result, so errors are logged here and not returned.
+		if err := a.notifier.NotifyFailure(ctx, target, run); err != nil {
+			a.logger.Error("failure notification failed",
+				zap.String("target", target.Name),
+				zap.String("playbook", pb.Name),
+				zap.Error(err),
+			)
+		}
+	}
 
 	if runErr != nil {
 		return runErr

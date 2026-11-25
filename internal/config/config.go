@@ -19,8 +19,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/mail"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -117,6 +121,46 @@ type CollectionConfig struct {
 	Targets []TargetSpec `yaml:"targets"`
 }
 
+// Notification types accepted in collection.yml.
+const (
+	NotificationWebhook = "webhook"
+	NotificationSlack   = "slack"
+	NotificationEmail   = "email"
+)
+
+// NotificationSpec is the on-disk shape of one failure notifier of a target.
+// Credentials belong in collection.yml (server-side), not in a git-backed
+// target's strangle.yml.
+type NotificationSpec struct {
+	Type string `yaml:"type"`
+	// Webhook and Slack notifiers POST to URL. Headers are extra HTTP headers
+	// (useful for a bearer token or shared secret).
+	URL     string            `yaml:"url,omitempty"`
+	Headers map[string]string `yaml:"headers,omitempty"`
+	// Email notifiers use a standard SMTP submission server.
+	From         string   `yaml:"from,omitempty"`
+	To           []string `yaml:"to,omitempty"`
+	SMTP         string   `yaml:"smtp,omitempty"` // host:port
+	Username     string   `yaml:"username,omitempty"`
+	Password     string   `yaml:"password,omitempty"`
+	PasswordFile string   `yaml:"password_file,omitempty"`
+	// Timeout defaults to 10s.
+	Timeout string `yaml:"timeout,omitempty"`
+}
+
+// NotificationConfig is a validated, resolved notifier.
+type NotificationConfig struct {
+	Type     string
+	URL      string
+	Headers  map[string]string
+	From     string
+	To       []string
+	SMTP     string
+	Username string
+	Password string
+	Timeout  time.Duration
+}
+
 // TargetSpec is one collection.yml entry. It points at the directory of an
 // Ansible project, which must contain a strangle.yml with named playbooks.
 type TargetSpec struct {
@@ -132,6 +176,8 @@ type TargetSpec struct {
 	// Git describes the upstream repository of the project. When set,
 	// strangle clones the repository into Path and keeps it in sync.
 	Git GitConfig `yaml:"git,omitempty"`
+	// Notifications sends a message when a run of this collection fails.
+	Notifications []NotificationSpec `yaml:"notifications,omitempty"`
 }
 
 // GitConfig describes the upstream git repository of a target. When set,
@@ -173,6 +219,8 @@ type TargetConfig struct {
 	Path string
 	// Git is the upstream repository placeholder from the collection.
 	Git GitConfig
+	// Notifications are the failure notifiers of this collection.
+	Notifications []NotificationConfig
 
 	// WorkingDir is the directory the playbooks run from. Ansible resolves
 	// ansible.cfg, relative paths and roles relative to it. Defaults to
@@ -412,7 +460,9 @@ func Load(serverPath, collectionPath string) (Config, error) {
 	}
 
 	// Validate every spec first so collection-level problems surface before
-	// any target file is read.
+	// any target file is read. Relative notifier paths resolve against the
+	// collection file, just like relative target paths.
+	collDir := filepath.Dir(collectionPath)
 	seen := map[string]struct{}{}
 	for i, spec := range coll.Targets {
 		if spec.Name == "" {
@@ -432,13 +482,15 @@ func Load(serverPath, collectionPath string) (Config, error) {
 			return Config{}, fmt.Errorf("collection: target %q: invalid org name %q", spec.Name, spec.Org)
 		}
 		coll.Targets[i].Org = spec.Org
+		if _, err := resolveNotifications(spec.Notifications,
+			fmt.Sprintf("collection: target %q", spec.Name), collDir); err != nil {
+			return Config{}, err
+		}
 	}
 
 	// Relative target paths resolve against the collection file's directory
 	// (not the working directory), so a collection.yml can be placed next to
 	// the targets it lists.
-	collDir := filepath.Dir(collectionPath)
-
 	cfg.Targets = make([]TargetConfig, 0, len(coll.Targets))
 	for i := range coll.Targets {
 		spec := coll.Targets[i]
@@ -455,11 +507,18 @@ func Load(serverPath, collectionPath string) (Config, error) {
 			// A git-backed target's strangle.yml lives inside the repository
 			// and may not exist before the first clone; the collection
 			// manager loads it once the checkout is in place.
+			notifications, err := resolveNotifications(spec.Notifications,
+				fmt.Sprintf("collection: target %q", spec.Name), collDir)
+			if err != nil {
+				return Config{}, err
+			}
 			cfg.Targets = append(cfg.Targets, TargetConfig{
-				Name:       spec.Name,
-				Path:       path,
-				Git:        spec.Git,
-				WorkingDir: path,
+				Name:          spec.Name,
+				Org:           spec.Org,
+				Path:          path,
+				Git:           spec.Git,
+				Notifications: notifications,
+				WorkingDir:    path,
 			})
 			continue
 		}
@@ -531,17 +590,26 @@ func LoadTarget(spec TargetSpec, path string, vars map[string]string) (TargetCon
 	if err != nil {
 		return TargetConfig{}, err
 	}
+	// Collection.yml owns the notifiers (and their credentials), not the
+	// git-backed strangle.yml, so these are resolved from the spec rather than
+	// the target file. Paths were made absolute during Load.
+	notifications, err := resolveNotifications(spec.Notifications,
+		fmt.Sprintf("target %q", spec.Name), path)
+	if err != nil {
+		return TargetConfig{}, err
+	}
 
 	org := spec.Org
 	if org == "" {
 		org = DefaultOrg
 	}
 	t := TargetConfig{
-		Name:     spec.Name,
-		Org:      org,
-		Path:     path,
-		Git:      spec.Git,
-		Schedule: targetSchedule,
+		Name:          spec.Name,
+		Org:           org,
+		Path:          path,
+		Git:           spec.Git,
+		Notifications: notifications,
+		Schedule:      targetSchedule,
 	}
 	if file.WorkingDir == "" {
 		t.WorkingDir = path
@@ -659,6 +727,117 @@ func resolveSchedule(scheduleSpec, interval string, td templateData, where strin
 		return "", fmt.Errorf("%s: %w", where, err)
 	}
 	return raw, nil
+}
+
+// resolveNotifications validates and resolves the failure notifiers declared
+// on a collection.yml target. Relative password_file paths are rewritten to
+// absolute paths in specs, so a later reload (after a git sync) resolves the
+// same credentials even though it no longer knows where collection.yml lived.
+func resolveNotifications(specs []NotificationSpec, where, baseDir string) ([]NotificationConfig, error) {
+	if len(specs) == 0 {
+		return nil, nil
+	}
+	out := make([]NotificationConfig, 0, len(specs))
+	for i := range specs {
+		spec := &specs[i]
+		label := fmt.Sprintf("%s: notifications[%d]", where, i)
+		typ := strings.ToLower(strings.TrimSpace(spec.Type))
+		n := NotificationConfig{Type: typ}
+
+		timeout := 10 * time.Second
+		if spec.Timeout != "" {
+			d, err := time.ParseDuration(spec.Timeout)
+			if err != nil || d <= 0 {
+				return nil, fmt.Errorf("%s: timeout %q must be a positive duration", label, spec.Timeout)
+			}
+			timeout = d
+		}
+		n.Timeout = timeout
+
+		switch typ {
+		case NotificationWebhook, NotificationSlack:
+			if spec.URL == "" {
+				return nil, fmt.Errorf("%s: %s requires a url", label, typ)
+			}
+			u, err := url.Parse(spec.URL)
+			if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+				return nil, fmt.Errorf("%s: url %q must be an absolute http(s) URL", label, spec.URL)
+			}
+			n.URL = spec.URL
+			for k, v := range spec.Headers {
+				if k == "" || strings.ContainsAny(k, ":\r\n") || strings.ContainsAny(v, "\r\n") {
+					return nil, fmt.Errorf("%s: invalid header %q", label, k)
+				}
+			}
+			n.Headers = make(map[string]string, len(spec.Headers))
+			for k, v := range spec.Headers {
+				n.Headers[k] = v
+			}
+		case NotificationEmail:
+			from, err := parseMailAddress(spec.From)
+			if err != nil {
+				return nil, fmt.Errorf("%s: from: %w", label, err)
+			}
+			if len(spec.To) == 0 {
+				return nil, fmt.Errorf("%s: email requires at least one `to` address", label)
+			}
+			n.To = make([]string, 0, len(spec.To))
+			for _, to := range spec.To {
+				addr, err := parseMailAddress(to)
+				if err != nil {
+					return nil, fmt.Errorf("%s: to: %w", label, err)
+				}
+				n.To = append(n.To, addr)
+			}
+			n.From = from
+			if spec.SMTP == "" {
+				return nil, fmt.Errorf("%s: email requires an smtp host:port", label)
+			}
+			host, port, err := net.SplitHostPort(spec.SMTP)
+			if err != nil || host == "" {
+				return nil, fmt.Errorf("%s: smtp %q must be host:port", label, spec.SMTP)
+			}
+			portNum, err := strconv.Atoi(port)
+			if err != nil || portNum < 1 || portNum > 65535 {
+				return nil, fmt.Errorf("%s: smtp %q has an invalid port", label, spec.SMTP)
+			}
+			n.SMTP = spec.SMTP
+			if spec.Password != "" && spec.PasswordFile != "" {
+				return nil, fmt.Errorf("%s: set either password or password_file, not both", label)
+			}
+			if spec.PasswordFile != "" {
+				p := spec.PasswordFile
+				if !filepath.IsAbs(p) {
+					p = filepath.Join(baseDir, p)
+					spec.PasswordFile = p
+				}
+				data, err := os.ReadFile(p)
+				if err != nil {
+					return nil, fmt.Errorf("%s: read password_file %q: %w", label, p, err)
+				}
+				n.Password = strings.TrimRight(string(data), "\r\n")
+			} else {
+				n.Password = spec.Password
+			}
+			n.Username = spec.Username
+			if n.Password != "" && n.Username == "" {
+				return nil, fmt.Errorf("%s: password requires a username", label)
+			}
+		default:
+			return nil, fmt.Errorf("%s: type must be one of %s, %s, %s (got %q)",
+				label, NotificationWebhook, NotificationEmail, NotificationSlack, typ)
+		}
+		out = append(out, n)
+	}
+	return out, nil
+}
+
+func parseMailAddress(value string) (string, error) {
+	addr, err := mail.ParseAddress(value)
+	if err != nil || addr.Address != value {
+		return "", fmt.Errorf("invalid email address %q", value)
+	}
+	return addr.Address, nil
 }
 
 // validOrgName rejects path separators and other characters that would make

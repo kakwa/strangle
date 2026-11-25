@@ -28,7 +28,8 @@ when due. With a PostgreSQL DSN configured, runs flow through a
 postgres-backed [River](https://github.com/riverqueue/river) job queue and a
 River client in the master consumes them with at most as many concurrent runs
 as there are workers. Without a DSN, an in-memory store is used and runs
-execute directly.
+execute directly. Failed runs can notify webhook, Slack or email endpoints
+configured per collection.
 
 Git-backed targets are cloned into their configured directory and pinned to a
 tracked ref (branch, tag or commit); `POST /api/sync` is a webhook that
@@ -50,6 +51,7 @@ internal/
   collection/        git-backed targets: clone, pin to tracked ref, sync, reload
   git/               in-process git operations (go-git), no system git binary
   inventory/         parses YAML inventory files into host groups and members
+  notify/            failure notifications (webhook, Slack, email)
   parser/            parses ansible-playbook output (recap, task results, diffs)
   schedule/          parses durations, cron expressions and aliases
   scheduler/         runs each job on its own schedule (live job list)
@@ -230,7 +232,26 @@ targets:
     # git:                        # optional: upstream repository
     #   url: https://example.com/repo.git
     #   branch: main              # tracked ref (branch, tag or commit)
+    # notifications:              # optional: sent when a run fails
+    #   - type: webhook
+    #     url: https://example.com/strangle-hook
+    #     headers:
+    #       Authorization: Bearer secret
+    #   - type: slack
+    #     url: https://hooks.slack.com/services/T/B/X
+    #   - type: email
+    #     from: strangle@example.com
+    #     to: [ops@example.com]
+    #     smtp: smtp.example.com:587
+    #     username: strangle
+    #     password_file: /run/secrets/smtp
 ```
+
+Notifiers are configured per collection (here), never in a git-backed
+`strangle.yml`. They run in parallel with a 10-second default timeout and
+include a bounded tail of the failed playbook's output. See
+[docs/configuration.md](docs/configuration.md#failure-notifications) for all
+fields.
 
 ### strangle.yml — one per target
 
