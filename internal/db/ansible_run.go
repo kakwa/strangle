@@ -14,6 +14,7 @@ type AnsibleRun struct {
 	ID     uuid.UUID `gorm:"type:uuid;primaryKey"`
 	RunID  uint64    `gorm:"not null;index;uniqueIndex:idx_ansible_run_host,priority:1"`
 	HostID uint64    `gorm:"not null;index;uniqueIndex:idx_ansible_run_host,priority:2"`
+	Host   Host      `gorm:"foreignKey:HostID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
 	Tasks  []byte    `gorm:"type:jsonb"`
 	Stats  []byte    `gorm:"type:jsonb"`
 }

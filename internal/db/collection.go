@@ -161,9 +161,6 @@ func deleteCollection(tx *gorm.DB, id uint64) error {
 			}
 		}
 	}
-	if err := tx.Where("collection_id = ?", id).Delete(&AnsibleRun{}).Error; err != nil {
-		return err
-	}
 	if err := tx.Delete(&Host{}, "collection_id = ?", id).Error; err != nil {
 		return err
 	}

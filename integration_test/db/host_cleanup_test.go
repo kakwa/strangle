@@ -48,7 +48,8 @@ func TestDBPruneHosts(t *testing.T) {
 	sqlDB := testutil.SQLDB(t, dsn)
 	var staleID uint64
 	if err := sqlDB.QueryRowContext(ctx,
-		`SELECT id FROM hosts WHERE target = $1 AND name = $2`, "home", "old").Scan(&staleID); err != nil {
+		`SELECT h.id FROM hosts h JOIN collections c ON c.id = h.collection_id
+		 WHERE c.name = $1 AND h.name = $2`, "home", "old").Scan(&staleID); err != nil {
 		t.Fatalf("find stale host: %v", err)
 	}
 	if _, err := sqlDB.ExecContext(ctx, `UPDATE hosts SET in_inventory = false WHERE id = $1`, staleID); err != nil {
@@ -86,7 +87,8 @@ func TestDBPruneHosts(t *testing.T) {
 
 	var oldCount int
 	if err := sqlDB.QueryRowContext(ctx,
-		`SELECT count(*) FROM hosts WHERE target = $1 AND name = $2`, "home", "old").Scan(&oldCount); err != nil {
+		`SELECT count(*) FROM hosts h JOIN collections c ON c.id = h.collection_id
+		 WHERE c.name = $1 AND h.name = $2`, "home", "old").Scan(&oldCount); err != nil {
 		t.Fatalf("find removed host: %v", err)
 	}
 	if oldCount != 0 {

@@ -127,7 +127,7 @@ func TestHostAndAnsibleRunSchema(t *testing.T) {
 	if err := conn.QueryRow(`SELECT COUNT(*) FROM ansible_runs ar
 		JOIN hosts h ON h.id = ar.host_id
 		JOIN runs r ON r.id = ar.run_id
-		WHERE h.name = 'web1' AND r.check = true`).Scan(&runs); err != nil || runs != 2 {
+		WHERE h.name = 'web1' AND r."check" = true`).Scan(&runs); err != nil || runs != 2 {
 		t.Errorf("ansible runs = %d, %v; want 2", runs, err)
 	}
 	// UUIDv7 encodes the creation time in the first 48 bits, so ordering by
@@ -171,7 +171,7 @@ func TestHostAndAnsibleRunSchema(t *testing.T) {
 	assertContains(t, stats, `"changed":1`)
 	// Mode is a run-level field, not repeated in every host's stats blob.
 	var checked int
-	if err := conn.QueryRow(`SELECT COUNT(*) FROM runs WHERE check = true`).Scan(&checked); err != nil || checked != 2 {
+	if err := conn.QueryRow(`SELECT COUNT(*) FROM runs WHERE "check" = true`).Scan(&checked); err != nil || checked != 2 {
 		t.Errorf("check runs = %d, %v; want 2", checked, err)
 	}
 	testutil.AssertJSONEqual(t, json.RawMessage(facts), json.RawMessage(`{"os":"linux"}`))
