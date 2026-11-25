@@ -189,7 +189,10 @@ type RunPlaybookResponse struct {
 	Output string `protobuf:"bytes,2,opt,name=output,proto3" json:"output,omitempty"`
 	// error is set when the run failed outside the interpreter (setup, I/O or
 	// a closed worker). Empty when the run reached ansible-playbook.
-	Error         string `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	Error string `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"`
+	// facts_json is a JSON object mapping host name to its latest
+	// ansible_facts blob, collected by the embedded callback plugin.
+	FactsJson     string `protobuf:"bytes,4,opt,name=facts_json,json=factsJson,proto3" json:"facts_json,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -245,6 +248,13 @@ func (x *RunPlaybookResponse) GetError() string {
 	return ""
 }
 
+func (x *RunPlaybookResponse) GetFactsJson() string {
+	if x != nil {
+		return x.FactsJson
+	}
+	return ""
+}
+
 var File_strangle_v1_runner_proto protoreflect.FileDescriptor
 
 const file_strangle_v1_runner_proto_rawDesc = "" +
@@ -260,11 +270,13 @@ const file_strangle_v1_runner_proto_rawDesc = "" +
 	"\x04args\x18\x03 \x03(\tR\x04args\x12\x1e\n" +
 	"\n" +
 	"collection\x18\x04 \x01(\tR\n" +
-	"collection\"`\n" +
+	"collection\"\x7f\n" +
 	"\x13RunPlaybookResponse\x12\x1b\n" +
 	"\texit_code\x18\x01 \x01(\x05R\bexitCode\x12\x16\n" +
 	"\x06output\x18\x02 \x01(\tR\x06output\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error2\x97\x01\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error\x12\x1d\n" +
+	"\n" +
+	"facts_json\x18\x04 \x01(\tR\tfactsJson2\x97\x01\n" +
 	"\x06Runner\x12;\n" +
 	"\x04Ping\x12\x18.strangle.v1.PingRequest\x1a\x19.strangle.v1.PingResponse\x12P\n" +
 	"\vRunPlaybook\x12\x1f.strangle.v1.RunPlaybookRequest\x1a .strangle.v1.RunPlaybookResponseB0Z.github.com/kakwa/strangle/proto/strangle/v1;v1b\x06proto3"

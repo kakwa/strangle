@@ -336,7 +336,8 @@ per target: the same name in two targets is two entries.
     "last_seen_at": "...",
     "last_run_at": "...",
     "last_status": "ok",
-    "last_change_at": "..."
+    "last_change_at": "...",
+    "facts": {"ansible_hostname": "web-01", "ansible_os_family": "Debian"}
   }
 ]
 ```
@@ -344,6 +345,12 @@ per target: the same name in two targets is two entries.
 `last_status` is one of `ok`, `changed`, `failed`, `unreachable` (empty until
 the first run). A host that was in scope of a run but missing from the recap
 gets `disappeared_at` set; `active` is true while that condition holds.
+
+`facts` is the latest `ansible_facts` blob collected for the host, returned as
+a JSON object (omitted when no facts have been gathered). It is refreshed only
+by a later run that actually returns facts. The canonical collection-scoped
+`GET /api/v1/orgs/{org}/collections/{collection}/hosts` route returns the same
+host shape, filtered by collection access.
 
 ## GET /api/hosts/{host}/runs
 

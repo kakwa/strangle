@@ -38,7 +38,7 @@ command line · **[SCHED]** scheduling · **[GIT]** git-backed collections ·
 - [x] 23. [SCHED] Per-target or per-playbook interval instead of the single global interval (ideally cron-like)
 - [x] 24. [NOTIFY] Notify on run failure (webhook, email, slack or similar), configured per collection
 - [x] 25. [DB] Task history: keep the per-task results of every run
-- [ ] 26. [DB] [UI] ansible_facts: collect, save and display them — a jsonb blob per host, refreshed by runs
+- [x] 26. [DB] [UI] ansible_facts: collect, save and display them — a jsonb blob per host, refreshed by runs
 - [ ] 27. [API] [UI] Cancel a running run (`POST /api/v1/orgs/{org}/collections/{collection}/runs/{id}/cancel` + UI button)
 - [ ] 28. [API] [UI] Check mode: run a playbook with `--check` (dry run) from the UI or API
 - [ ] 29. [DB] Retention: a policy to purge old runs (max age and/or max count)

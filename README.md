@@ -94,7 +94,8 @@ docs/                documentation: architecture, configuration, API, git collec
 - **Host** — every host (identified by target + name, so the same name in
   two targets is two hosts) seen in an inventory or recap; `active` tracks
   whether it was in scope of a run but missing from the recap
-  ("disappeared").
+  ("disappeared"). `facts` is the latest `ansible_facts` jsonb snapshot,
+  refreshed only when a run returns facts.
 
 ## API (summary)
 
@@ -104,7 +105,7 @@ docs/                documentation: architecture, configuration, API, git collec
 - `GET /api/me`          — who is logged in; the UI's auth probe
 - `GET /api/stats`       — fleet statistics (hosts, active, disappeared, run counts, durations)
 - `GET /api/runs`        — runs, newest first (`?limit=`)
-- `GET /api/hosts`       — all hosts with their last status and disappearance state
+- `GET /api/hosts`       — all hosts with their last status, disappearance state and latest facts
 - `GET /api/hosts/{host}/runs`    — the last runs that included the host (default 10)
 - `GET /api/hosts/{host}/changes` — the host's task traces, newest first (default 200)
 - `GET /api/playbooks`   — playbook job names, keyed by target name, with last outcome
@@ -141,8 +142,8 @@ button:
   run's per-task results (with expandable diffs and errors), fetched only
   when the run is opened.
 - `/hosts` — **Hosts**: the host table with last status and disappearance state.
-- `/hosts/{host}` — **Host detail**: the last runs for that host, plus its task
-  traces with expandable diffs and errors.
+- `/hosts/{host}` — **Host detail**: the latest Ansible facts, the last runs
+  for that host, and its task traces with expandable diffs and errors.
 - `/playbooks` — **Playbooks**: every target's jobs with their last outcome,
   plus a manual-run button per job.
 - `/tokens` — **Tokens**: the signed-in user's API tokens — create one (the

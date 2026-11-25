@@ -20,8 +20,8 @@ import (
 // a playbook, they only check that the handler routes to the enqueuer.
 type stubExecutor struct{}
 
-func (stubExecutor) RunPlaybook(context.Context, string, string, string, ...string) (int, string, error) {
-	return 0, "", nil
+func (stubExecutor) RunPlaybook(context.Context, string, string, string, ...string) (int, string, map[string]json.RawMessage, error) {
+	return 0, "", nil, nil
 }
 
 // recEnqueuer records every EnqueueRun call and returns a canned response.

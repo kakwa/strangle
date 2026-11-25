@@ -4,6 +4,7 @@ package applier
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -20,11 +21,11 @@ import (
 )
 
 // Executor runs one playbook and reports its outcome: the ansible-playbook
-// exit code, the captured output and an error for failures outside the
-// interpreter (setup, transport or a closed worker). The master's worker
-// pool implements it; tests can provide their own.
+// exit code, the captured output, per-host facts and an error for failures
+// outside the interpreter (setup, transport or a closed worker). The master's
+// worker pool implements it; tests can provide their own.
 type Executor interface {
-	RunPlaybook(ctx context.Context, collection, scope, workingDir string, args ...string) (int, string, error)
+	RunPlaybook(ctx context.Context, collection, scope, workingDir string, args ...string) (int, string, map[string]json.RawMessage, error)
 }
 
 // Ansible applies playbooks for every configured target by dispatching each
@@ -224,7 +225,7 @@ func (a *Ansible) runPlaybook(ctx context.Context, target config.TargetConfig, p
 	}
 
 	started := time.Now().UTC()
-	exitCode, output, runErr := a.exec.RunPlaybook(ctx, target.Name, sshScope, pb.WorkingDir, pb.Args()...)
+	exitCode, output, facts, runErr := a.exec.RunPlaybook(ctx, target.Name, sshScope, pb.WorkingDir, pb.Args()...)
 	finished := time.Now().UTC()
 
 	if runErr != nil {
@@ -285,6 +286,7 @@ func (a *Ansible) runPlaybook(ctx context.Context, target config.TargetConfig, p
 		Run:        run,
 		Hosts:      hostRuns,
 		Tasks:      taskStates,
+		Facts:      facts,
 		ScopeNames: scope,
 		Inventory:  invHosts,
 	}); err != nil {

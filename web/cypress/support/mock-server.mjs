@@ -31,6 +31,11 @@ const HOSTS = [
     in_inventory: true, active: true,
     first_seen_at: iso(24 * HOUR), last_seen_at: iso(30 * MIN), last_run_at: iso(30 * MIN),
     last_status: 'changed', last_change_at: iso(30 * MIN),
+    facts: {
+      ansible_hostname: 'web-01',
+      ansible_os_family: 'Debian',
+      ansible_default_ipv4: { address: '10.0.1.10' },
+    },
   },
   {
     target: 'alpha', name: 'web-02', ip: '10.0.1.11', user: 'deploy',

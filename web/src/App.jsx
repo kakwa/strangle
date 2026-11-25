@@ -117,6 +117,9 @@ function mergeHost(a, b) {
         ? secondary.first_seen_at
         : primary.first_seen_at,
     last_change_at: later(primary.last_change_at, secondary.last_change_at),
+    // The newer host record wins; fall back to the other target's facts when
+    // only one collection has gathered them for this host name.
+    facts: primary.facts || secondary.facts || null,
   }
 }
 
@@ -224,6 +227,17 @@ const CODE_BLOCK_STYLE = {
   border: '1px solid var(--mantine-color-default-border)',
   borderRadius: 'var(--mantine-radius-md)',
   padding: 'var(--mantine-spacing-sm)',
+}
+
+function formatFacts(facts) {
+  if (!facts) return ''
+  try {
+    const value = typeof facts === 'string' ? JSON.parse(facts) : facts
+    if (value === null || typeof value !== 'object' || Object.keys(value).length === 0) return ''
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(facts)
+  }
 }
 
 function DiffBlock({ diff, error }) {
@@ -536,7 +550,7 @@ function PlaybooksView({ playbooks, onRun, pendingRuns, runError }) {
   )
 }
 
-function HostDetail({ host, onBack }) {
+function HostDetail({ host, record, onBack }) {
   const [runs, setRuns] = useState([])
   const [changes, setChanges] = useState([])
 
@@ -562,6 +576,8 @@ function HostDetail({ host, onBack }) {
     return () => clearInterval(id)
   }, [refresh])
 
+  const facts = formatFacts(record?.facts)
+
   const info = (
     <Group gap="sm" align="center">
       <Text fw="bold">{host}</Text>
@@ -584,6 +600,17 @@ function HostDetail({ host, onBack }) {
           </Text>
         </Group>
       </Card>
+
+      {facts && (
+        <Card withBorder>
+          <Title order={4} mb="sm">Ansible facts</Title>
+          <div style={CODE_BLOCK_STYLE}>
+            <Text component="pre" size="xs" ff="monospace" style={{ margin: 0 }}>
+              {facts}
+            </Text>
+          </div>
+        </Card>
+      )}
 
       <Card withBorder>
         <Title order={4} mb="sm">Last {Math.max(runs.length, 1)} runs</Title>
@@ -1212,14 +1239,15 @@ function sectionFromPath(pathname) {
 // host list so the detail view and the "host not found" state agree.
 function HostDetailRoute({ hosts, onBack }) {
   const { host } = useParams()
-  if (!hosts.some((h) => h.name === host)) {
+  const record = hosts.find((h) => h.name === host)
+  if (!record) {
     return (
       <Alert color="gray" title="Host not found">
         It may have been removed from the inventory.
       </Alert>
     )
   }
-  return <HostDetail host={host} onBack={onBack} />
+  return <HostDetail host={host} record={record} onBack={onBack} />
 }
 
 export default function App() {

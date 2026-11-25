@@ -4,9 +4,11 @@
 package ansible
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -29,6 +31,17 @@ import (
 const setupScript = `
 import io as _strangle_io
 import signal as _strangle_signal
+# The facts callback writes into this module; the store is cleared at the
+# start of every run so a playbook without fact gathering cannot inherit
+# facts from an earlier one.
+import sys as _strangle_facts_sys
+import types as _strangle_facts_types
+
+_strangle_facts_store = _strangle_facts_sys.modules.get('strangle_facts_store')
+if _strangle_facts_store is None:
+    _strangle_facts_store = _strangle_facts_types.ModuleType('strangle_facts_store')
+    _strangle_facts_sys.modules['strangle_facts_store'] = _strangle_facts_store
+_strangle_facts_store.facts = {}
 
 _strangle_orig_signal = _strangle_signal.signal
 _strangle_protected = (_strangle_signal.SIGINT, _strangle_signal.SIGTERM)
@@ -61,6 +74,9 @@ def _strangle_reset_ansible():
     import warnings
     warnings.filterwarnings('ignore', message='AnsibleCollectionFinder has already been configured')
 
+    # Drop facts gathered by the previous run.
+    _strangle_facts_store.facts = {}
+
     # Ansible caches parsed CLI args and vault secrets in process-wide
     # singletons. Clear them so each Run gets a fresh set of arguments.
     from ansible.parsing.vault import VaultSecretsContext
@@ -89,6 +105,9 @@ type Result struct {
 	ExitCode int
 	// Output is everything Ansible wrote to stdout and stderr, including --diff.
 	Output string
+	// Facts is the latest ansible_facts blob collected per host by the
+	// callback plugin, keyed by the host name from the result line.
+	Facts map[string]json.RawMessage
 }
 
 type request struct {
@@ -123,16 +142,36 @@ func NewRunner(multi *sshpool.Multi) (*Runner, error) {
 		setup:    setupScript,
 	}
 
-	if multi != nil {
-		dir, err := installPlugins()
-		if err != nil {
-			return nil, fmt.Errorf("install Ansible plugins: %w", err)
+	dir, err := installPlugins()
+	if err != nil {
+		return nil, fmt.Errorf("install Ansible plugins: %w", err)
+	}
+	r.pluginDir = dir
+	callbackPath := filepath.Join(dir, "callback")
+	if existing := os.Getenv("ANSIBLE_CALLBACK_PLUGINS"); existing != "" {
+		callbackPath += string(os.PathListSeparator) + existing
+	}
+	if err := os.Setenv("ANSIBLE_CALLBACK_PLUGINS", callbackPath); err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, err
+	}
+	enabled := os.Getenv("ANSIBLE_CALLBACKS_ENABLED")
+	if !strings.Contains(enabled, "strangle_facts") {
+		if enabled != "" {
+			enabled += ","
 		}
-		r.pluginDir = dir
-		if err := os.Setenv("ANSIBLE_CONNECTION_PLUGINS", dir); err != nil {
+		enabled += "strangle_facts"
+		if err := os.Setenv("ANSIBLE_CALLBACKS_ENABLED", enabled); err != nil {
+			_ = os.RemoveAll(dir)
 			return nil, err
 		}
+	}
 
+	if multi != nil {
+		if err := os.Setenv("ANSIBLE_CONNECTION_PLUGINS", filepath.Join(dir, "connection")); err != nil {
+			_ = os.RemoveAll(dir)
+			return nil, err
+		}
 		bridge, err := sshpool.NewBridge(multi)
 		if err != nil {
 			_ = os.RemoveAll(dir)
@@ -316,8 +355,40 @@ func run(dir string, args []string) (result Result, err error) {
 		value.DecRef()
 	}
 	decRef(inner)
+	result.Facts = readFacts()
 
 	return result, err
+}
+
+// readFacts serializes the facts collected by the callback plugin into Go.
+// Errors are non-fatal: a playbook still succeeds even if facts cannot be
+// extracted, so callers simply see no facts for that run.
+func readFacts() map[string]json.RawMessage {
+	const script = `
+import json as _strangle_facts_json_lib
+import sys as _strangle_facts_sys
+_strangle_facts_module = _strangle_facts_sys.modules.get('strangle_facts_store')
+_strangle_facts_json = _strangle_facts_json_lib.dumps(
+    getattr(_strangle_facts_module, 'facts', {}), sort_keys=True)
+`
+	if rc := cpy.PyRun_SimpleString(script); rc != 0 {
+		return nil
+	}
+	mainMod := cpy.PyImport_AddModule("__main__")
+	value := mainMod.GetAttrString("_strangle_facts_json")
+	if value == nil {
+		return nil
+	}
+	defer value.DecRef()
+	text := cpy.PyUnicode_AsUTF8(value)
+	if text == "" {
+		return nil
+	}
+	out := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		return nil
+	}
+	return out
 }
 
 // pyString renders s as a single-quoted Python string literal.

@@ -82,6 +82,7 @@ func TestDBRoundTrip(t *testing.T) {
 		},
 		ScopeNames: []string{"h1", "h2", "h3"},
 		Inventory:  []store.InventoryHost{{Name: "h1", IP: "10.0.0.1", Groups: []string{"web"}}, {Name: "h2"}, {Name: "h3"}},
+		Facts:      map[string]json.RawMessage{"h1": []byte(`{"ansible_hostname":"h1"}`)},
 	}
 	if err := d.SaveRun(ctx, in); err != nil {
 		t.Fatalf("SaveRun() error: %v", err)
@@ -115,6 +116,9 @@ func TestDBRoundTrip(t *testing.T) {
 	}
 	if got := byName["h1"].Groups; len(got) != 1 || got[0] != "web" {
 		t.Errorf("h1.Groups = %v", byName["h1"].Groups)
+	}
+	if got := string(byName["h1"].Facts); got != `{"ansible_hostname":"h1"}` {
+		t.Errorf("h1.Facts = %s, want the stored JSON blob", got)
 	}
 	if byName["h3"].Active {
 		t.Error("h3 in scope but not in recap, want inactive")

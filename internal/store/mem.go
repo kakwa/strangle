@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"sync"
@@ -70,6 +71,9 @@ func (s *Mem) SaveRun(_ context.Context, in RunInput) error {
 		host.LastStatus = parser.Status(h.Ok, h.Changed, h.Failed, h.Unreachable)
 		host.Active = true
 		host.DisappearedAt = nil
+		if facts := in.Facts[h.Host]; len(facts) > 0 {
+			host.Facts = append(json.RawMessage(nil), facts...)
+		}
 
 		rec := h
 		rec.RunID = run.ID

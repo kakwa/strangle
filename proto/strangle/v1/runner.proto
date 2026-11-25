@@ -50,4 +50,8 @@ message RunPlaybookResponse {
   // error is set when the run failed outside the interpreter (setup, I/O or
   // a closed worker). Empty when the run reached ansible-playbook.
   string error = 3;
+
+  // facts_json is a JSON object mapping host name to its latest
+  // ansible_facts blob, collected by the embedded callback plugin.
+  string facts_json = 4;
 }

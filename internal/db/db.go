@@ -3,6 +3,7 @@ package db
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -47,6 +48,8 @@ type Host struct {
 	LastStatus    string
 	LastChangeAt  *time.Time
 	DisappearedAt *time.Time
+	// Facts is the latest ansible_facts blob (raw JSON) for this host.
+	Facts []byte `gorm:"type:jsonb"`
 }
 
 // HostRun is a host's recap line for one run.
@@ -213,6 +216,9 @@ func (d *DB) SaveRun(ctx context.Context, in store.RunInput) error {
 				"last_status":    status,
 				"active":         true,
 				"disappeared_at": nil,
+			}
+			if facts := in.Facts[h.Host]; len(facts) > 0 {
+				updates["facts"] = []byte(facts)
 			}
 			if err := tx.Model(&Host{}).Where("id = ?", hostIDs[h.Host]).Updates(updates).Error; err != nil {
 				return err
@@ -638,5 +644,6 @@ func fromHostModel(h Host) store.HostRecord {
 		LastStatus:    h.LastStatus,
 		LastChangeAt:  h.LastChangeAt,
 		DisappearedAt: h.DisappearedAt,
+		Facts:         json.RawMessage(h.Facts),
 	}
 }

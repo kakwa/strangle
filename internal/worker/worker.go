@@ -5,6 +5,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"sync"
@@ -67,10 +68,12 @@ func (s *Server) RunPlaybook(ctx context.Context, req *runnerv1.RunPlaybookReque
 	}
 
 	result, runErr := s.runner.RunDir(req.WorkingDir, req.Args...)
+	factsJSON, _ := json.Marshal(result.Facts)
 	return &runnerv1.RunPlaybookResponse{
-		ExitCode: int32(result.ExitCode),
-		Output:   result.Output,
-		Error:    errorString(runErr),
+		ExitCode:  int32(result.ExitCode),
+		Output:    result.Output,
+		Error:     errorString(runErr),
+		FactsJson: string(factsJSON),
 	}, nil
 }
 

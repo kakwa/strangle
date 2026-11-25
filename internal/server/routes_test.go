@@ -74,6 +74,7 @@ func seedRun(t *testing.T, st store.Store, playbook string, success bool) {
 		Hosts:      []store.HostRunRecord{{Host: "web1", Status: "ok", Ok: 3}},
 		Inventory:  []store.InventoryHost{{Name: "web1"}, {Name: "db1"}},
 		ScopeNames: []string{"web1", "db1"},
+		Facts:      map[string]json.RawMessage{"web1": []byte(`{"ansible_hostname":"web1"}`)},
 	})
 	if err != nil {
 		t.Fatalf("SaveRun() error: %v", err)
@@ -162,6 +163,8 @@ func TestGetHosts(t *testing.T) {
 	}
 	if web, ok := byName["web1"]; !ok || !web.Active {
 		t.Errorf("web1 = %+v, want active", web)
+	} else if got := string(web.Facts); got != `{"ansible_hostname":"web1"}` {
+		t.Errorf("web1.Facts = %s, want the stored facts blob", got)
 	}
 	if db, ok := byName["db1"]; !ok || db.Active {
 		t.Errorf("db1 = %+v, want disappeared (not active)", db)

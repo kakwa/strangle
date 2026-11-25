@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -194,6 +195,52 @@ func TestMemSaveRunAndQueries(t *testing.T) {
 	}
 	if perPB["home/site.yml"] != 2 || perPB["other/site.yml"] != 1 {
 		t.Errorf("Stats().PerPlaybook = %v", perPB)
+	}
+}
+
+func TestMemFactsAreRefreshedOnlyWhenPresent(t *testing.T) {
+	ctx := context.Background()
+	s := NewMem()
+	defer s.Close()
+
+	facts := json.RawMessage(`{"ansible_hostname":"web1"}`)
+	in := RunInput{
+		Run:   testRun("home", "site.yml", time.Now().UTC()),
+		Hosts: []HostRunRecord{{Host: "web1", Status: "ok", Ok: 1}},
+		Facts: map[string]json.RawMessage{"web1": facts},
+	}
+	if err := s.SaveRun(ctx, in); err != nil {
+		t.Fatalf("SaveRun() error: %v", err)
+	}
+	host := func() HostRecord {
+		t.Helper()
+		hosts, err := s.ListHosts(ctx)
+		if err != nil || len(hosts) != 1 {
+			t.Fatalf("ListHosts() = %v, %v", hosts, err)
+		}
+		return hosts[0]
+	}
+	if got := string(host().Facts); got != string(facts) {
+		t.Errorf("Facts = %s, want %s", got, facts)
+	}
+
+	in.Run = testRun("home", "site.yml", time.Now().UTC().Add(time.Hour))
+	in.Facts = nil
+	if err := s.SaveRun(ctx, in); err != nil {
+		t.Fatalf("SaveRun() without facts: %v", err)
+	}
+	if got := string(host().Facts); got != string(facts) {
+		t.Errorf("Facts after run without facts = %s, want %s", got, facts)
+	}
+
+	updated := json.RawMessage(`{"ansible_hostname":"web1","os":"linux"}`)
+	in.Run = testRun("home", "site.yml", time.Now().UTC().Add(2*time.Hour))
+	in.Facts = map[string]json.RawMessage{"web1": updated}
+	if err := s.SaveRun(ctx, in); err != nil {
+		t.Fatalf("SaveRun() with updated facts: %v", err)
+	}
+	if got := string(host().Facts); got != string(updated) {
+		t.Errorf("Facts after refresh = %s, want %s", got, updated)
 	}
 }
 

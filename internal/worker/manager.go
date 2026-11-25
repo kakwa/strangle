@@ -5,6 +5,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -483,14 +484,15 @@ func (m *Manager) checkHealth() {
 }
 
 // RunPlaybook dispatches one playbook to the next live worker (round-robin,
-// skipping dead or respawning slots) and returns its exit code and captured
-// output. With sandboxing enabled only workers dedicated to collection are
-// considered. Runs on one worker are serialized inside that worker.
-func (m *Manager) RunPlaybook(ctx context.Context, collection, scope, workingDir string, args ...string) (int, string, error) {
+// skipping dead or respawning slots) and returns its exit code, captured
+// output and per-host facts. With sandboxing enabled only workers dedicated
+// to collection are considered. Runs on one worker are serialized inside
+// that worker.
+func (m *Manager) RunPlaybook(ctx context.Context, collection, scope, workingDir string, args ...string) (int, string, map[string]json.RawMessage, error) {
 	m.mu.Lock()
 	if m.stopping || len(m.slots) == 0 {
 		m.mu.Unlock()
-		return 0, "", fmt.Errorf("no workers available")
+		return 0, "", nil, fmt.Errorf("no workers available")
 	}
 	n := len(m.slots)
 	var s *slot
@@ -512,9 +514,9 @@ func (m *Manager) RunPlaybook(ctx context.Context, collection, scope, workingDir
 	m.mu.Unlock()
 	if cli == nil {
 		if m.sandbox != nil {
-			return 0, "", fmt.Errorf("no worker available for collection %q", collection)
+			return 0, "", nil, fmt.Errorf("no worker available for collection %q", collection)
 		}
-		return 0, "", fmt.Errorf("no workers available")
+		return 0, "", nil, fmt.Errorf("no workers available")
 	}
 	defer func() {
 		m.mu.Lock()
@@ -522,11 +524,11 @@ func (m *Manager) RunPlaybook(ctx context.Context, collection, scope, workingDir
 		m.mu.Unlock()
 	}()
 
-	code, output, err := cli.RunPlaybook(ctx, collection, scope, workingDir, args...)
+	code, output, facts, err := cli.RunPlaybook(ctx, collection, scope, workingDir, args...)
 	if err != nil {
-		return 0, output, err
+		return 0, output, facts, err
 	}
-	return int(code), output, nil
+	return int(code), output, facts, nil
 }
 
 // WorkerStatuses returns one entry per worker slot, with liveness probed

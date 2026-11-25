@@ -49,6 +49,53 @@ func TestRunner(t *testing.T) {
 		}
 	})
 
+	// Local connection avoids SSH for the embedded-interpreter tests below.
+	local := []string{"-i", "localhost,", "-e", "ansible_connection=local"}
+
+	t.Run("facts", func(t *testing.T) {
+		playbook := writePlaybook(t, dir, "facts.yml", `
+- hosts: all
+  gather_facts: true
+  tasks:
+    - name: Use facts
+      ansible.builtin.debug:
+        msg: "hello {{ ansible_hostname }}"
+`)
+		args := append([]string{"--diff"}, append(local, playbook)...)
+		result, err := runner.Run(args...)
+		skipIfAnsibleMissing(t, err)
+		if err != nil {
+			t.Fatalf("Run() error: %v", err)
+		}
+		if result.ExitCode != 0 {
+			t.Fatalf("ExitCode = %d, want 0; output:\n%s", result.ExitCode, result.Output)
+		}
+		facts, ok := result.Facts["localhost"]
+		if !ok || !strings.Contains(string(facts), "ansible_hostname") {
+			t.Fatalf("Facts = %v, want ansible_facts for localhost; output:\n%s", result.Facts, result.Output)
+		}
+	})
+
+	t.Run("facts are not carried between runs", func(t *testing.T) {
+		playbook := writePlaybook(t, dir, "no-facts.yml", `
+- hosts: all
+  gather_facts: false
+  tasks:
+    - name: Say hello
+      ansible.builtin.debug:
+        msg: hello
+`)
+		args := append([]string{"--diff"}, append(local, playbook)...)
+		result, err := runner.Run(args...)
+		skipIfAnsibleMissing(t, err)
+		if err != nil {
+			t.Fatalf("Run() error: %v", err)
+		}
+		if len(result.Facts) != 0 {
+			t.Fatalf("Facts = %v, want no facts; output:\n%s", result.Facts, result.Output)
+		}
+	})
+
 	t.Run("failure", func(t *testing.T) {
 		result, err := runner.Run("--diff", "-i", "localhost,", failPlaybook)
 		skipIfAnsibleMissing(t, err)
@@ -67,8 +114,6 @@ func TestRunner(t *testing.T) {
 	// repeatedly in the same process: --diff output must appear every time
 	// (the CLI args are rebuilt per run) and repeated error messages must
 	// not be swallowed by Ansible's process-wide display deduplication.
-	local := []string{"-i", "localhost,", "-e", "ansible_connection=local"}
-
 	t.Run("diff", func(t *testing.T) {
 		dest := filepath.Join(dir, "diff.txt")
 		playbook := writePlaybook(t, dir, "diff.yml", `
@@ -78,7 +123,7 @@ func TestRunner(t *testing.T) {
     - name: Write marker
       ansible.builtin.copy:
         content: "marker\n"
-        dest: ` + dest + `
+        dest: `+dest+`
 `)
 		_ = os.Remove(dest)
 		result, err := runner.Run(append([]string{"--diff"}, append(local, playbook)...)...)

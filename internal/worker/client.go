@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -86,8 +87,8 @@ func (c *Client) Ping(ctx context.Context) error {
 }
 
 // RunPlaybook dispatches one playbook to the worker and returns its exit
-// code and captured output.
-func (c *Client) RunPlaybook(ctx context.Context, collection, scope, workingDir string, args ...string) (int32, string, error) {
+// code, captured output and per-host facts.
+func (c *Client) RunPlaybook(ctx context.Context, collection, scope, workingDir string, args ...string) (int32, string, map[string]json.RawMessage, error) {
 	res, err := c.cli.RunPlaybook(ctx, &runnerv1.RunPlaybookRequest{
 		Collection: collection,
 		Scope:      scope,
@@ -95,12 +96,24 @@ func (c *Client) RunPlaybook(ctx context.Context, collection, scope, workingDir 
 		Args:       args,
 	})
 	if err != nil {
-		return 0, "", fmt.Errorf("run playbook on worker: %w", err)
+		return 0, "", nil, fmt.Errorf("run playbook on worker: %w", err)
 	}
+	facts := decodeFacts(res.FactsJson)
 	if res.Error != "" {
-		return res.ExitCode, res.Output, fmt.Errorf("%s", res.Error)
+		return res.ExitCode, res.Output, facts, fmt.Errorf("%s", res.Error)
 	}
-	return res.ExitCode, res.Output, nil
+	return res.ExitCode, res.Output, facts, nil
+}
+
+func decodeFacts(raw string) map[string]json.RawMessage {
+	if raw == "" {
+		return nil
+	}
+	facts := map[string]json.RawMessage{}
+	if err := json.Unmarshal([]byte(raw), &facts); err != nil {
+		return nil
+	}
+	return facts
 }
 
 // Close closes the connection to the worker.

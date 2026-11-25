@@ -214,7 +214,7 @@ func TestManagerRunPlaybook(t *testing.T) {
 	ctx := context.Background()
 
 	for i := 0; i < 4; i++ {
-		code, out, err := m.RunPlaybook(ctx, "", "", ".", "-m", "debug")
+		code, out, _, err := m.RunPlaybook(ctx, "", "", ".", "-m", "debug")
 		if err != nil {
 			t.Fatalf("RunPlaybook() error: %v", err)
 		}
@@ -260,11 +260,11 @@ func TestManagerRoutesSandboxedRunsByCollection(t *testing.T) {
 	}
 
 	for _, coll := range []string{"home", "edge"} {
-		if _, _, err := m.RunPlaybook(ctx, coll, "", ".", "-m", "debug"); err != nil {
+		if _, _, _, err := m.RunPlaybook(ctx, coll, "", ".", "-m", "debug"); err != nil {
 			t.Errorf("RunPlaybook(%q) error: %v", coll, err)
 		}
 	}
-	if _, _, err := m.RunPlaybook(ctx, "unknown", "", ".", "-m", "debug"); err == nil {
+	if _, _, _, err := m.RunPlaybook(ctx, "unknown", "", ".", "-m", "debug"); err == nil {
 		t.Error("RunPlaybook(unknown) error = nil, want an error")
 	}
 }
@@ -273,7 +273,7 @@ func TestManagerRunPlaybookAfterStop(t *testing.T) {
 	m := newFakeManager(t, 1, nil)
 	_ = m.Stop()
 
-	_, _, err := m.RunPlaybook(context.Background(), "", "", ".", "-m", "debug")
+	_, _, _, err := m.RunPlaybook(context.Background(), "", "", ".", "-m", "debug")
 	if err == nil || err.Error() != "no workers available" {
 		t.Errorf("RunPlaybook() error = %v, want \"no workers available\"", err)
 	}

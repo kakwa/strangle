@@ -2,6 +2,7 @@ package applier
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -11,9 +12,9 @@ import (
 	"go.uber.org/zap"
 )
 
-type executorFunc func(ctx context.Context, collection, scope, workingDir string, args ...string) (int, string, error)
+type executorFunc func(ctx context.Context, collection, scope, workingDir string, args ...string) (int, string, map[string]json.RawMessage, error)
 
-func (f executorFunc) RunPlaybook(ctx context.Context, collection, scope, workingDir string, args ...string) (int, string, error) {
+func (f executorFunc) RunPlaybook(ctx context.Context, collection, scope, workingDir string, args ...string) (int, string, map[string]json.RawMessage, error) {
 	return f(ctx, collection, scope, workingDir, args...)
 }
 
@@ -52,8 +53,8 @@ func TestFailureNotifiesCollection(t *testing.T) {
 	notifier := &recordingNotifier{}
 	apr := NewAnsible(
 		[]config.TargetConfig{testTarget(t.TempDir())},
-		executorFunc(func(context.Context, string, string, string, ...string) (int, string, error) {
-			return 2, "fatal: boom", nil
+		executorFunc(func(context.Context, string, string, string, ...string) (int, string, map[string]json.RawMessage, error) {
+			return 2, "fatal: boom", nil, nil
 		}),
 		store.NewMem(), zap.NewNop(), notifier,
 	)
@@ -88,8 +89,8 @@ web1 : ok=1    changed=1    unreachable=0    failed=0    skipped=0    rescued=0 
 	st := store.NewMem()
 	apr := NewAnsible(
 		[]config.TargetConfig{testTarget(t.TempDir())},
-		executorFunc(func(context.Context, string, string, string, ...string) (int, string, error) {
-			return 0, output, nil
+		executorFunc(func(context.Context, string, string, string, ...string) (int, string, map[string]json.RawMessage, error) {
+			return 0, output, nil, nil
 		}),
 		st, zap.NewNop(),
 	)
@@ -116,12 +117,60 @@ web1 : ok=1    changed=1    unreachable=0    failed=0    skipped=0    rescued=0 
 	}
 }
 
+func TestFactsAreSavedAndRefreshed(t *testing.T) {
+	const output = `TASK [Gathering Facts] *******
+ok: [web1]
+
+PLAY RECAP *******
+web1 : ok=1    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+`
+	st := store.NewMem()
+	facts := map[string]json.RawMessage{"web1": []byte(`{"ansible_hostname":"web1"}`)}
+	apr := NewAnsible(
+		[]config.TargetConfig{testTarget(t.TempDir())},
+		executorFunc(func(context.Context, string, string, string, ...string) (int, string, map[string]json.RawMessage, error) {
+			return 0, output, facts, nil
+		}),
+		st, zap.NewNop(),
+	)
+	if err := apr.Trigger(context.Background(), "prod", "site"); err != nil {
+		t.Fatalf("Trigger() error: %v", err)
+	}
+
+	hostFact := func() json.RawMessage {
+		t.Helper()
+		hosts, err := st.ListHosts(context.Background())
+		if err != nil || len(hosts) != 1 {
+			t.Fatalf("ListHosts() = %v, %v", hosts, err)
+		}
+		return hosts[0].Facts
+	}
+	if got := string(hostFact()); got != string(facts["web1"]) {
+		t.Errorf("Facts = %s, want %s", got, facts["web1"])
+	}
+
+	// A later run without facts must not erase the last known blob.
+	apr = NewAnsible(
+		[]config.TargetConfig{testTarget(t.TempDir())},
+		executorFunc(func(context.Context, string, string, string, ...string) (int, string, map[string]json.RawMessage, error) {
+			return 0, output, nil, nil
+		}),
+		st, zap.NewNop(),
+	)
+	if err := apr.Trigger(context.Background(), "prod", "site"); err != nil {
+		t.Fatalf("Trigger() error: %v", err)
+	}
+	if got := string(hostFact()); got != string(facts["web1"]) {
+		t.Errorf("Facts after run without facts = %s, want %s", got, facts["web1"])
+	}
+}
+
 func TestSuccessDoesNotNotify(t *testing.T) {
 	notifier := &recordingNotifier{}
 	apr := NewAnsible(
 		[]config.TargetConfig{testTarget(t.TempDir())},
-		executorFunc(func(context.Context, string, string, string, ...string) (int, string, error) {
-			return 0, "ok", nil
+		executorFunc(func(context.Context, string, string, string, ...string) (int, string, map[string]json.RawMessage, error) {
+			return 0, "ok", nil, nil
 		}),
 		store.NewMem(), zap.NewNop(), notifier,
 	)

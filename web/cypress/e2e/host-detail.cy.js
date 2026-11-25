@@ -1,5 +1,5 @@
-// Host detail: bookmarkable URL, runs table, task changes accordion with
-// colored diffs and errors, back navigation.
+// Host detail: bookmarkable URL, latest Ansible facts, runs table, task
+// changes accordion with colored diffs and errors, back navigation.
 describe('Host detail', () => {
   beforeEach(() => {
     cy.login()
@@ -14,6 +14,9 @@ describe('Host detail', () => {
     cy.get('table').contains('td', '#1')
     cy.get('table').contains('td', 'changed')
     cy.get('table').contains('td', 'ok')
+
+    cy.contains('h4', 'Ansible facts')
+    cy.contains('pre', '"ansible_hostname": "web-01"')
   })
 
   it('shows a colored diff for a changed task', () => {
@@ -29,7 +32,7 @@ describe('Host detail', () => {
     // The diff renders in a monospace block with per-line colors.
     cy.contains('pre', 'server_name web01.example.com')
     cy.contains('pre', 'server_name old.example.com')
-    cy.get('pre').first().then(($pre) => {
+    cy.contains('pre', 'server_name web01.example.com').then(($pre) => {
       const colors = new Set()
       for (const span of $pre.find('span')) {
         const c = Cypress.$(span).css('color')

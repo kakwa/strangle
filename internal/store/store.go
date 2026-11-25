@@ -5,6 +5,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 )
@@ -43,6 +44,9 @@ type HostRecord struct {
 	LastStatus    string     `json:"last_status"` // ok | changed | failed | unreachable | ""
 	LastChangeAt  *time.Time `json:"last_change_at,omitempty"`
 	DisappearedAt *time.Time `json:"disappeared_at,omitempty"`
+	// Facts is the latest ansible_facts blob collected for this host. It is
+	// replaced only by a later run that actually returned facts.
+	Facts json.RawMessage `json:"facts,omitempty"`
 }
 
 // HostRunRecord is a host's recap line for one run, joined with the run.
@@ -136,6 +140,9 @@ type RunInput struct {
 	// update their latest-state view from these and append one history row
 	// per result.
 	Tasks []TaskStateRecord
+	// Facts maps each host to its latest ansible_facts blob from this run.
+	// Hosts without facts keep whatever was stored by earlier runs.
+	Facts map[string]json.RawMessage
 	// ScopeNames are the hosts this run was expected to reach (the play
 	// targets resolved against the inventory). Hosts in the scope but absent
 	// from the recap are marked as disappeared.

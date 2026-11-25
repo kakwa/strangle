@@ -128,6 +128,15 @@ Hosts are keyed by `target + name`, so the same host name in two targets is
 two distinct hosts. The web UI merges same-named hosts across targets when
 rendering a single host table.
 
+A worker's embedded interpreter installs the `strangle_facts` Ansible callback
+alongside the Go-managed SSH connection plugin. The callback accumulates every
+`ansible_facts` dictionary returned for a host (including the implicit
+`Gathering Facts` task) in JSON form; the runner passes that per-host map back
+over gRPC with the run output. `SaveRun` refreshes the host's `facts` jsonb
+column only when the new run returned facts, so runs with `gather_facts: false`
+never erase the last known snapshot. Facts are exposed on the authenticated
+host endpoints and rendered in the host detail view.
+
 ## Git-backed collections
 
 `internal/collection` keeps the checkouts of git-backed targets, pinned to
