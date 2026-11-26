@@ -84,7 +84,7 @@ and cannot modify its own checkout. The policy uses
 `go-landlock`'s best-effort mode: older kernels enforce as much of it as they
 can, and kernels without Landlock log a warning and run without isolation.
 `config/server.yml` contains a commented example. The
-[validating collection](../tests/sandbox/validate/README.md) can be added to a
+[validating collection](../../tests/sandbox/validate/README.md) can be added to a
 collection.yml to verify the isolation from inside a worker.
 
 ## UI authentication
@@ -142,7 +142,7 @@ all orgs/collections. As with users, the command group reads the DSN from `-s`
   being queried; `--token` overrides the configured value.
 
 See [the API reference](api.md#collection-resources) for the
-collection-scoped token endpoints and [the CLI section](../README.md#cli-client)
+collection-scoped token endpoints and [the CLI section](../../README.md#cli-client)
 for the commands.
 
 ## collection.yml

@@ -30,7 +30,7 @@ named `worker-<id>.sock`. The directory and stale sockets are removed on stop.
 
 ## The worker protocol
 
-`internal/worker` defines a two-method JSON-RPC service on the worker's unix
+`controller/worker` defines a two-method JSON-RPC service on the worker's unix
 socket (`rpc_*.go`). It uses only the standard library (`net/rpc` with the
 `net/rpc/jsonrpc` codec): there is no schema and no generated code.
 
@@ -81,9 +81,9 @@ are no aggregate run/host stats in the API or the store.
 ## Job flow
 
 Runs flow through a postgres-backed [River](https://github.com/riverqueue/river)
-queue (`internal/riverqueue`):
+queue (`controller/worker/riverqueue`):
 
-- The scheduler (`internal/scheduler`) owns one timer per (target, playbook)
+- The scheduler (`controller/scheduler`) owns one timer per (target, playbook)
   pair. A job's `schedule` is a robfig/cron v3 expression (or descriptor), or
   it inherits the server fallback; it waits for its first tick after the
   master starts. The live job list is reconciled every ten seconds, so a git
@@ -99,25 +99,25 @@ queue (`internal/riverqueue`):
 - The River client runs on its own context: a `SIGTERM` must not hard-cancel
   in-flight runs; shutdown drains the queue instead (see below).
 - River tables hold only queue metadata (job state, attempts, timestamps).
-  The applier writes every result through `db.Store` into the run-history
+  The applier writes every result through `model.Store` into the run-history
   tables: `runs`, `host_runs`, `task_states` and `task_run_results`.
 
 ## The applier
 
-`internal/applier` receives the run from a River worker, dispatches it to the
+`controller/applier` receives the run from a River worker, dispatches it to the
 worker pool through the `Executor` interface, parses the captured output
 (recap, per-task status, diffs, errors), parses the target's inventory in
-`inventory.go`, and records everything through the `db.Store` interface.
+`inventory.go`, and records everything through the `model.Store` interface.
 
 After a git sync, the master calls `UpdateTargets` with the reloaded targets,
 so a branch switch or a changed `strangle.yml` takes effect from the next run.
 
 ## The store
 
-`db.Store` is the persistence interface. Its only implementation is
-`internal/db` — GORM on PostgreSQL, with tables for runs, per-host recap
+`model.Store` is the persistence interface. Its only implementation is
+`model` — GORM on PostgreSQL, with tables for runs, per-host recap
 lines, append-only per-task results, per-task latest state and hosts. There is
-no in-memory fallback; `internal/db` also defines the interface and shared
+no in-memory fallback; `model` also defines the interface and shared
 value types.
 
 Every task result parsed from a run is appended to task history, keeping every
@@ -130,7 +130,7 @@ Hosts are keyed by `target + name`, so the same host name in two targets is
 two distinct hosts. The web UI merges same-named hosts across targets when
 rendering a single host table.
 
-`internal/maintenance` runs retention in the master as a ticker-driven task.
+`controller/maintenance` runs retention in the master as a ticker-driven task.
 It calls `PruneRuns` once at startup and then on the configured interval,
 using the server policy or a per-collection override. Only finished runs are
 eligible; queued and running runs stay so a job cannot recreate a purged
@@ -156,9 +156,9 @@ host endpoints and rendered in the host detail view.
 
 ## Git-backed collections
 
-`internal/collection` keeps the checkouts of git-backed targets, pinned to
+`collection` keeps the checkouts of git-backed targets, pinned to
 their tracked ref. All git operations are in-process (go-git, see
-`internal/git`); no system `git` binary is invoked. Startup clones (or fetches
+`utils/git`); no system `git` binary is invoked. Startup clones (or fetches
 and updates) the checkouts; the collection `hook` endpoint moves a checkout to
 its tracked ref — or to a supplied branch, which becomes the new tracked ref —
 and reloads the target's `strangle.yml`. See

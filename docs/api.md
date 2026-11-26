@@ -74,7 +74,7 @@ and collection ownership can be layered on the same membership table later.
 
 The machine-readable OpenAPI 3.1 document is generated at build time by
 `swaggo/swag` v2 from annotations on the versioned API in
-`internal/server/handlers`. Only the canonical `/api/v1` routes are documented:
+`controller`. Only the canonical `/api/v1` routes are documented:
 
 - `GET /api/v1/openapi.json` — the generated OpenAPI 3.1 JSON document.
 - `GET /api/docs` — Swagger UI, initialized from the document above.
