@@ -12,6 +12,7 @@ import (
 
 	gogit "github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/plumbing/object"
 	"go.uber.org/zap"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -19,7 +20,7 @@ import (
 	"github.com/kakwa/strangle/utils/cfg"
 )
 
-var testSig = &plumbing.Signature{
+var testSig = &object.Signature{
 	Name:  "strangle-test",
 	Email: "strangle-test@example.com",
 	When:  time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
