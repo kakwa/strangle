@@ -10,7 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"sync/atomic"
-	"testing"
+
+	"github.com/onsi/ginkgo/v2"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // register the pgx database/sql driver
 	"github.com/kakwa/strangle/model"
@@ -20,20 +21,18 @@ var dbCounter atomic.Uint64
 
 var unsafeDBName = regexp.MustCompile(`[^a-z0-9_]+`)
 
-// TestDSN creates a fresh PostgreSQL database for one test and returns its
+// TestDSN creates a fresh PostgreSQL database for one spec and returns its
 // DSN. The base DSN comes from STRANGLE_TEST_DSN; each call gets its own
-// database so packages can run in parallel without sharing tables. Tests skip
-// when no DSN is configured.
-func TestDSN(t *testing.T, label string) string {
-	t.Helper()
-
+// database so packages can run in parallel without sharing tables. Specs skip
+// when no DSN is configured. The database is dropped when the spec ends.
+func TestDSN(label string) string {
 	base := os.Getenv("STRANGLE_TEST_DSN")
 	if base == "" {
-		t.Skip("STRANGLE_TEST_DSN not set")
+		ginkgo.Skip("STRANGLE_TEST_DSN not set")
 	}
 	u, err := url.Parse(base)
 	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Host == "" {
-		t.Fatalf("STRANGLE_TEST_DSN must be a PostgreSQL URL, got %q", base)
+		ginkgo.Fail(fmt.Sprintf("STRANGLE_TEST_DSN must be a PostgreSQL URL, got %q", base))
 	}
 
 	clean := unsafeDBName.ReplaceAllString(strings.ToLower(label), "_")
@@ -48,13 +47,13 @@ func TestDSN(t *testing.T, label string) string {
 	adminURL.RawPath = ""
 	admin, err := sql.Open("pgx", adminURL.String())
 	if err != nil {
-		t.Fatalf("open admin database: %v", err)
+		ginkgo.Fail(fmt.Sprintf("open admin database: %v", err))
 	}
 	if _, err := admin.ExecContext(context.Background(), fmt.Sprintf("CREATE DATABASE %s", quoteIdent(name))); err != nil {
 		_ = admin.Close()
-		t.Fatalf("create test database %q: %v", name, err)
+		ginkgo.Fail(fmt.Sprintf("create test database %q: %v", name, err))
 	}
-	t.Cleanup(func() {
+	ginkgo.DeferCleanup(func() {
 		_, _ = admin.ExecContext(context.Background(), fmt.Sprintf("DROP DATABASE IF EXISTS %s WITH (FORCE)", quoteIdent(name)))
 		_ = admin.Close()
 	})
@@ -66,31 +65,29 @@ func TestDSN(t *testing.T, label string) string {
 }
 
 // OpenDB creates a fresh PostgreSQL database, migrates the schema and returns
-// a store backed by it.
-func OpenDB(t *testing.T, label string) *model.DB {
-	t.Helper()
-	dsn := TestDSN(t, label)
+// a store backed by it. The database is dropped when the spec ends.
+func OpenDB(label string) *model.DB {
+	dsn := TestDSN(label)
 	d, err := model.Open(context.Background(), dsn)
 	if err != nil {
-		t.Fatalf("open test database: %v", err)
+		ginkgo.Fail(fmt.Sprintf("open test database: %v", err))
 	}
 	return d
 }
 
 // SQLDB opens a database/sql handle on the given test database. Integration
 // tests use it for the few cases that need to inspect rows directly rather
-// than through the store API.
-func SQLDB(t *testing.T, dsn string) *sql.DB {
-	t.Helper()
+// than through the store API. The handle is closed when the spec ends.
+func SQLDB(dsn string) *sql.DB {
 	conn, err := sql.Open("pgx", dsn)
 	if err != nil {
-		t.Fatalf("open test database: %v", err)
+		ginkgo.Fail(fmt.Sprintf("open test database: %v", err))
 	}
 	if err := conn.PingContext(context.Background()); err != nil {
 		_ = conn.Close()
-		t.Fatalf("ping test database: %v", err)
+		ginkgo.Fail(fmt.Sprintf("ping test database: %v", err))
 	}
-	t.Cleanup(func() { _ = conn.Close() })
+	ginkgo.DeferCleanup(func() { _ = conn.Close() })
 	return conn
 }
 

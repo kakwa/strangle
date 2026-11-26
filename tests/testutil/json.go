@@ -3,21 +3,18 @@ package testutil
 import (
 	"encoding/json"
 	"reflect"
-	"testing"
 )
 
-// AssertJSONEqual compares JSON documents semantically: PostgreSQL's jsonb
-// normalizes whitespace and key order, so raw string equality is too strict.
-func AssertJSONEqual(t *testing.T, got, want []byte) {
-	t.Helper()
+// JSONEqual reports whether two JSON documents are semantically equal.
+// PostgreSQL's jsonb normalizes whitespace and key order, so raw string
+// equality is too strict.
+func JSONEqual(got, want []byte) bool {
 	var gotValue, wantValue any
 	if err := json.Unmarshal(got, &gotValue); err != nil {
-		t.Fatalf("decode got JSON %q: %v", got, err)
+		return false
 	}
 	if err := json.Unmarshal(want, &wantValue); err != nil {
-		t.Fatalf("decode want JSON %q: %v", want, err)
+		return false
 	}
-	if !reflect.DeepEqual(gotValue, wantValue) {
-		t.Errorf("JSON = %s, want %s", got, want)
-	}
+	return reflect.DeepEqual(gotValue, wantValue)
 }
