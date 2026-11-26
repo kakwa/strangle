@@ -41,4 +41,4 @@ kernel" warning: without Landlock the worker still runs, but no isolation is
 enforced.
 
 The same checks are exercised automatically by
-`internal/sandbox.TestLandlockIsolation` when the kernel supports Landlock.
+`security/sandbox.TestLandlockIsolation` when the kernel supports Landlock.

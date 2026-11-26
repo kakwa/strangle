@@ -29,16 +29,16 @@ go.work.sum
 # Built binaries
 /bin/
 
-# Web (vite): build output is embedded into the binary; the placeholder
-# dist/index.html is committed so a plain `go build` works before `make web`.
+# UI (vite): build output is embedded into the binary; the placeholder
+# dist/index.html is committed so a plain `go build` works before `make ui`.
 node_modules/
-web/dist/*
-!web/dist/index.html
+ui/dist/*
+!ui/dist/index.html
 
 # Cypress run artifacts
-web/cypress/videos/
-web/cypress/screenshots/
-web/cypress/downloads/
+ui/cypress/videos/
+ui/cypress/screenshots/
+ui/cypress/downloads/
 
 # Generated SSH host-key state (per-playbook scope files)
 strangle.*.known_hosts
@@ -57,4 +57,5 @@ hostkeys.pending.json
 # .vscode/
 
 # swagger stuff
-docs/docs.go
+api/docs/docs.go
+api/docs/swagger*

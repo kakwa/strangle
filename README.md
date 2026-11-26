@@ -21,7 +21,7 @@ The server binary (`strangle-server serve`) owns the configuration, the HTTP API
 and the schedule. It spawns a pool of worker child processes
 (`strangle-server worker`), each owning one embedded Ansible interpreter, and
 dispatches playbook runs to them over unix sockets using a small JSON-RPC
-protocol in `internal/worker` (no code generation).
+protocol in `controller/worker` (no code generation).
 A master supervises the workers: health pings and automatic restarts with
 backoff. Worker state is observable through the public Prometheus `/metrics`
 endpoint and the web UI's Monitor tab.
@@ -39,9 +39,9 @@ tracked ref (branch, tag or commit); the collection `hook` endpoint is a
 webhook that re-syncs a target — optionally switching the tracked branch —
 and reloads its `strangle.yml`, so per-branch content takes effect immediately.
 
-The details: [architecture](docs/architecture.md), [configuration reference](docs/configuration.md),
-[API reference](docs/api.md), [git-backed collections](docs/git-collections.md),
-[the Go-managed SSH transport](docs/ssh-transport.md), including short-lived
+The details: [architecture](api/docs/architecture.md), [configuration reference](api/docs/configuration.md),
+[API reference](api/docs/api.md), [git-backed collections](api/docs/git-collections.md),
+[the Go-managed SSH transport](api/docs/ssh-transport.md), including short-lived
 user certificates signed by a local CA or by Vault through AppRole.
 
 ## Layout
@@ -49,27 +49,29 @@ user certificates signed by a local CA or by Vault through AppRole.
 ```
 cmd/strangle-server/ server entrypoint: config, wiring, worker subcommand, graceful shutdown
 cmd/strangle-cli/    client entrypoint: API client and account/token/access commands
-internal/
+api/                 HTTP API: Echo transport, auth middleware, routes, /metrics,
+                     OpenAPI docs and the built-in UI
+  docs/              documentation (architecture, configuration, API) and the
+                     generated OpenAPI 3.1 package (swaggo)
+controller/          HTTP handlers and swaggo annotations
   applier/           embedded CPython runner, output parser and result recording
-  cfg/               YAML config: server.yml, collection.yml, per-target strangle.yml
-  collection/        git-backed targets: clone, pin to tracked ref, sync, reload
-  git/               in-process git operations (go-git), no system git binary
-  schedule/          parses robfig/cron v3 expressions and descriptors
-  scheduler/         runs each job on its own schedule (live job list)
-  riverqueue/        postgres-backed River job queue for playbook runs
-  server/            HTTP API, /metrics and the built web UI
-  sshpool/           Go-managed persistent SSH connections with host-key policies
-  store/             run records and the Store interface
-  db/                GORM/PostgreSQL implementation of the Store
   maintenance/       periodic run retention and stale-host cleanup
+  scheduler/         runs each job on its own schedule (live job list)
   worker/            worker pool, JSON-RPC transport and the worker service
-integration_test/     DB, API, queue and Ansible suites (external test packages)
-web/                 React (Vite) web UI, styled with Mantine; built assets are
-                     embedded into the binary (go:embed)
-config/              base configuration, loaded by default
-  server.yml           process-level settings (listen address, schedule, DSN)
-  collection.yml       the list of Ansible projects (targets) to apply
-tests/               test/demo configurations and their Ansible playbooks
+    riverqueue/      postgres-backed River job queue for playbook runs
+model/               GORM/PostgreSQL store, run records and shared value types
+collection/          git-backed targets: clone, pin to tracked ref, sync, reload
+security/
+  auth/              local accounts, sessions, scoped tokens and collection access
+  sandbox/           Landlock sandboxing for worker child processes
+utils/
+  cfg/               YAML config: server.yml, collection.yml, per-target strangle.yml
+  git/               in-process git operations (go-git), no system git binary
+  logger/            zap logger construction
+  sshpool/           Go-managed persistent SSH connections with host-key policies
+tests/
+  integration_test/  DB, API, queue and Ansible suites (external test packages)
+  testutil/          shared test helpers (store setup, JSON fixtures)
   config/
     strangle.yml         sample per-target configuration (reference)
   demo/                self-contained demo target (applies a playbook to
@@ -86,7 +88,11 @@ tests/               test/demo configurations and their Ansible playbooks
     validate.yml             the validation playbook
     inventory.ini            local inventory
     secret.txt               the collection's own secret
-docs/                documentation: architecture, configuration, API, git collections
+ui/                  React (Vite) web UI, styled with Mantine; built assets are
+                     embedded into the binary (go:embed)
+config/              base configuration, loaded by default
+  server.yml           process-level settings (listen address, schedule, DSN)
+  collection.yml       the list of Ansible projects (targets) to apply
 ```
 
 ## What is stored
@@ -144,7 +150,7 @@ Everything is under `/api/v1`; the old flat `/api/*` routes were removed.
 - `GET /api/v1/orgs/{org}/collections/{collection}/playbooks/{playbook}/hosts/{host}/runs?limit=N`
   — the last runs of that host in that playbook (default 10)
 
-Full request/response examples: [docs/api.md](docs/api.md), or the served
+Full request/response examples: [api/docs/api.md](api/docs/api.md), or the served
 Swagger UI at `/api/docs` backed by `/api/v1/openapi.json`. The server routes
 requests with Echo, and the document is generated from swaggo/swag v2
 annotations by `make swag`.
@@ -204,7 +210,7 @@ With `sandbox.enabled: true`, Landlock confines each worker to one collection:
 playbooks cannot read another collection's credentials or modify their own
 checkout. Ansible writes are redirected to a per-worker scratch directory.
 A [validating collection](tests/sandbox/validate/README.md) is provided to verify
-the isolation. See [configuration](docs/configuration.md#collection-sandboxing).
+the isolation. See [configuration](api/docs/configuration.md#collection-sandboxing).
 
 ### UI authentication
 
@@ -329,7 +335,7 @@ may use `{{ .Branch }}` and `{{ .Name }}` templates, e.g.
 
 The full reference — schedule syntax, every option, the Go-managed SSH
 transport and its host-key policies — is in
-[docs/configuration.md](docs/configuration.md).
+[api/docs/configuration.md](api/docs/configuration.md).
 
 ## Running
 
@@ -340,11 +346,11 @@ headers and Ansible importable from that Python. The `make` targets configure
 set `PKG_CONFIG` yourself).
 
 The web UI is built with Vite and **embedded into the server binary**
-(`go:embed`), so `bin/strangle-server` is self-contained — no `web/dist` needed
+(`go:embed`), so `bin/strangle-server` is self-contained — no `ui/dist` needed
 at runtime. `make build` rebuilds the UI before compiling both binaries.
 
 ```sh
-# build the UI (into web/dist), then the server and client binaries
+# build the UI (into ui/dist), then the server and client binaries
 make build
 ./bin/strangle-server serve         # reads ./config/server.yml and ./config/collection.yml
 ./bin/strangle-cli hosts demo       # talks to the server through its API
@@ -353,10 +359,10 @@ make build
 ./bin/strangle-server serve -s config/server.yml -c config/collection.yml
 
 # web UI (development): Vite dev server on :5173, proxies /api to :8080
-make web-dev
+make ui-dev
 
-# web UI (production): build into web/dist only
-make web
+# web UI (production): build into ui/dist only
+make ui
 ```
 
 ### Shutdown

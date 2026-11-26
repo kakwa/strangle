@@ -16,21 +16,21 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/kakwa/strangle/internal/applier"
-	"github.com/kakwa/strangle/internal/auth"
-	"github.com/kakwa/strangle/internal/cfg"
-	"github.com/kakwa/strangle/internal/collection"
-	"github.com/kakwa/strangle/internal/db"
-	"github.com/kakwa/strangle/internal/maintenance"
-	"github.com/kakwa/strangle/internal/riverqueue"
-	"github.com/kakwa/strangle/internal/sandbox"
-	"github.com/kakwa/strangle/internal/scheduler"
-	"github.com/kakwa/strangle/internal/server"
-	"github.com/kakwa/strangle/internal/sshpool"
-	"github.com/kakwa/strangle/internal/worker"
+	"github.com/kakwa/strangle/api"
+	"github.com/kakwa/strangle/controller/applier"
+	"github.com/kakwa/strangle/controller/collection"
+	"github.com/kakwa/strangle/controller/maintenance"
+	"github.com/kakwa/strangle/controller/scheduler"
+	"github.com/kakwa/strangle/controller/worker"
+	"github.com/kakwa/strangle/controller/worker/riverqueue"
+	"github.com/kakwa/strangle/model"
+	"github.com/kakwa/strangle/security/auth"
+	"github.com/kakwa/strangle/security/sandbox"
+	"github.com/kakwa/strangle/utils/cfg"
+	"github.com/kakwa/strangle/utils/logger"
+	"github.com/kakwa/strangle/utils/sshpool"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 )
 
 var (
@@ -73,7 +73,7 @@ func serveCmd() *cobra.Command {
 		Short: "Start the strangle server (master process).",
 		RunE:  run,
 	}
-	cmd.Flags().StringVarP(&serverConfigPath, "server-config", "s", "config/server.yml", "path to the server configuration file")
+	cmd.Flags().StringVarP(&serverConfigPath, "server-config", "s", "config/api.yml", "path to the server configuration file")
 	cmd.Flags().StringVarP(&collectionConfigPath, "collection-config", "c", "config/collection.yml", "path to the collection configuration file")
 	return cmd
 }
@@ -87,7 +87,7 @@ func workerCmd() *cobra.Command {
 		RunE:  runWorker,
 	}
 	cmd.Flags().StringVar(&socketPath, "socket", "", "unix socket path to serve the worker JSON-RPC API on (required)")
-	cmd.Flags().StringVarP(&serverConfigPath, "server-config", "s", "config/server.yml", "path to the server configuration file")
+	cmd.Flags().StringVarP(&serverConfigPath, "server-config", "s", "config/api.yml", "path to the server configuration file")
 	cmd.Flags().StringVarP(&collectionConfigPath, "collection-config", "c", "config/collection.yml", "path to the collection configuration file")
 	cmd.Flags().StringVar(&sandboxManifestPath, "sandbox", "", "Landlock manifest written by the master (internal use)")
 	_ = cmd.MarkFlagRequired("socket")
@@ -100,21 +100,21 @@ func run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	logger, err := newLogger(conf.Server.LogLevel)
+	lg, err := logger.New(conf.Server.LogLevel)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = logger.Sync() }()
+	defer func() { _ = lg.Sync() }()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
 	// Git-backed targets are cloned into their configured path and pinned
 	// to their tracked ref. A failure is reported, not fatal: the target
 	// can be synced later through the collection hook endpoint.
-	collMgr := collection.New(conf.Targets, logger)
+	collMgr := collection.New(conf.Targets, lg)
 	if collMgr.HasGit() {
 		if err := collMgr.InitialSync(ctx); err != nil {
-			logger.Error("collection sync failed at startup", zap.Error(err))
+			lg.Error("collection sync failed at startup", zap.Error(err))
 		}
 	}
 
@@ -135,7 +135,7 @@ func run(cmd *cobra.Command, args []string) error {
 	workerOpts := []worker.ManagerOption{}
 	if conf.Server.Sandbox.Enabled {
 		if !sandbox.KernelSupported() {
-			logger.Warn("Landlock is not supported by this kernel: collection sandboxing will not be enforced")
+			lg.Warn("Landlock is not supported by this kernel: collection sandboxing will not be enforced")
 		}
 		manifests, err := sandbox.Build(conf.Server.Sandbox, collMgr.Targets(), serverConfigPath, collectionConfigPath)
 		if err != nil {
@@ -143,7 +143,7 @@ func run(cmd *cobra.Command, args []string) error {
 		}
 		workerOpts = append(workerOpts, worker.WithSandbox(manifests))
 	}
-	mgr, err := worker.NewManager(ctx, binPath, serverConfigPath, collectionConfigPath, conf.Server.Workers, logger, workerOpts...)
+	mgr, err := worker.NewManager(ctx, binPath, serverConfigPath, collectionConfigPath, conf.Server.Workers, lg, workerOpts...)
 	if err != nil {
 		return fmt.Errorf("failed to start workers: %w", err)
 	}
@@ -152,15 +152,31 @@ func run(cmd *cobra.Command, args []string) error {
 	mgr.Start(ctx)
 	go func() {
 		<-mgr.Down()
-		logger.Error("a worker slot is permanently down; playbook runs will fail until the master is restarted")
+		lg.Error("a worker slot is permanently down; playbook runs will fail until the master is restarted")
 	}()
 
+	var (
+		d     *model.DB
+		queue *riverqueue.Client
+	)
+	// fail stops everything started so far, in reverse order, before
+	// returning err.
+	fail := func(format string, err error) error {
+		if queue != nil {
+			queue.Close()
+		}
+		if d != nil {
+			warnOn(lg, "failed to close store", d.Close())
+		}
+		warnOn(lg, "failed to stop workers", mgr.Stop())
+		return fmt.Errorf(format, err)
+	}
+
 	dctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	d, err := db.Open(dctx, conf.Server.Database.DSN)
+	d, err = model.Open(dctx, conf.Server.Database.DSN)
 	cancel()
 	if err != nil {
-		_ = mgr.Stop()
-		return fmt.Errorf("failed to open database: %w", err)
+		return fail("failed to open database: %w", err)
 	}
 
 	// collection.yml (including any git checkout refreshed above) is the
@@ -170,33 +186,27 @@ func run(cmd *cobra.Command, args []string) error {
 	err = d.SyncCollections(dctx, collMgr.Targets())
 	cancel()
 	if err != nil {
-		_ = mgr.Stop()
-		_ = d.Close()
-		return fmt.Errorf("failed to load collections into database: %w", err)
+		return fail("failed to load collections into database: %w", err)
 	}
 
-	var st db.Store = d
+	var st model.Store = d
 	var users auth.UserStore = d.Users()
 	var tokens auth.TokenStore = d.Tokens()
 	var access auth.CollectionAccess = d.Access()
 
-	apr := applier.NewAnsible(collMgr.Targets(), mgr, st, logger)
+	apr := applier.NewAnsible(collMgr.Targets(), mgr, st, lg)
 
 	// Playbook runs flow through a postgres-backed River queue and a River
 	// client in this process dispatches them to the worker pool. The
 	// scheduler below decides when each individual (target, playbook) pair
 	// runs.
-	queue, err := riverqueue.Open(ctx, conf.Server.Database.DSN, conf.Server.Workers, func(ctx context.Context, target, playbook string, runID uint64, check bool) error {
+	queue, err = riverqueue.Open(ctx, conf.Server.Database.DSN, conf.Server.Workers, func(ctx context.Context, target, playbook string, runID uint64, check bool) error {
 		return apr.Trigger(applier.WithCheck(applier.WithRunID(ctx, runID), check), target, playbook)
-	}, logger)
+	}, lg)
 	if err != nil {
-		_ = mgr.Stop()
-		if closeErr := d.Close(); closeErr != nil {
-			logger.Warn("failed to close store after queue error", zap.Error(closeErr))
-		}
-		return fmt.Errorf("failed to initialize job queue: %w", err)
+		return fail("failed to initialize job queue: %w", err)
 	}
-	var enqueue server.RunEnqueuer = queue
+	var enqueue api.RunEnqueuer = queue
 
 	// Read the live target list on every reconcile: git-backed targets gain
 	// (or change) their playbooks and schedules only after a sync.
@@ -214,7 +224,7 @@ func run(cmd *cobra.Command, args []string) error {
 		return jobs
 	}
 	runScheduled := func(ctx context.Context, target, playbook string) error {
-		record := db.RunRecord{Target: target, Playbook: playbook, State: db.RunStateQueued}
+		record := model.RunRecord{Target: target, Playbook: playbook, State: model.RunStateQueued}
 		if err := st.CreateRun(ctx, &record); err != nil {
 			return err
 		}
@@ -224,18 +234,18 @@ func run(cmd *cobra.Command, args []string) error {
 		}
 		record.JobID = jobID
 		if err := st.UpdateRun(ctx, record); err != nil {
-			logger.Warn("failed to store job ID for scheduled run", zap.Uint64("run", record.ID), zap.Error(err))
+			lg.Warn("failed to store job ID for scheduled run", zap.Uint64("run", record.ID), zap.Error(err))
 		}
 		return nil
 	}
-	sched := scheduler.New(conf.Server.Schedule, jobProvider, runScheduled, logger)
-	var syncer server.Syncer
+	sched := scheduler.New(conf.Server.Schedule, jobProvider, runScheduled, lg)
+	var syncer api.Syncer
 	if collMgr.HasGit() {
 		syncer = collMgr
 	}
-	srv := server.New(conf.Server.ListenAddr, apr, st, multi, enqueue, mgr, syncer, users, tokens, conf.Server.Auth.Token, logger,
-		server.WithCollectionAccess(access),
-		server.WithTLS(conf.Server.TLS.CertFile, conf.Server.TLS.KeyFile))
+	srv := api.New(conf.Server.ListenAddr, apr, st, multi, enqueue, mgr, syncer, users, tokens, conf.Server.Auth.Token, lg,
+		api.WithCollectionAccess(access),
+		api.WithTLS(conf.Server.TLS.CertFile, conf.Server.TLS.KeyFile))
 
 	done := make(chan struct{})
 	go func() {
@@ -244,21 +254,19 @@ func run(cmd *cobra.Command, args []string) error {
 	}()
 
 	retentionDone := maintenance.Start(ctx,
-		maintenance.NewRetention(st, conf.Server.Retention, collMgr.Targets, logger))
+		maintenance.NewRetention(st, conf.Server.Retention, collMgr.Targets, lg))
 	cleanupDone := maintenance.Start(ctx,
-		maintenance.NewHostCleanup(st, conf.Server.HostCleanup, collMgr.Targets, logger))
+		maintenance.NewHostCleanup(st, conf.Server.HostCleanup, collMgr.Targets, lg))
 
 	// The queue runs on its own context, not the signal context: a SIGTERM
 	// must not hard-cancel in-flight runs; Stop drains them.
 	queueCtx, cancelQueue := context.WithCancel(context.Background())
 	defer cancelQueue()
 	if err := queue.Start(queueCtx); err != nil {
-		queue.Close()
-		_ = mgr.Stop()
-		return fmt.Errorf("failed to start job queue: %w", err)
+		return fail("failed to start job queue: %w", err)
 	}
 
-	logger.Info("starting strangle",
+	lg.Info("starting strangle",
 		zap.String("addr", conf.Server.ListenAddr),
 		zap.String("default_schedule", conf.Server.Schedule),
 		zap.Int("scheduled_jobs", len(jobProvider())),
@@ -267,12 +275,12 @@ func run(cmd *cobra.Command, args []string) error {
 		zap.Strings("targets", apr.TargetNames()),
 	)
 	if err := srv.ListenAndServe(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Error("server failed", zap.Error(err))
-		shutdown(stop, done, retentionDone, cleanupDone, mgr, st, queue, logger)
+		lg.Error("server failed", zap.Error(err))
+		shutdown(stop, done, retentionDone, cleanupDone, mgr, st, queue, lg)
 		return err
 	}
-	shutdown(stop, done, retentionDone, cleanupDone, mgr, st, queue, logger)
-	logger.Info("strangle stopped")
+	shutdown(stop, done, retentionDone, cleanupDone, mgr, st, queue, lg)
+	lg.Info("strangle stopped")
 	return nil
 }
 
@@ -312,15 +320,15 @@ func runWorker(cmd *cobra.Command, args []string) error {
 		conf.Targets = owned
 	}
 
-	logger, err := newLogger(conf.Server.LogLevel)
+	lg, err := logger.New(conf.Server.LogLevel)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = logger.Sync() }()
+	defer func() { _ = lg.Sync() }()
 
 	if sandboxManifestPath != "" {
 		if !sandbox.KernelSupported() {
-			logger.Warn("Landlock is not supported by this kernel: sandboxing is not enforced")
+			lg.Warn("Landlock is not supported by this kernel: sandboxing is not enforced")
 		}
 		if err := sandbox.Apply(manifest); err != nil {
 			return fmt.Errorf("apply sandbox: %w", err)
@@ -330,9 +338,9 @@ func runWorker(cmd *cobra.Command, args []string) error {
 	// The worker shares the master's checkouts: resolve the playbooks of
 	// git-backed targets from disk so its SSH managers match what the
 	// master will dispatch. Reload does not touch git.
-	collMgr := collection.New(conf.Targets, logger)
+	collMgr := collection.New(conf.Targets, lg)
 	if err := collMgr.Reload(); err != nil {
-		logger.Error("failed to fully resolve collection for worker", zap.Error(err))
+		lg.Error("failed to fully resolve collection for worker", zap.Error(err))
 	}
 
 	multi, err := sshpool.BuildMulti(collMgr.Targets())
@@ -352,50 +360,30 @@ func runWorker(cmd *cobra.Command, args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	logger.Info("starting worker", zap.Int("pid", os.Getpid()), zap.String("socket", socketPath))
-	return worker.Serve(ctx, socketPath, srv, logger, 10*time.Second)
-}
-
-// newLogger builds a JSON logger on stderr at the given level.
-func newLogger(level string) (*zap.Logger, error) {
-	var lvl zapcore.Level
-	switch level {
-	case "debug":
-		lvl = zap.DebugLevel
-	case "info":
-		lvl = zap.InfoLevel
-	case "warn":
-		lvl = zap.WarnLevel
-	case "error":
-		lvl = zap.ErrorLevel
-	default:
-		return nil, fmt.Errorf("unknown log level %q", level)
-	}
-	conf := zap.NewProductionConfig()
-	conf.Level = zap.NewAtomicLevelAt(lvl)
-	conf.EncoderConfig.TimeKey = "ts"
-	return conf.Build()
+	lg.Info("starting worker", zap.Int("pid", os.Getpid()), zap.String("socket", socketPath))
+	return worker.Serve(ctx, socketPath, srv, lg, 10*time.Second)
 }
 
 // shutdown stops the scheduler, drains the job queue (waiting for in-flight
 // playbook runs to finish and be recorded), then terminates the workers and
 // closes the store in that order: in-progress runs may still be writing to
 // the store while they finish, and they run inside the worker processes.
-func shutdown(stop context.CancelFunc, done, retentionDone, cleanupDone <-chan struct{}, mgr *worker.Manager, st db.Store, queue *riverqueue.Client, logger *zap.Logger) {
+func shutdown(stop context.CancelFunc, done, retentionDone, cleanupDone <-chan struct{}, mgr *worker.Manager, st model.Store, queue *riverqueue.Client, lg *zap.Logger) {
 	stop()
 	<-done
 	<-retentionDone
 	<-cleanupDone
 	qctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	if err := queue.Stop(qctx); err != nil {
-		logger.Warn("job queue did not drain in time", zap.Error(err))
-	}
+	warnOn(lg, "job queue did not drain in time", queue.Stop(qctx))
 	cancel()
 	queue.Close()
-	if err := mgr.Stop(); err != nil {
-		logger.Warn("failed to stop workers", zap.Error(err))
-	}
-	if err := st.Close(); err != nil {
-		logger.Warn("failed to close store", zap.Error(err))
+	warnOn(lg, "failed to stop workers", mgr.Stop())
+	warnOn(lg, "failed to close store", st.Close())
+}
+
+// warnOn logs what as a warning if err is non-nil.
+func warnOn(lg *zap.Logger, what string, err error) {
+	if err != nil {
+		lg.Warn(what, zap.Error(err))
 	}
 }

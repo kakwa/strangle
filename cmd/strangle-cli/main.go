@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kakwa/strangle/internal/auth"
-	"github.com/kakwa/strangle/internal/cfg"
-	"github.com/kakwa/strangle/internal/db"
+	"github.com/kakwa/strangle/model"
+	"github.com/kakwa/strangle/security/auth"
+	"github.com/kakwa/strangle/utils/cfg"
 	"github.com/spf13/cobra"
 )
 
@@ -86,11 +86,11 @@ func userCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			users, err := openUserStore(serverConfigPath)
+			d, err := openDB(serverConfigPath)
 			if err != nil {
 				return err
 			}
-			if err := users.CreateUser(context.Background(), args[0], hash); err != nil {
+			if err := d.Users().CreateUser(context.Background(), args[0], hash); err != nil {
 				return err
 			}
 			fmt.Printf("created user %q\n", args[0])
@@ -105,11 +105,11 @@ func userCmd() *cobra.Command {
 		Short: "List UI accounts.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			users, err := openUserStore(serverConfigPath)
+			d, err := openDB(serverConfigPath)
 			if err != nil {
 				return err
 			}
-			all, err := users.ListUsers(context.Background())
+			all, err := d.Users().ListUsers(context.Background())
 			if err != nil {
 				return err
 			}
@@ -125,11 +125,11 @@ func userCmd() *cobra.Command {
 		Short: "Delete a UI account.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			users, err := openUserStore(serverConfigPath)
+			d, err := openDB(serverConfigPath)
 			if err != nil {
 				return err
 			}
-			if err := users.RemoveUser(context.Background(), args[0]); err != nil {
+			if err := d.Users().RemoveUser(context.Background(), args[0]); err != nil {
 				if errors.Is(err, auth.ErrNotFound) {
 					return fmt.Errorf("user %q not found", args[0])
 				}
@@ -144,17 +144,17 @@ func userCmd() *cobra.Command {
 	return cmd
 }
 
-// openUserStore opens the users table from the configured server file.
-func openUserStore(serverConfigPath string) (auth.UserStore, error) {
+// openDB opens the configured server database.
+func openDB(serverConfigPath string) (*model.DB, error) {
 	conf, err := cfg.LoadServer(serverConfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
-	d, err := db.Open(context.Background(), conf.Database.DSN)
+	d, err := model.Open(context.Background(), conf.Database.DSN)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
-	return d.Users(), nil
+	return d, nil
 }
 
 // readPasswordStdin reads one line from stdin and strips the trailing
@@ -165,6 +165,25 @@ func readPasswordStdin() string {
 		return ""
 	}
 	return strings.TrimRight(sc.Text(), "\r\n")
+}
+
+// requireUser fails with a friendly message when user does not exist.
+func requireUser(d *model.DB, ctx context.Context, user string) error {
+	if _, err := d.Users().GetUser(ctx, user); err != nil {
+		if errors.Is(err, auth.ErrNotFound) {
+			return fmt.Errorf("user %q not found", user)
+		}
+		return err
+	}
+	return nil
+}
+
+// expiryText renders a token expiry for the CLI output.
+func expiryText(e *time.Time) string {
+	if e == nil {
+		return "never expires"
+	}
+	return "expires " + e.Format("2006-01-02 15:04:05")
 }
 
 func tokenCmd() *cobra.Command {
@@ -197,31 +216,23 @@ func tokenCmd() *cobra.Command {
 			if collection == "" {
 				return errors.New("provide the collection with --collection")
 			}
-			users, tokens, err := openTokenStores(serverConfigPath)
+			d, err := openDB(serverConfigPath)
 			if err != nil {
 				return err
 			}
-			defer func() { _ = tokens.Close() }()
 			ctx := context.Background()
-			if _, err := users.GetUser(ctx, user); err != nil {
-				if errors.Is(err, auth.ErrNotFound) {
-					return fmt.Errorf("user %q not found", user)
-				}
+			if err := requireUser(d, ctx, user); err != nil {
 				return err
 			}
-			raw, tok, err := tokens.Create(ctx, user, org, collection, args[0], ttl)
+			raw, tok, err := d.Tokens().Create(ctx, user, org, collection, args[0], ttl)
 			if err != nil {
 				return err
 			}
 			// The raw value goes to stdout (so it can be captured with
 			// $()); everything else goes to stderr.
 			fmt.Fprintln(cmd.OutOrStdout(), raw)
-			expiry := "never expires"
-			if tok.Expires != nil {
-				expiry = "expires " + tok.Expires.Format("2006-01-02 15:04:05")
-			}
 			fmt.Fprintf(cmd.ErrOrStderr(), "created token %q for user %s in %s/%s (%s)\n",
-				tok.Name, user, org, collection, expiry)
+				tok.Name, user, org, collection, expiryText(tok.Expires))
 			return nil
 		},
 	}
@@ -235,31 +246,24 @@ func tokenCmd() *cobra.Command {
 		Short: "List API tokens, optionally filtered by user, org and collection.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			users, tokens, err := openTokenStores(serverConfigPath)
+			d, err := openDB(serverConfigPath)
 			if err != nil {
 				return err
 			}
-			defer func() { _ = tokens.Close() }()
 			ctx := context.Background()
 			owner := ""
 			if user != "" {
-				if _, err := users.GetUser(ctx, user); err != nil {
-					if errors.Is(err, auth.ErrNotFound) {
-						return fmt.Errorf("user %q not found", user)
-					}
+				if err := requireUser(d, ctx, user); err != nil {
 					return err
 				}
 				owner = user
 			}
-			toks, err := tokens.List(ctx, owner, org, collection)
+			toks, err := d.Tokens().List(ctx, owner, org, collection)
 			if err != nil {
 				return err
 			}
 			for _, t := range toks {
-				expiry := "never expires"
-				if t.Expires != nil {
-					expiry = "expires " + t.Expires.Format("2006-01-02 15:04:05")
-				}
+				expiry := expiryText(t.Expires)
 				last := "never used"
 				if t.LastUsedAt != nil {
 					last = "last used " + t.LastUsedAt.Format("2006-01-02 15:04:05")
@@ -289,12 +293,11 @@ func tokenCmd() *cobra.Command {
 			if org == "" || collection == "" {
 				return errors.New("provide the token's scope with --org and --collection")
 			}
-			_, tokens, err := openTokenStores(serverConfigPath)
+			d, err := openDB(serverConfigPath)
 			if err != nil {
 				return err
 			}
-			defer func() { _ = tokens.Close() }()
-			if err := tokens.Remove(context.Background(), user, org, collection, args[0]); err != nil {
+			if err := d.Tokens().Remove(context.Background(), user, org, collection, args[0]); err != nil {
 				if errors.Is(err, auth.ErrNotFound) {
 					return fmt.Errorf("token %q not found for user %q in %s/%s", args[0], user, org, collection)
 				}
@@ -312,23 +315,9 @@ func tokenCmd() *cobra.Command {
 	return cmd
 }
 
-// openTokenStores opens the users and api_tokens tables from the configured
-// server file.
-func openTokenStores(serverConfigPath string) (auth.UserStore, auth.TokenStore, error) {
-	conf, err := cfg.LoadServer(serverConfigPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("invalid configuration: %w", err)
-	}
-	d, err := db.Open(context.Background(), conf.Database.DSN)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to open database: %w", err)
-	}
-	return d.Users(), d.Tokens(), nil
-}
-
 // collectionCmd manages user-to-collection memberships. Once the first
 // membership exists, only members can see and use their collections;
-// until then every authenticated user has access (see internal/auth/access.go).
+// until then every authenticated user has access (see auth/access.go).
 func collectionCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "collection",
@@ -338,39 +327,33 @@ func collectionCmd() *cobra.Command {
 	cmd.PersistentFlags().StringVarP(&serverConfigPath, "server-config", "s",
 		"config/server.yml", "path to the server configuration file")
 
-	grant := &cobra.Command{
-		Use:   "grant <user> <org> <collection>",
-		Short: "Allow a user to use one collection.",
-		Args:  cobra.ExactArgs(3),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			a, err := openAccessStore(serverConfigPath)
-			if err != nil {
-				return err
-			}
-			if err := a.Add(context.Background(), args[0], args[1], args[2]); err != nil {
-				return err
-			}
-			fmt.Printf("granted %s access to %s/%s\n", args[0], args[1], args[2])
-			return nil
-		},
+	accessCmd := func(use, short, verb string, act func(d *model.DB, ctx context.Context, user, org, collection string) error) *cobra.Command {
+		return &cobra.Command{
+			Use:   use,
+			Short: short,
+			Args:  cobra.ExactArgs(3),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				d, err := openDB(serverConfigPath)
+				if err != nil {
+					return err
+				}
+				if err := act(d, context.Background(), args[0], args[1], args[2]); err != nil {
+					return err
+				}
+				fmt.Printf("%s %s access to %s/%s\n", verb, args[0], args[1], args[2])
+				return nil
+			},
+		}
 	}
 
-	revoke := &cobra.Command{
-		Use:   "revoke <user> <org> <collection>",
-		Short: "Remove a user's access to one collection.",
-		Args:  cobra.ExactArgs(3),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			a, err := openAccessStore(serverConfigPath)
-			if err != nil {
-				return err
-			}
-			if err := a.Remove(context.Background(), args[0], args[1], args[2]); err != nil {
-				return err
-			}
-			fmt.Printf("revoked %s access to %s/%s\n", args[0], args[1], args[2])
-			return nil
-		},
-	}
+	grant := accessCmd("grant <user> <org> <collection>", "Allow a user to use one collection.", "granted",
+		func(d *model.DB, ctx context.Context, user, org, collection string) error {
+			return d.Access().Add(ctx, user, org, collection)
+		})
+	revoke := accessCmd("revoke <user> <org> <collection>", "Remove a user's access to one collection.", "revoked",
+		func(d *model.DB, ctx context.Context, user, org, collection string) error {
+			return d.Access().Remove(ctx, user, org, collection)
+		})
 
 	var user string
 	list := &cobra.Command{
@@ -378,11 +361,11 @@ func collectionCmd() *cobra.Command {
 		Short: "List collection memberships, for one user or all users.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			a, err := openAccessStore(serverConfigPath)
+			d, err := openDB(serverConfigPath)
 			if err != nil {
 				return err
 			}
-			items, err := a.List(context.Background(), user)
+			items, err := d.Access().List(context.Background(), user)
 			if err != nil {
 				return err
 			}
@@ -396,18 +379,4 @@ func collectionCmd() *cobra.Command {
 
 	cmd.AddCommand(grant, revoke, list)
 	return cmd
-}
-
-// openAccessStore opens the collection_members table from the configured
-// server file.
-func openAccessStore(serverConfigPath string) (auth.CollectionAccess, error) {
-	conf, err := cfg.LoadServer(serverConfigPath)
-	if err != nil {
-		return nil, fmt.Errorf("invalid configuration: %w", err)
-	}
-	d, err := db.Open(context.Background(), conf.Database.DSN)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
-	}
-	return d.Access(), nil
 }

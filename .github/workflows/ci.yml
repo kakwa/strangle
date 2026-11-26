@@ -37,7 +37,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: ui/package-lock.json
 
       - name: Install Python development headers and Ansible
         run: sudo apt-get update && sudo apt-get install -y python3-dev pkg-config ansible
@@ -54,12 +54,12 @@ jobs:
       - name: Build
         run: make build
 
-  web:
+  ui:
     name: Web UI
     runs-on: ubuntu-26.04
     defaults:
       run:
-        working-directory: web
+        working-directory: ui
     steps:
       - uses: actions/checkout@v4
 

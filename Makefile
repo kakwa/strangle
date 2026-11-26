@@ -7,16 +7,16 @@ export PKG_CONFIG := $(CURDIR)/scripts/pkg-config-cpy
 
 # swaggo/swag v2 is pinned as a Go tool in go.mod; invoke it via `go tool`.
 SWAG := $(GO) tool swag
-SWAG_ARGS := init --v3.1 -g internal/server/openapi_general.go -d . -o ./docs --parseDependency --parseInternal
+SWAG_ARGS := init --v3.1 -g api/openapi_general.go -d . -o ./api/docs --parseDependency
 
-.PHONY: all build run test coverage tidy vet web web-dev swag swag-check generate
+.PHONY: all build run test coverage tidy vet ui ui-dev swag swag-check generate
 
 all: build
 
-# Build the web UI into web/dist first: the output is embedded into the server
-# binary at compile time (see web/web.go), so a stale or missing dist would
+# Build the UI into ui/dist first: the output is embedded into the server
+# binary at compile time (see ui/ui.go), so a stale or missing dist would
 # end up baked into bin/strangle-server.
-build: swag web
+build: swag ui
 	$(GO) build -o bin/strangle-server ./cmd/strangle-server
 	$(GO) build -o bin/strangle-cli ./cmd/strangle-cli
 
@@ -44,11 +44,11 @@ generate: swag
 
 swag-check:
 	$(MAKE) swag
-	git diff --exit-code -- docs/docs.go docs/swagger.json docs/swagger.yaml
+	git diff --exit-code -- api/docs/docs.go api/docs/swagger.json api/docs/swagger.yaml
 
-# Build the web UI into web/dist (served by the strangle server).
-web:
-	cd web && npm install && npm run build
+# Build the UI into ui/dist (served by the strangle server).
+ui:
+	cd ui && npm install && npm run build
 
-web-dev:
-	cd web && npm run dev
+ui-dev:
+	cd ui && npm run dev

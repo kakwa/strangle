@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kakwa/strangle/internal/cfg"
+	"github.com/kakwa/strangle/utils/cfg"
 	"github.com/spf13/cobra"
 )
 
@@ -60,15 +60,7 @@ func hostsCmd() *cobra.Command {
 		Short: "List the known hosts of a collection.",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			target, err := commandTarget(args, *opts)
-			if err != nil {
-				return err
-			}
-			client, err := newAPIClient(*opts)
-			if err != nil {
-				return err
-			}
-			scope, err := client.resolveScope(target, opts.org)
+			client, scope, err := clientFor(opts, args, 0)
 			if err != nil {
 				return err
 			}
@@ -97,25 +89,11 @@ func hostCmd() *cobra.Command {
 		Short: "Show one host and its run history for a playbook.",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			target := opts.target
-			if len(args) > 1 {
-				if target != "" && target != args[1] {
-					return fmt.Errorf("target %q from --target conflicts with %q", target, args[1])
-				}
-				target = args[1]
-			}
-			if target == "" {
-				return errors.New("target is required (second argument or --target)")
-			}
 			if opts.playbook == "" {
 				return errors.New("a playbook is required (--playbook)")
 			}
 			name := args[0]
-			client, err := newAPIClient(*opts)
-			if err != nil {
-				return err
-			}
-			scope, err := client.resolveScope(target, opts.org)
+			client, scope, err := clientFor(opts, args, 1)
 			if err != nil {
 				return err
 			}
@@ -171,32 +149,19 @@ func hostkeysCmd() *cobra.Command {
 		Short: "List the SSH host keys of one host in a playbook.",
 		Args:  cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			targetArg := listOpts.target
-			if len(args) > 0 {
-				if targetArg != "" && targetArg != args[0] {
-					return fmt.Errorf("target %q from --target conflicts with %q", targetArg, args[0])
-				}
-				targetArg = args[0]
+			targetArg, err := commandTarget(args, listOpts.target, "target", 0)
+			if err != nil {
+				return err
 			}
 			target, playbook, err := resolveTargetPlaybook(targetArg, listOpts.playbook)
 			if err != nil {
 				return err
 			}
-			host := listOpts.host
-			if len(args) > 1 {
-				if host != "" && host != args[1] {
-					return fmt.Errorf("host %q from --host conflicts with %q", host, args[1])
-				}
-				host = args[1]
-			}
-			if host == "" {
-				return errors.New("host is required (second argument or --host)")
-			}
-			client, err := newAPIClient(*listOpts)
+			host, err := commandTarget(args, listOpts.host, "host", 1)
 			if err != nil {
 				return err
 			}
-			scope, err := client.resolveScope(target, listOpts.org)
+			client, scope, err := scopedClient(listOpts, target)
 			if err != nil {
 				return err
 			}
@@ -282,11 +247,7 @@ func decideHostKey(cmd *cobra.Command, opts apiOptions, status string, args []st
 	if opts.target != "" && opts.target != target {
 		return fmt.Errorf("target %q from --target conflicts with %q", target, opts.target)
 	}
-	client, err := newAPIClient(opts)
-	if err != nil {
-		return err
-	}
-	scope, err := client.resolveScope(target, opts.org)
+	client, scope, err := scopedClient(&opts, target)
 	if err != nil {
 		return err
 	}
@@ -335,18 +296,43 @@ func addAPIFlags(cmd *cobra.Command, opts *apiOptions) {
 	cmd.Flags().BoolVar(&opts.json, "json", false, "print the API response as JSON")
 }
 
-func commandTarget(args []string, opts apiOptions) (string, error) {
-	target := opts.target
-	if len(args) > 0 {
-		if target != "" && target != args[0] {
-			return "", fmt.Errorf("target %q from --target conflicts with %q", target, args[0])
+// commandTarget resolves a required value from a positional argument (at
+// index) or a flag, erroring when both are given and disagree.
+func commandTarget(args []string, flag, name string, index int) (string, error) {
+	value := flag
+	if len(args) > index && args[index] != "" {
+		if value != "" && value != args[index] {
+			return "", fmt.Errorf("%s %q from --%s conflicts with %q", name, value, name, args[index])
 		}
-		target = args[0]
+		value = args[index]
 	}
-	if target == "" {
-		return "", errors.New("target is required (argument or --target)")
+	if value == "" {
+		return "", fmt.Errorf("%s is required (argument or --%s)", name, name)
 	}
-	return target, nil
+	return value, nil
+}
+
+// scopedClient builds the API client and resolves the scope of target.
+func scopedClient(opts *apiOptions, target string) (*apiClient, apiScope, error) {
+	client, err := newAPIClient(*opts)
+	if err != nil {
+		return nil, apiScope{}, err
+	}
+	scope, err := client.resolveScope(target, opts.org)
+	if err != nil {
+		return nil, apiScope{}, err
+	}
+	return client, scope, nil
+}
+
+// clientFor resolves the target from a positional argument (at index) or the
+// --target flag, then builds the client and its scope.
+func clientFor(opts *apiOptions, args []string, index int) (*apiClient, apiScope, error) {
+	target, err := commandTarget(args, opts.target, "target", index)
+	if err != nil {
+		return nil, apiScope{}, err
+	}
+	return scopedClient(opts, target)
 }
 
 func newAPIClient(opts apiOptions) (*apiClient, error) {
