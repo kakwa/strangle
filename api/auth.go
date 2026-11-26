@@ -1,12 +1,10 @@
 package api
 
 import (
-	"crypto/subtle"
 	"errors"
 	"net/http"
 	"strings"
 
-	"github.com/kakwa/strangle/security/auth"
 	"github.com/labstack/echo/v5"
 )
 
@@ -43,100 +41,4 @@ func collectionAccessMiddleware(api *API) echo.MiddlewareFunc {
 			return next(c)
 		}
 	}
-}
-
-// resolveAuth checks the credentials carried by r. A session wins over a
-// bearer token; both are checked before the static token so a token endpoint
-// never mistakes the machine credential for a user. Collection-scoped user
-// tokens add a scope restriction to the resolved identity.
-func (s *Server) resolveAuth(r *http.Request) Auth {
-	var a Auth
-	if sess, ok := s.sessionFrom(r); ok {
-		a.User = sess.Username
-		a.SessionUser = sess.Username
-	} else if raw, ok := bearerTokenValue(r); ok && s.tokens != nil {
-		if tok, err := s.tokens.Lookup(r.Context(), raw); err == nil {
-			a.User = tok.Owner
-			if tok.Org != "" || tok.Collection != "" {
-				a.TokenScopes = []TokenScope{{Org: tok.Org, Collection: tok.Collection}}
-			}
-		}
-	}
-	a.StaticToken = s.bearerTokenOK(r)
-	return a
-}
-
-// hookOK reports whether r may bypass the ordinary user requirement. The
-// static sync token is only accepted on the collection hook route.
-func (s *Server) hookOK(r *http.Request) bool {
-	if !hookPath(r) {
-		return false
-	}
-	a := FromRequest(r)
-	return a.User != "" || a.StaticToken || (!s.authOn && s.authToken == "")
-}
-
-// authOpen lists the API endpoints reachable without a session.
-func (s *Server) authOpen(r *http.Request) bool {
-	// API docs are public but have no versioned alias beyond the spec itself.
-	// Swagger UI assets live under /api/docs/ and must be public too.
-	if r.Method == http.MethodGet && (r.URL.Path == "/api/docs" ||
-		strings.HasPrefix(r.URL.Path, "/api/docs/") ||
-		r.URL.Path == apiPrefix+"/openapi.json") {
-		return true
-	}
-	switch {
-	case r.Method == http.MethodGet && r.URL.Path == apiPrefix+"/health":
-		return true
-	case r.Method == http.MethodPost && r.URL.Path == apiPrefix+"/login":
-		return true
-	case r.Method == http.MethodPost && r.URL.Path == apiPrefix+"/logout":
-		return true
-	case r.Method == http.MethodGet && r.URL.Path == apiPrefix+"/me":
-		return true
-	}
-	return false
-}
-
-// sessionFrom resolves the session carried by the request cookie, if any.
-func (s *Server) sessionFrom(r *http.Request) (*auth.Session, bool) {
-	if s.sessions == nil {
-		return nil, false
-	}
-	c, err := r.Cookie(SessionCookie)
-	if err != nil || c.Value == "" {
-		return nil, false
-	}
-	sess := s.sessions.Lookup(c.Value)
-	if sess == nil {
-		return nil, false
-	}
-	return sess, true
-}
-
-// bearerTokenValue reads a bearer credential from the Authorization header,
-// falling back to the webhook header only when no Authorization header is
-// present.
-func bearerTokenValue(r *http.Request) (string, bool) {
-	value := r.Header.Get("Authorization")
-	if token := r.Header.Get("X-Strangle-Token"); token != "" && value == "" {
-		value = "Bearer " + token
-	}
-	token, ok := strings.CutPrefix(value, "Bearer ")
-	if !ok || token == "" {
-		return "", false
-	}
-	return token, true
-}
-
-// bearerTokenOK reports whether r carries the static configured API token.
-func (s *Server) bearerTokenOK(r *http.Request) bool {
-	if s.authToken == "" {
-		return false
-	}
-	token, ok := bearerTokenValue(r)
-	if !ok {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(token), []byte(s.authToken)) == 1
 }
