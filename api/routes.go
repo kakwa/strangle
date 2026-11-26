@@ -39,7 +39,7 @@ func (s *Server) registerAPIRoutes(e *echo.Echo, api *API) {
 	e.POST(apiPrefix+"/login", api.Login)
 	e.POST(apiPrefix+"/logout", api.Logout)
 	e.GET(apiPrefix+"/me", api.Me)
-	// GET /api/v1/openapi.json is registered with the docs routes in server.go.
+	// GET /api/v1/openapi.json is registered with the docs routes in api.go.
 
 	// --- organizations and collections -------------------------------------
 	e.GET(apiPrefix+"/orgs", api.ListOrgs)
