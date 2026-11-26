@@ -4,9 +4,12 @@ go 1.27
 
 require (
 	github.com/go-git/go-git/v6 v6.0.0-beta.1
+	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/labstack/echo/v5 v5.4.7
 	github.com/landlock-lsm/go-landlock v0.11.2
+	github.com/onsi/ginkgo/v2 v2.34.0
+	github.com/onsi/gomega v1.44.0
 	github.com/pkg/sftp v1.13.9
 	github.com/riverqueue/river v0.51.2
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.51.2
@@ -137,7 +140,6 @@ require (
 	github.com/golangci/unconvert v0.0.0-20250410112200-a129a6e6413e // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/gordonklaus/ineffassign v0.2.0 // indirect
 	github.com/gostaticanalysis/analysisutil v0.7.1 // indirect
 	github.com/gostaticanalysis/comment v1.5.0 // indirect
@@ -194,8 +196,6 @@ require (
 	github.com/nishanths/exhaustive v0.15.0 // indirect
 	github.com/nishanths/predeclared v0.3.0 // indirect
 	github.com/nunnatsa/ginkgolinter v0.24.0 // indirect
-	github.com/onsi/ginkgo/v2 v2.34.0 // indirect
-	github.com/onsi/gomega v1.44.0 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/pjbgf/sha1cd v0.7.0 // indirect
