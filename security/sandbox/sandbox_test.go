@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -108,11 +109,18 @@ func TestLandlockIsolation(t *testing.T) {
 		helperNeighborEnv+"="+neighbor,
 		helperScratchEnv+"="+scratch,
 	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("sandbox helper failed: %v\n%s", err, out)
+	// Only the helper's stdout carries the verdict: it prints exactly one of
+	// the "cannot ..."/"can ..."/"ok" lines above. Under -cover the re-run
+	// test binary also tries to emit coverage files to GOCOVERDIR on exit,
+	// which Landlock rightly denies; that noise goes to stderr and must not
+	// affect the comparison.
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("sandbox helper failed: %v\nstdout: %s\nstderr: %s", err, stdout.String(), stderr.String())
 	}
-	if got := strings.TrimSpace(string(out)); got != "ok" {
+	if got := strings.TrimSpace(stdout.String()); got != "ok" {
 		t.Fatalf("sandbox helper output = %q, want ok", got)
 	}
 }
