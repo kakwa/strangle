@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kakwa/strangle/cfg"
 	"github.com/kakwa/strangle/model"
-	"github.com/kakwa/strangle/utils/cfg"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/zap"

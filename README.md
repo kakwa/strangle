@@ -60,13 +60,13 @@ controller/          HTTP handlers and swaggo annotations
     riverqueue/      postgres-backed River job queue for playbook runs
 model/               GORM/PostgreSQL store, run records and shared value types
 collection/          git-backed targets: clone, pin to tracked ref, sync, reload
+cfg/                 YAML config: server.yml, collection.yml, per-target strangle.yml
 security/
   auth/              local accounts, sessions, scoped tokens and collection access
+  logger/            zap logger construction
   sandbox/           Landlock sandboxing for worker child processes
 utils/
-  cfg/               YAML config: server.yml, collection.yml, per-target strangle.yml
   git/               in-process git operations (go-git), no system git binary
-  logger/            zap logger construction
   sshpool/           Go-managed persistent SSH connections with host-key policies
 tests/
   integration_test/  DB, API, queue and Ansible suites (external test packages)

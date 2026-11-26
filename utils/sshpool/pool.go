@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kakwa/strangle/utils/cfg"
+	"github.com/kakwa/strangle/cfg"
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/api"
+	"github.com/kakwa/strangle/cfg"
 	"github.com/kakwa/strangle/controller/applier"
 	"github.com/kakwa/strangle/controller/collection"
 	"github.com/kakwa/strangle/controller/maintenance"
@@ -25,9 +26,8 @@ import (
 	"github.com/kakwa/strangle/controller/worker/riverqueue"
 	"github.com/kakwa/strangle/model"
 	"github.com/kakwa/strangle/security/auth"
+	"github.com/kakwa/strangle/security/logger"
 	"github.com/kakwa/strangle/security/sandbox"
-	"github.com/kakwa/strangle/utils/cfg"
-	"github.com/kakwa/strangle/utils/logger"
 	"github.com/kakwa/strangle/utils/sshpool"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"

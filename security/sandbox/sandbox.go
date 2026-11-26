@@ -19,7 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kakwa/strangle/utils/cfg"
+	"github.com/kakwa/strangle/cfg"
 	"github.com/landlock-lsm/go-landlock/landlock"
 )
 

@@ -12,7 +12,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/kakwa/strangle/utils/cfg"
+	"github.com/kakwa/strangle/cfg"
 	"github.com/kakwa/strangle/utils/git"
 	"go.uber.org/zap"
 )

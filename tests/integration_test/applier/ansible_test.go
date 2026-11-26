@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kakwa/strangle/utils/cfg"
+	"github.com/kakwa/strangle/cfg"
 	"go.uber.org/zap"
 )
 

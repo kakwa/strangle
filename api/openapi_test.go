@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kakwa/strangle/cfg"
 	"github.com/kakwa/strangle/controller/applier"
 	"github.com/kakwa/strangle/security/auth"
 	"github.com/kakwa/strangle/tests/testutil"
-	"github.com/kakwa/strangle/utils/cfg"
 	swag "github.com/swaggo/swag/v2"
 	"go.uber.org/zap"
 )

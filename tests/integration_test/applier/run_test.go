@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kakwa/strangle/cfg"
 	"github.com/kakwa/strangle/model"
-	"github.com/kakwa/strangle/utils/cfg"
 	"go.uber.org/zap"
 )
 

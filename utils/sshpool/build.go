@@ -3,7 +3,7 @@ package sshpool
 import (
 	"fmt"
 
-	"github.com/kakwa/strangle/utils/cfg"
+	"github.com/kakwa/strangle/cfg"
 )
 
 // BuildMulti creates one SSH manager per playbook that enables the Go-managed

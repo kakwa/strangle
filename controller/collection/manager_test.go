@@ -14,7 +14,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"go.uber.org/zap"
 
-	"github.com/kakwa/strangle/utils/cfg"
+	"github.com/kakwa/strangle/cfg"
 )
 
 var testSig = &object.Signature{

@@ -17,11 +17,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kakwa/strangle/cfg"
 	"github.com/kakwa/strangle/controller/applier"
 	"github.com/kakwa/strangle/model"
 	"github.com/kakwa/strangle/security/auth"
 	"github.com/kakwa/strangle/ui"
-	"github.com/kakwa/strangle/utils/cfg"
 	"github.com/kakwa/strangle/utils/sshpool"
 	"github.com/labstack/echo/v5"
 	echoSwagger "github.com/swaggo/echo-swagger/v2"

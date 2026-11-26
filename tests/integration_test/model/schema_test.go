@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kakwa/strangle/cfg"
 	"github.com/kakwa/strangle/model"
 	"github.com/kakwa/strangle/tests/testutil"
-	"github.com/kakwa/strangle/utils/cfg"
 )
 
 // TestOrgCollectionSchema checks that collection.yml is mirrored into the
