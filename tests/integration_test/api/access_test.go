@@ -21,7 +21,7 @@ import (
 func newAccessTestServer(st model.Store, users auth.UserStore, tokens auth.TokenStore, access auth.CollectionAccess, opts ...api.Option) *api.Server {
 	apr := applier.NewAnsible(orgTargets, stubExecutor{}, st, zap.NewNop())
 	opts = append([]api.Option{api.WithCollectionAccess(access)}, opts...)
-	return api.New("test", apr, st, nil, nil, nil, nil, users, tokens, "", zap.NewNop(), opts...)
+	return api.New("test", apr, st, nil, nil, nil, users, tokens, "", zap.NewNop(), opts...)
 }
 
 func TestCollectionRestrictions(t *testing.T) {

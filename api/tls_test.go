@@ -8,7 +8,7 @@ import (
 )
 
 func TestWithTLS(t *testing.T) {
-	s := New(":0", nil, nil, nil, nil, nil, nil, nil, nil, "", zap.NewNop(),
+	s := New(":0", nil, nil, nil, nil, nil, nil, nil, "", zap.NewNop(),
 		WithTLS("/etc/strangle/tls.crt", "/etc/strangle/tls.key"))
 	cert, key, err := s.tlsFiles()
 	if err != nil {
@@ -24,7 +24,7 @@ func TestTLSRequiresBothFiles(t *testing.T) {
 		{cert: "/only/cert"},
 		{key: "/only/key"},
 	} {
-		s := New(":0", nil, nil, nil, nil, nil, nil, nil, nil, "", zap.NewNop(),
+		s := New(":0", nil, nil, nil, nil, nil, nil, nil, "", zap.NewNop(),
 			WithTLS(tc.cert, tc.key))
 		if _, _, err := s.tlsFiles(); err == nil ||
 			!strings.Contains(err.Error(), "must be set together") {
@@ -33,7 +33,7 @@ func TestTLSRequiresBothFiles(t *testing.T) {
 	}
 
 	// Without the option, plain HTTP is selected.
-	s := New(":0", nil, nil, nil, nil, nil, nil, nil, nil, "", zap.NewNop())
+	s := New(":0", nil, nil, nil, nil, nil, nil, nil, "", zap.NewNop())
 	cert, key, err := s.tlsFiles()
 	if err != nil || cert != "" || key != "" {
 		t.Fatalf("tlsFiles() = %q, %q, %v; want plain HTTP", cert, key, err)

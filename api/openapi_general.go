@@ -13,21 +13,21 @@ package api
 // @description      Versioned HTTP API for inspecting and administering Ansible playbook collections.
 // @license.name     GPL-3.0
 // @servers.url      /
-func swaggerGeneralInfo() {}
+func swaggerGeneralInfo() {} //nolint:unused // anchors the swag annotation group above
 
 // @securityDefinitions.apikey sessionCookie
 // @in                         cookie
 // @name                       strangle_session
 // @description                Session cookie returned by POST /api/v1/login.
-func swaggerSessionCookieScheme() {}
+func swaggerSessionCookieScheme() {} //nolint:unused // anchors the swag annotation group above
 
 // @securityDefinitions.apikey syncToken
 // @in                         header
 // @name                       X-Strangle-Token
 // @description                Static auth.token, accepted by collection hook endpoints.
-func swaggerSyncTokenScheme() {}
+func swaggerSyncTokenScheme() {} //nolint:unused // anchors the swag annotation group above
 
 // @securityDefinitions.bearerauth userBearer
 // @bearerFormat                  st_
 // @description                   Collection-scoped personal access token created through POST /api/v1/orgs/{org}/collections/{collection}/tokens.
-func swaggerUserBearerScheme() {}
+func swaggerUserBearerScheme() {} //nolint:unused // anchors the swag annotation group above

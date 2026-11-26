@@ -65,7 +65,9 @@ func (a *API) Login(c *echo.Context) error {
 		return apiStatus(http.StatusUnauthorized, errors.New("invalid username or password"))
 	}
 	token := a.Sessions.Create(user.Name)
-	c.SetCookie(&http.Cookie{
+	// Secure is not set: the API also serves plain HTTP for local use, and
+	// browsers would drop a Secure cookie set over HTTP.
+	c.SetCookie(&http.Cookie{ //nolint:gosec // G124: Secure omitted for plain-HTTP local use
 		Name:     SessionCookie,
 		Value:    token,
 		Path:     "/",
@@ -91,11 +93,15 @@ func (a *API) Logout(c *echo.Context) error {
 	if c, err := c.Request().Cookie(SessionCookie); err == nil && a.Sessions != nil {
 		a.Sessions.Destroy(c.Value)
 	}
-	c.SetCookie(&http.Cookie{
-		Name:   SessionCookie,
-		Value:  "",
-		Path:   "/",
-		MaxAge: -1,
+	// The delete cookie must repeat the original attributes for the browser
+	// to match it.
+	c.SetCookie(&http.Cookie{ //nolint:gosec // G124: Secure omitted for plain-HTTP local use
+		Name:     SessionCookie,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
 	})
 	return c.JSON(http.StatusOK, statusResponse{Status: "logged out"})
 }

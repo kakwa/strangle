@@ -269,6 +269,7 @@ func (m *Manager) start(s *slot) error {
 	if s.manifest != "" {
 		args = append(args, "--sandbox", s.manifest)
 	}
+	//nolint:gosec // G204: binPath and the arguments are built from operator configuration
 	cmd := exec.Command(m.binPath, args...)
 	// Worker logs go to the master's stderr, tagged by process.
 	cmd.Stdout = os.Stderr
@@ -611,6 +612,7 @@ func (m *Manager) Stop() error {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 	}
 	m.wg.Wait()
+	//nolint:gosec // G703: m.dir is the operator-configured work directory
 	_ = os.RemoveAll(m.dir)
 	return nil
 }

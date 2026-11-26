@@ -917,140 +917,6 @@ function TokensView({ org, collection }) {
   )
 }
 
-// parseWorkerMetrics reads the Prometheus text exposition returned by
-// /metrics. Worker identity comes from the worker/collection labels of the
-// jobs and restarts series; the three workers states come from the summary
-// series. Lines that are not numbers or carry no labels are ignored.
-function parseWorkerMetrics(text) {
-  const summary = { total: 0, alive: 0, dead: 0 }
-  const byWorker = new Map()
-  for (const rawLine of String(text || '').split('\n')) {
-    const line = rawLine.trim()
-    if (!line || line.startsWith('#')) continue
-    const match = line.match(/^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{([^}]*)\})?\s+(\S+)$/)
-    if (!match) continue
-    const [, name, labelText, rawValue] = match
-    const value = Number(rawValue)
-    if (!Number.isFinite(value)) continue
-    const labels = {}
-    if (labelText) {
-      for (const label of labelText.matchAll(/([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*"((?:[^"\\]|\\.)*)"/g)) {
-        labels[label[1]] = label[2]
-      }
-    }
-    if (name === 'strangle_workers' && labels.state in summary) {
-      summary[labels.state] = value
-    } else if (name === 'strangle_worker_jobs' || name === 'strangle_worker_restarts_total') {
-      const id = labels.worker ?? ''
-      const key = `${id}|${labels.collection ?? ''}`
-      const row = byWorker.get(key) || {
-        worker: id,
-        collection: labels.collection ?? '',
-        jobs: 0,
-        restarts: 0,
-      }
-      if (name === 'strangle_worker_jobs') row.jobs = value
-      else row.restarts = value
-      byWorker.set(key, row)
-    }
-  }
-  return { summary, workers: [...byWorker.values()].sort((a, b) => a.worker.localeCompare(b.worker)) }
-}
-
-function Monitor() {
-  const [text, setText] = useState('')
-  const [error, setError] = useState(null)
-  const [loading, setLoading] = useState(true)
-
-  const refresh = useCallback(async () => {
-    try {
-      const res = await fetch('/metrics')
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      setText(await res.text())
-      setError(null)
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    refresh()
-    const id = setInterval(refresh, POLL_INTERVAL_MS)
-    return () => clearInterval(id)
-  }, [refresh])
-
-  const { summary, workers } = parseWorkerMetrics(text)
-  const empty = !loading && !error && summary.total === 0 && workers.length === 0
-
-  return (
-    <Stack gap="md">
-      <Card withBorder>
-        <Group justify="space-between" wrap="wrap">
-          <Group gap="sm">
-            <ThemeIcon variant="light" color="blue" size={32}>
-              <IconActivity size={18} stroke={1.5} />
-            </ThemeIcon>
-            <Title order={4}>Workers</Title>
-          </Group>
-          <Text size="xs" c="dimmed" onClick={refresh} style={{ cursor: 'pointer' }}>
-            ↻ refresh
-          </Text>
-        </Group>
-        <Text size="xs" c="dimmed" mt="xs">
-          Live pool state read from the Prometheus exposition at /metrics.
-        </Text>
-        {error && <Alert color="red" mt="sm" title="Metrics unavailable">{error}</Alert>}
-        {loading && !error && (
-          <Center py="lg"><Loader size="sm" /></Center>
-        )}
-        {!loading && !error && (
-          <SimpleGrid cols={{ base: 3, sm: 3 }} gap="md" mt="sm">
-            <Stat label="Total" value={summary.total} icon={IconServer} />
-            <Stat label="Alive" value={summary.alive} icon={IconActivity} />
-            <Stat label="Dead" value={summary.dead} icon={IconServer} />
-          </SimpleGrid>
-        )}
-      </Card>
-
-      <Card withBorder>
-        <Title order={4} mb="sm">Worker slots</Title>
-        <Table>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>Worker</Table.Th>
-              <Table.Th>Collection</Table.Th>
-              <Table.Th>In-flight jobs</Table.Th>
-              <Table.Th>Restarts</Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {workers.map((w) => (
-              <Table.Tr key={`${w.worker}|${w.collection}`}>
-                <Table.Td>{w.worker}</Table.Td>
-                <Table.Td>{w.collection || '—'}</Table.Td>
-                <Table.Td>{w.jobs}</Table.Td>
-                <Table.Td>{w.restarts}</Table.Td>
-              </Table.Tr>
-            ))}
-            {empty && (
-              <Table.Tr>
-                <Table.Td colSpan={4}>No workers are registered.</Table.Td>
-              </Table.Tr>
-            )}
-            {workers.length === 0 && summary.total > 0 && (
-              <Table.Tr>
-                <Table.Td colSpan={4}>No per-worker metrics exported yet.</Table.Td>
-              </Table.Tr>
-            )}
-          </Table.Tbody>
-        </Table>
-      </Card>
-    </Stack>
-  )
-}
-
 function ColorSchemeToggle() {
   const { colorScheme, toggleColorScheme } = useMantineColorScheme()
   return (
@@ -1086,7 +952,6 @@ function sectionFromPath(pathname) {
   if (pathname === '/playbooks') return { section: 'Playbooks', selectedHost: null }
   if (pathname === '/tokens') return { section: 'Tokens', selectedHost: null }
   if (pathname === '/ssh') return { section: 'SSH', selectedHost: null }
-  if (pathname === '/monitor') return { section: 'Monitor', selectedHost: null }
   return { section: 'Dashboard', selectedHost: null }
 }
 
@@ -1293,7 +1158,6 @@ function AppInner({ user, onLogout }) {
     else if (label === 'Playbooks') navigate(withScope('/playbooks'))
     else if (label === 'Tokens') navigate(withScope('/tokens'))
     else if (label === 'SSH') navigate(withScope('/ssh'))
-    else if (label === 'Monitor') navigate(withScope('/monitor'))
     else navigate(withScope('/'))
   }
 
@@ -1444,7 +1308,7 @@ function AppInner({ user, onLogout }) {
                 </Stack>
               }
             />
-            <Route path="/monitor" element={<Monitor />} />
+
             <Route path="*" element={<Navigate to={withScope('/')} replace />} />
           </Routes>
         </Stack>

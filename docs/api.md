@@ -8,8 +8,7 @@ JSON; errors are `{"error": "<message>"}` with the corresponding status code.
 
 **Every API route lives under `/api/v1`.** The old flat `/api/*` aliases have
 been removed: `GET /api/runs` and similar paths no longer exist. Documentation
-is served at `/api/v1/openapi.json` and `/api/docs`; `/metrics` is a separate
-public monitoring endpoint, not part of the API.
+is served at `/api/v1/openapi.json` and `/api/docs`.
 
 Collections (the targets from `collection.yml`) are first-class resources
 grouped into organizations. An org comes from the optional `org` field of a
@@ -138,28 +137,6 @@ Liveness. Open, even when UI authentication is on.
 ```json
 {"status": "ok"}
 ```
-
-## GET /metrics
-
-Prometheus text exposition (`text/plain; version=0.0.4`), open like
-`/api/v1/health` so scrapers need no UI session. It exports build information, Go runtime
-numbers and **worker state only** — no run, host or aggregate statistics:
-
-```
-# HELP strangle_workers Number of worker slots by state.
-# TYPE strangle_workers gauge
-strangle_workers{state="total"} 2
-strangle_workers{state="alive"} 2
-strangle_workers{state="dead"} 0
-```
-
-The full set is `strangle_build_info`, `strangle_workers{state=total|alive|dead}`,
-`strangle_worker_jobs{worker,collection}`,
-`strangle_worker_restarts_total{worker,collection}`,
-`process_start_time_seconds` and the common `go_*` runtime gauges. Worker
-counts, in-flight jobs and restarts are also shown in the web UI's **Monitor**
-tab, which fetches this public endpoint. There is no aggregate stats API: the
-dashboard counts hosts and playbooks from the org/collection endpoints.
 
 ## POST /api/v1/login
 
@@ -491,5 +468,5 @@ detail, tasks and cancellation; host changes; global hosts, stats, playbooks,
 workers and sync endpoints; scoped stats and sync; the collection-wide host-key
 list; `ssh/stats`; `hostkeys/accept` and `hostkeys/reject`; and
 `GET /api/workers`. Use the hook for git updates, the playbook-scoped host
-routes for host keys and host runs, `/metrics` (or the web UI's Monitor tab)
-for worker state, and the org/collection endpoints for the dashboard's counts.
+routes for host keys and host runs, and the org/collection endpoints for the
+dashboard's counts.

@@ -168,9 +168,10 @@ func jsonBalanced(line string) bool {
 	for i := 0; i < len(line); i++ {
 		c := line[i]
 		if inStr {
-			if c == '\\' {
+			switch c {
+			case '\\':
 				i++
-			} else if c == '"' {
+			case '"':
 				inStr = false
 			}
 			continue

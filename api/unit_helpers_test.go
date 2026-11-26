@@ -17,7 +17,7 @@ func (helperEnqueuer) EnqueueRun(context.Context, string, string, uint64, bool) 
 }
 
 func TestBearerTokenOK(t *testing.T) {
-	s := New("test", nil, nil, nil, helperEnqueuer{}, nil, nil, nil, nil, "sekrit", zap.NewNop())
+	s := New("test", nil, nil, nil, helperEnqueuer{}, nil, nil, nil, "sekrit", zap.NewNop())
 
 	cases := []struct {
 		name    string

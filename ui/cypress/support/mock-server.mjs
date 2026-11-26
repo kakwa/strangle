@@ -4,7 +4,7 @@
 // data for the versioned, org/collection-scoped API. There are deliberately no
 // flat /api/* aliases: an unknown path answers 404, just like the real server
 // after the API rework. Mock-only reset hooks under /api/v1/_mock/ restore
-// stateful fixtures between tests. /metrics serves Prometheus text.
+// stateful fixtures between tests.
 
 import { createServer } from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
@@ -170,12 +170,6 @@ const HOSTKEY_FIXTURES = [
 ]
 let hostkeys = HOSTKEY_FIXTURES.map((k) => ({ ...k }))
 
-const WORKERS_FIXTURE = [
-  { worker: '0', collection: 'alpha', jobs: 1, restarts: 3, alive: true },
-  { worker: '1', collection: 'beta', jobs: 0, restarts: 0, alive: false },
-]
-let workers = WORKERS_FIXTURE.map((w) => ({ ...w }))
-
 function collectionExists(org, collection) {
   return COLLECTIONS.some((c) => c.org === org && c.name === collection)
 }
@@ -187,29 +181,6 @@ function collectionDetail(org, collection) {
     ...found,
     playbooks: PLAYBOOKS[collection] || found.playbooks,
   }
-}
-
-function metricsText() {
-  const alive = workers.filter((w) => w.alive).length
-  const dead = workers.length - alive
-  const lines = [
-    '# HELP strangle_workers Number of worker slots by state.',
-    '# TYPE strangle_workers gauge',
-    `strangle_workers{state="total"} ${workers.length}`,
-    `strangle_workers{state="alive"} ${alive}`,
-    `strangle_workers{state="dead"} ${dead}`,
-    '# HELP strangle_worker_jobs In-flight jobs assigned to each worker slot.',
-    '# TYPE strangle_worker_jobs gauge',
-  ]
-  for (const w of workers) {
-    lines.push(`strangle_worker_jobs{worker="${w.worker}",collection="${w.collection}"} ${w.jobs}`)
-  }
-  lines.push('# HELP strangle_worker_restarts_total Process restarts of each worker slot.')
-  lines.push('# TYPE strangle_worker_restarts_total counter')
-  for (const w of workers) {
-    lines.push(`strangle_worker_restarts_total{worker="${w.worker}",collection="${w.collection}"} ${w.restarts}`)
-  }
-  return `${lines.join('\n')}\n`
 }
 
 // --- auth ------------------------------------------------------------------
@@ -375,24 +346,6 @@ function handleApi(req, res, url) {
     if (req.method === 'POST' && p === `${V1}/_mock/reset-tokens`) {
       for (const [raw, t] of tokens) if (t.owner === me.username) tokens.delete(raw)
       return json(res, 200, { status: 'reset' })
-    }
-    if (req.method === 'POST' && p === `${V1}/_mock/reset-workers`) {
-      workers = WORKERS_FIXTURE.map((w) => ({ ...w }))
-      return json(res, 200, { status: 'reset' })
-    }
-    if (req.method === 'POST' && p === `${V1}/_mock/set-workers`) {
-      return readJSON(req, res, (body) => {
-        workers = Array.isArray(body.workers)
-          ? body.workers.map((w) => ({
-            worker: String(w.worker ?? ''),
-            collection: String(w.collection ?? ''),
-            jobs: Number(w.jobs) || 0,
-            restarts: Number(w.restarts) || 0,
-            alive: Boolean(w.alive),
-          }))
-          : []
-        return json(res, 200, { status: 'updated' })
-      })
     }
     return json(res, 404, { error: `unknown mock hook ${p}` })
   }
@@ -570,10 +523,6 @@ async function serveStatic(req, res, url) {
 
 createServer((req, res) => {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`)
-  if (url.pathname === '/metrics') {
-    res.writeHead(200, { 'Content-Type': 'text/plain; version=0.0.4; charset=utf-8' })
-    return res.end(metricsText())
-  }
   if (url.pathname.startsWith(`${V1}/`)) {
     return handleApi(req, res, url)
   }

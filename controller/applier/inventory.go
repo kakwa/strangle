@@ -58,6 +58,7 @@ func Load(dir string) (*Inventory, error) {
 			continue
 		}
 
+		//nolint:gosec // G304: dir is a configured inventory path; e.Name() is its entry name
 		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
 			return nil, fmt.Errorf("read inventory file %q: %w", e.Name(), err)

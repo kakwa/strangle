@@ -20,7 +20,7 @@ import (
 func newTokenTestServer(t *testing.T, d *model.DB) *api.Server {
 	t.Helper()
 	apr := applier.NewAnsible(orgTargets, stubExecutor{}, d, zap.NewNop())
-	return api.New("test", apr, d, nil, nil, nil, nil, d.Users(), d.Tokens(), "", zap.NewNop())
+	return api.New("test", apr, d, nil, nil, nil, d.Users(), d.Tokens(), "", zap.NewNop())
 }
 
 func TestTokensCRUDWithSession(t *testing.T) {
@@ -211,7 +211,7 @@ func TestStaticTokenCannotManageTokens(t *testing.T) {
 	defer d.Close()
 	seedUser(t, d.Users(), "alice", "s3cret")
 	apr := applier.NewAnsible(testTargets, stubExecutor{}, d, zap.NewNop())
-	s := api.New("test", apr, d, nil, nil, nil, nil, d.Users(), d.Tokens(), "sekrit", zap.NewNop())
+	s := api.New("test", apr, d, nil, nil, nil, d.Users(), d.Tokens(), "sekrit", zap.NewNop())
 
 	path := "/api/v1/orgs/default/collections/home/tokens"
 	for _, h := range []map[string]string{

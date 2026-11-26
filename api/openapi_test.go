@@ -69,7 +69,7 @@ func newOpenAPITestServer(users auth.UserStore) *Server {
 		},
 	}}
 	apr := applier.NewAnsible(targets, openAPIExecutor{}, nil, zap.NewNop())
-	return New("test", apr, nil, nil, openAPINoEnqueuer{}, nil, nil, users, nil, "", zap.NewNop())
+	return New("test", apr, nil, nil, openAPINoEnqueuer{}, nil, users, nil, "", zap.NewNop())
 }
 
 func openAPIGet(t *testing.T, s *Server, path string) *httptest.ResponseRecorder {

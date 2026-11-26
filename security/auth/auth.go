@@ -98,6 +98,7 @@ func VerifyPassword(hash, pw string) bool {
 	if err != nil {
 		return false
 	}
+	//nolint:gosec // G115: key is a decoded argon2 hash, far below uint32 range
 	dk := argon2.Key([]byte(pw), salt, uint32(t), uint32(m), uint8(p), uint32(len(key)))
 	return subtle.ConstantTimeCompare(dk, key) == 1
 }

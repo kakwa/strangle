@@ -130,14 +130,13 @@ func waitFor(t *testing.T, what string, f func() bool, timeout time.Duration) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
-func pidOf(t *testing.T, m *Manager, id int) int {
+// pidOf returns the PID of the manager's single worker.
+func pidOf(t *testing.T, m *Manager) int {
 	t.Helper()
 	for _, st := range m.WorkerStatuses(context.Background()) {
-		if st.ID == id {
-			return st.PID
-		}
+		return st.PID
 	}
-	t.Fatalf("worker slot %d not found", id)
+	t.Fatal("no worker slot found")
 	return 0
 }
 
@@ -272,11 +271,11 @@ func TestManagerRestartsDeadWorker(t *testing.T) {
 	m := newFakeManager(t, 1, nil)
 	ctx := context.Background()
 
-	orig := pidOf(t, m, 0)
+	orig := pidOf(t, m)
 	_ = syscall.Kill(orig, syscall.SIGKILL)
 
 	waitFor(t, "worker to be restarted", func() bool {
-		pid := pidOf(t, m, 0)
+		pid := pidOf(t, m)
 		return pid != 0 && pid != orig
 	}, 15*time.Second)
 
@@ -294,7 +293,7 @@ func TestManagerKillsUnresponsiveWorker(t *testing.T) {
 	m := newFakeManager(t, 1, map[string]string{"FAKE_WORKER_HUNG": "1"})
 	ctx := context.Background()
 
-	orig := pidOf(t, m, 0)
+	orig := pidOf(t, m)
 	st := m.WorkerStatuses(ctx)[0]
 	if st.PID == 0 {
 		t.Fatal("hung worker: pid = 0, want a live process")
@@ -308,7 +307,7 @@ func TestManagerKillsUnresponsiveWorker(t *testing.T) {
 	m.checkHealth()
 
 	waitFor(t, "hung worker to be restarted", func() bool {
-		pid := pidOf(t, m, 0)
+		pid := pidOf(t, m)
 		return pid != 0 && pid != orig
 	}, 15*time.Second)
 
@@ -325,11 +324,11 @@ func TestManagerSupervisorKillsUnresponsiveWorker(t *testing.T) {
 	defer cancel()
 	m.Start(ctx)
 
-	orig := pidOf(t, m, 0)
+	orig := pidOf(t, m)
 
 	// The supervisor pings every 100ms and kills after two failures.
 	waitFor(t, "supervisor to restart the hung worker", func() bool {
-		pid := pidOf(t, m, 0)
+		pid := pidOf(t, m)
 		return pid != 0 && pid != orig
 	}, 15*time.Second)
 }

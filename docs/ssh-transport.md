@@ -182,7 +182,5 @@ files between jobs.
 ## Observability
 
 Per-scope SSH connection counters (`active_connections`, `total_dials`) are
-internal; there is no HTTP endpoint for them. The public `/metrics` endpoint
-exports worker state only, and the web UI's Monitor tab reads it. When
-connections are reused, a host reached on every run contributes dials only
-the first time.
+internal; there is no HTTP endpoint for them. When connections are reused, a
+host reached on every run contributes dials only the first time.

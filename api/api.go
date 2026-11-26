@@ -1,6 +1,6 @@
 // Package api implements the versioned Strangle HTTP API: the handlers and
 // their swaggo annotations, the route table, and the transport wiring
-// (authentication middleware, metrics, docs, static UI) around them.
+// (authentication middleware, docs, static UI) around them.
 package api
 
 import (
@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/controller/applier"
-	"github.com/kakwa/strangle/controller/worker"
 	"github.com/kakwa/strangle/model"
 	"github.com/kakwa/strangle/security/auth"
 	"github.com/kakwa/strangle/ui"
@@ -45,12 +44,6 @@ type RunEnqueuer interface {
 	EnqueueRun(ctx context.Context, target, playbook string, runID uint64, check bool) (string, error)
 }
 
-// WorkerReporter reports the state of the master's worker pool. It is nil
-// when no workers are managed; /metrics then reports zero worker slots.
-type WorkerReporter interface {
-	WorkerStatuses(ctx context.Context) []worker.WorkerStatus
-}
-
 // Syncer syncs a git-backed collection target. It is nil when no target has a
 // git upstream.
 type Syncer interface {
@@ -69,13 +62,6 @@ func WithCollectionAccess(a auth.CollectionAccess) Option {
 	return func(s *Server) { s.access = a }
 }
 
-// WithWorkerReporter overrides the worker-pool status reporter used by
-// /metrics. Production passes the worker manager to New; tests can supply a
-// canned reporter without starting real workers.
-func WithWorkerReporter(w WorkerReporter) Option {
-	return func(s *Server) { s.workers = w }
-}
-
 // WithTLS enables HTTPS on ListenAndServe. Both files must be set; a single
 // file is a configuration error reported when the server starts.
 func WithTLS(certFile, keyFile string) Option {
@@ -90,7 +76,6 @@ type Server struct {
 	applier     *applier.Ansible
 	store       model.Store
 	ssh         *sshpool.Multi
-	workers     WorkerReporter
 	syncer      Syncer
 	users       auth.UserStore
 	tokens      auth.TokenStore
@@ -116,14 +101,14 @@ var uiFS = func() fs.FS {
 
 // New returns a Server. The web UI is embedded in the binary; build it with
 // `make ui` (or `make build`) before compiling. ssh may be nil when no
-// target uses the Go-managed SSH transport. workers may be nil when no worker
-// pool is managed. syncer may be nil when no target has a git upstream.
-// users, when non-nil, is the store of UI accounts; UI authentication is
-// enforced as soon as it holds at least one user (see Routes). tokens, when
-// non-nil, is the store of collection-scoped user API tokens. authToken, when
-// non-empty, is a static bearer token accepted on the collection hook only.
-// The run argument is kept for source compatibility and ignored.
-func New(addr string, apr *applier.Ansible, st model.Store, ssh *sshpool.Multi, _ RunEnqueuer, workers WorkerReporter, syncer Syncer, users auth.UserStore, tokens auth.TokenStore, authToken string, logger *zap.Logger, opts ...Option) *Server {
+// target uses the Go-managed SSH transport. syncer may be nil when no target
+// has a git upstream. users, when non-nil, is the store of UI accounts; UI
+// authentication is enforced as soon as it holds at least one user (see
+// Routes). tokens, when non-nil, is the store of collection-scoped user API
+// tokens. authToken, when non-empty, is a static bearer token accepted on the
+// collection hook only. The run argument is kept for source compatibility
+// and ignored.
+func New(addr string, apr *applier.Ansible, st model.Store, ssh *sshpool.Multi, _ RunEnqueuer, syncer Syncer, users auth.UserStore, tokens auth.TokenStore, authToken string, logger *zap.Logger, opts ...Option) *Server {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -132,7 +117,6 @@ func New(addr string, apr *applier.Ansible, st model.Store, ssh *sshpool.Multi, 
 		applier:   apr,
 		store:     st,
 		ssh:       ssh,
-		workers:   workers,
 		syncer:    syncer,
 		users:     users,
 		tokens:    tokens,
@@ -145,8 +129,8 @@ func New(addr string, apr *applier.Ansible, st model.Store, ssh *sshpool.Multi, 
 	return s
 }
 
-// Routes builds the HTTP handler: the /api/v1 endpoints, /metrics, the API
-// docs and the embedded web UI.
+// Routes builds the HTTP handler: the /api/v1 endpoints, the API docs and
+// the embedded web UI.
 //
 // UI authentication is enforced when a user store is configured and holds at
 // least one user: every /api/* request then needs a valid session or user
@@ -173,10 +157,6 @@ func (s *Server) buildRoutes() *echo.Echo {
 	e.Use(s.authMiddleware, collectionAccessMiddleware(api))
 
 	s.registerAPIRoutes(e, api)
-
-	// Prometheus scrape endpoint. It is intentionally outside /api so it is
-	// reachable without a UI session, and reports worker and runtime state.
-	e.GET("/metrics", echo.WrapHandler(metricsHandler(s.workers)))
 
 	// Machine-readable API description and Swagger UI. Both are public: the
 	// spec describes the routes but exposes no collection data itself.
@@ -357,9 +337,15 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	srv := &http.Server{Addr: s.addr, Handler: s.Routes()}
+	srv := &http.Server{
+		Addr:              s.addr,
+		Handler:           s.Routes(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
 
-	go func() {
+	// The goroutine wakes when ctx is done, at which point ctx can no longer
+	// be used, so the shutdown derives its own deadline from Background.
+	go func() { //nolint:gosec // G118: ctx is canceled by the time the shutdown runs
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -387,12 +373,11 @@ func spaHandler(fsys fs.FS) http.Handler {
 			name = "."
 		}
 		if f, err := fsys.Open(name); err == nil {
+			defer f.Close() //nolint:errcheck // best-effort close of the probe file
 			if st, err := f.Stat(); err == nil && !st.IsDir() {
-				f.Close()
 				files.ServeHTTP(w, r)
 				return
 			}
-			f.Close()
 		}
 		http.ServeFileFS(w, r, fsys, "index.html")
 	})

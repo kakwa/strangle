@@ -243,7 +243,7 @@ func run(cmd *cobra.Command, args []string) error {
 	if collMgr.HasGit() {
 		syncer = collMgr
 	}
-	srv := api.New(conf.Server.ListenAddr, apr, st, multi, enqueue, mgr, syncer, users, tokens, conf.Server.Auth.Token, lg,
+	srv := api.New(conf.Server.ListenAddr, apr, st, multi, enqueue, syncer, users, tokens, conf.Server.Auth.Token, lg,
 		api.WithCollectionAccess(access),
 		api.WithTLS(conf.Server.TLS.CertFile, conf.Server.TLS.KeyFile))
 

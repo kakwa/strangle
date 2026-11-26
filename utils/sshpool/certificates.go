@@ -143,8 +143,9 @@ func (p *internalCAProvider) Signers(ep Endpoint) ([]ssh.Signer, time.Time, erro
 		CertType:        ssh.UserCert,
 		KeyId:           fmt.Sprintf("%s-%d", p.keyIDPrefix, now.Unix()),
 		ValidPrincipals: certPrincipals(p.principals, ep.User),
-		ValidAfter:      uint64(now.Add(-time.Minute).Unix()),
-		ValidBefore:     uint64(validBefore.Unix()),
+		// Both timestamps are now-relative, hence after the Unix epoch.
+		ValidAfter:  uint64(now.Add(-time.Minute).Unix()), //nolint:gosec // G115: now-relative, after the Unix epoch
+		ValidBefore: uint64(validBefore.Unix()),           //nolint:gosec // G115: now-relative, after the Unix epoch
 	}
 	if err := cert.SignCert(rand.Reader, p.authority); err != nil {
 		return nil, time.Time{}, fmt.Errorf("sign SSH user certificate: %w", err)
@@ -217,7 +218,7 @@ func newVaultProvider(conf cfg.SSHConfig, subject ssh.Signer) (SignerProvider, e
 		}
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("Vault CA certificate %q contains no PEM certificates", v.CACertFile)
+			return nil, fmt.Errorf("vault CA certificate %q contains no PEM certificates", v.CACertFile)
 		}
 		tlsConfig.RootCAs = pool
 	}
@@ -244,7 +245,7 @@ func vaultSecret(inline, path, label string) (string, error) {
 		return strings.TrimSpace(string(data)), nil
 	}
 	if inline == "" {
-		return "", fmt.Errorf("Vault AppRole %s is empty", label)
+		return "", fmt.Errorf("vault AppRole %s is empty", label)
 	}
 	return inline, nil
 }
@@ -269,7 +270,7 @@ func (p *vaultProvider) request(ctx context.Context, method, path string, body, 
 
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("Vault request %s: %w", path, err)
+		return fmt.Errorf("vault request %s: %w", path, err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
@@ -277,7 +278,7 @@ func (p *vaultProvider) request(ctx context.Context, method, path string, body, 
 		return fmt.Errorf("read Vault response %s: %w", path, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("Vault request %s: HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(data)))
+		return fmt.Errorf("vault request %s: HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(data)))
 	}
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {
@@ -301,7 +302,7 @@ func (p *vaultProvider) ensureToken(ctx context.Context) error {
 		return err
 	}
 	if login.Auth.ClientToken == "" {
-		return fmt.Errorf("Vault AppRole login returned no client token")
+		return fmt.Errorf("vault AppRole login returned no client token")
 	}
 	lease := time.Duration(login.Auth.LeaseDuration) * time.Second
 	// A lease shorter than a minute is too short to use safely: the next
@@ -344,13 +345,14 @@ func (p *vaultProvider) Signers(ep Endpoint) ([]ssh.Signer, time.Time, error) {
 	}
 	cert, ok := key.(*ssh.Certificate)
 	if !ok {
-		return nil, time.Time{}, fmt.Errorf("Vault returned %T, want an SSH certificate", key)
+		return nil, time.Time{}, fmt.Errorf("vault returned %T, want an SSH certificate", key)
 	}
 	signer, err := ssh.NewCertSigner(cert, p.subject)
 	if err != nil {
 		return nil, time.Time{}, fmt.Errorf("create Vault certificate signer: %w", err)
 	}
 	p.signer = signer
+	//nolint:gosec // cert validity is seconds since the Unix epoch, far below int64 range
 	p.refreshAt = renewalDeadline(time.Unix(int64(cert.ValidBefore), 0), p.ttl)
 	return []ssh.Signer{p.signer}, p.refreshAt, nil
 }

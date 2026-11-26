@@ -1,5 +1,4 @@
 import {
-  IconActivity,
   IconBook,
   IconFingerprint,
   IconGauge,
@@ -24,7 +23,6 @@ const mainLinks = [
   { icon: IconBook, label: 'Playbooks' },
   { icon: IconFingerprint, label: 'SSH' },
   { icon: IconKey, label: 'Tokens' },
-  { icon: IconActivity, label: 'Monitor' },
 ]
 
 const dashboardLinks = [

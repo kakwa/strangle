@@ -56,7 +56,7 @@ func newSyncTestServer(t *testing.T, syncer api.Syncer, token string) (*api.Serv
 	t.Helper()
 	st := testutil.OpenDB(t, "server")
 	apr := applier.NewAnsible(testTargets, stubExecutor{}, st, zap.NewNop())
-	s := api.New("test", apr, st, nil, nil, nil, syncer, nil, nil, token, zap.NewNop())
+	s := api.New("test", apr, st, nil, nil, syncer, nil, nil, token, zap.NewNop())
 	return s, apr
 }
 
@@ -178,7 +178,7 @@ func newSSHServer(t *testing.T, pool *sshpool.Multi) *api.Server {
 	t.Helper()
 	st := testutil.OpenDB(t, "server")
 	apr := applier.NewAnsible(testTargets, stubExecutor{}, st, zap.NewNop())
-	return api.New("test", apr, st, pool, nil, nil, nil, nil, nil, "", zap.NewNop())
+	return api.New("test", apr, st, pool, nil, nil, nil, nil, "", zap.NewNop())
 }
 
 func hostKeyPath(host string) string {
@@ -336,7 +336,7 @@ func TestListenAndServe(t *testing.T) {
 	st := testutil.OpenDB(t, "server")
 	s := api.New("127.0.0.1:0",
 		applier.NewAnsible(testTargets, stubExecutor{}, st, zap.NewNop()),
-		st, nil, nil, nil, nil, nil, nil, "", zap.NewNop())
+		st, nil, nil, nil, nil, nil, "", zap.NewNop())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)

@@ -23,8 +23,7 @@ and the schedule. It spawns a pool of worker child processes
 dispatches playbook runs to them over unix sockets using a small JSON-RPC
 protocol in `controller/worker` (no code generation).
 A master supervises the workers: health pings and automatic restarts with
-backoff. Worker state is observable through the public Prometheus `/metrics`
-endpoint and the web UI's Monitor tab.
+backoff.
 
 Each (target, playbook) job has its own robfig/cron v3 schedule (or inherits
 the server fallback), and the scheduler enqueues it when due. PostgreSQL is
@@ -49,7 +48,7 @@ user certificates signed by a local CA or by Vault through AppRole.
 ```
 cmd/strangle-server/ server entrypoint: config, wiring, worker subcommand, graceful shutdown
 cmd/strangle-cli/    client entrypoint: API client and account/token/access commands
-api/                 HTTP API: Echo transport, auth middleware, routes, /metrics,
+api/                 HTTP API: Echo transport, auth middleware, routes,
                      OpenAPI docs and the built-in UI
   docs/              documentation (architecture, configuration, API) and the
                      generated OpenAPI 3.1 package (swaggo)
@@ -116,7 +115,6 @@ config/              base configuration, loaded by default
 Everything is under `/api/v1`; the old flat `/api/*` routes were removed.
 
 - `GET /api/v1/health`   — liveness (open, no auth)
-- `GET /metrics`         — Prometheus text exposition: build info, Go runtime and worker state (open)
 - `GET /api/v1/openapi.json` — generated OpenAPI 3.1 document (open)
 - `GET /api/docs`        — Swagger UI (open), with assets under `/api/docs/`
 - `POST /api/v1/login`   — authenticate a local account, sets a 12 h session cookie
@@ -174,9 +172,6 @@ button:
   scope, lifetime and last use, revoke it.
 - `/ssh` — **SSH**: pending SSH host keys of a selected playbook and host,
   with approve/reject actions.
-- `/monitor` — **Monitor**: worker pool state fetched from the public
-  Prometheus `/metrics` endpoint (total/alive/dead, jobs and restarts per
-  worker).
 
 ## Configuration
 

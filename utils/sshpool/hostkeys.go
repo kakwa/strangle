@@ -80,6 +80,7 @@ func NewHostKeyStore(conf cfg.SSHConfig) (*HostKeyStore, error) {
 		s.callback = cb
 	case cfg.PolicyCA:
 		for _, path := range conf.CAFiles {
+			//nolint:gosec // path comes from the operator's ca_files configuration
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return nil, fmt.Errorf("read CA file %q: %w", path, err)
@@ -110,6 +111,7 @@ func NewHostKeyStore(conf cfg.SSHConfig) (*HostKeyStore, error) {
 		}
 		s.callback = s.verify
 	case cfg.PolicyInsecure:
+		//nolint:gosec // deliberate: the insecure policy is an explicit operator opt-in
 		s.callback = ssh.InsecureIgnoreHostKey()
 	default:
 		return nil, fmt.Errorf("unknown host_key_policy %q", policy)
@@ -250,6 +252,7 @@ func loadKeys(path string) (map[string]HostKey, error) {
 	if path == "" {
 		return keys, nil
 	}
+	//nolint:gosec // G304: path is a configured host key store file
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return keys, nil

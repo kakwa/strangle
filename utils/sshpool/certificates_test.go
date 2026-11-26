@@ -129,8 +129,8 @@ func TestVaultProvider(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case r.URL.Path == "/v1/auth/approle/login":
+		switch r.URL.Path {
+		case "/v1/auth/approle/login":
 			var body map[string]string
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Errorf("login body: %v", err)
@@ -142,7 +142,7 @@ func TestVaultProvider(t *testing.T) {
 			logins++
 			mu.Unlock()
 			_, _ = w.Write([]byte(`{"auth":{"client_token":"vault-token","lease_duration":3600}}`))
-		case r.URL.Path == "/v1/ssh-lab/sign/strangle":
+		case "/v1/ssh-lab/sign/strangle":
 			if got := r.Header.Get("X-Vault-Token"); got != "vault-token" {
 				t.Errorf("X-Vault-Token = %q", got)
 			}

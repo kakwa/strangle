@@ -61,6 +61,7 @@ type Manifest struct {
 // ReadFile loads a manifest written by the master.
 func ReadFile(path string) (Manifest, error) {
 	var m Manifest
+	//nolint:gosec // G304: path is the manifest file the master passes to the worker
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return m, fmt.Errorf("read sandbox manifest %q: %w", path, err)

@@ -1,0 +1,35 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+formatters:
+  enable:
+    - gofmt # formatting
+
+linters:
+  enable:
+    - bodyclose # check that HTTP response bodies are closed
+    - gocritic # diagnostic checks
+    - gosec # security checks
+    - misspell # misspelled words in comments and strings
+    - unconvert # redundant type conversions
+    - unparam # unused function parameters
+  settings:
+    errcheck:
+      exclude-functions:
+        # Closing an HTTP response body after reading it is best-effort.
+        - (io.ReadCloser).Close
+        # Writing to the process's own stdout/stderr is best-effort in the CLI.
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+  exclusions:
+    rules:
+      # Test code builds fixture paths from t.TempDir and writes fixture files
+      # with conventional permissions; gosec's taint and permission rules are
+      # false positives there, and test cleanup ignores errors by design.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec

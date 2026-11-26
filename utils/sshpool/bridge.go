@@ -106,7 +106,7 @@ func (b *Bridge) Close() {
 func (b *Bridge) serve() {
 	reader := bufio.NewReader(b.reqR)
 	writer := bufio.NewWriter(b.respW)
-	defer writer.Flush()
+	defer writer.Flush() //nolint:errcheck // best-effort flush at bridge teardown
 
 	for {
 		line, err := reader.ReadString('\n')

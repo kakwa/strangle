@@ -403,6 +403,7 @@ func scopeNames(inv *Inventory, playbookPath string) []string {
 // playHosts reads a playbook file and collects the "hosts" pattern of every
 // play.
 func playHosts(path string) ([]string, error) {
+	//nolint:gosec // G304: path is a configured target directory joined with a playbook name
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err

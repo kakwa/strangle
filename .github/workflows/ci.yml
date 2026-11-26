@@ -45,6 +45,12 @@ jobs:
       - name: Vet
         run: make vet
 
+      - name: Lint
+        run: make lint
+
+      - name: Vulnerability check
+        run: make vulncheck
+
       - name: Test
         run: make test
 

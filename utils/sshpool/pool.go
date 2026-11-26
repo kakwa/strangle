@@ -92,6 +92,7 @@ func New(conf cfg.SSHConfig) (*Manager, error) {
 			if sock == "" {
 				return nil, errors.New("ssh use_agent is enabled but SSH_AUTH_SOCK is unset")
 			}
+			//nolint:gosec // G704: sock is the operator's own SSH_AUTH_SOCK socket
 			conn, err := net.Dial("unix", sock)
 			if err != nil {
 				return nil, fmt.Errorf("connect to SSH agent: %w", err)
@@ -167,6 +168,7 @@ func loadSigner(path, passphrase string) (ssh.Signer, error) {
 
 	// If an OpenSSH user certificate accompanies the key, wrap the signer.
 	certPath := expandHome(path) + "-cert.pub"
+	//nolint:gosec // G304: certPath is the configured key file plus "-cert.pub"
 	if certData, certErr := os.ReadFile(certPath); certErr == nil {
 		key, _, _, _, parseErr := ssh.ParseAuthorizedKey(certData)
 		if parseErr != nil {
@@ -346,7 +348,7 @@ func (m *Manager) Exec(ep Endpoint, command string, stdin []byte) (ExecResult, e
 			m.drop(ep)
 			return fmt.Errorf("ssh session: %w", err)
 		}
-		defer session.Close()
+		defer session.Close() //nolint:errcheck // best-effort cleanup of the session
 
 		var stdout, stderr bytes.Buffer
 		session.Stdout = &stdout
@@ -377,14 +379,14 @@ func (m *Manager) Put(ep Endpoint, remotePath string, content []byte, mode uint3
 		if err != nil {
 			return err
 		}
-		defer sftpClient.Close()
+		defer sftpClient.Close() //nolint:errcheck // best-effort cleanup of the SFTP client
 
 		file, err := sftpClient.Create(remotePath)
 		if err != nil {
 			return fmt.Errorf("sftp create %q: %w", remotePath, err)
 		}
 		if _, err := file.Write(content); err != nil {
-			file.Close()
+			file.Close() //nolint:errcheck,gosec // best-effort cleanup on the error path
 			return fmt.Errorf("sftp write %q: %w", remotePath, err)
 		}
 		if err := file.Close(); err != nil {
@@ -407,13 +409,13 @@ func (m *Manager) Fetch(ep Endpoint, remotePath string) ([]byte, error) {
 		if err != nil {
 			return err
 		}
-		defer sftpClient.Close()
+		defer sftpClient.Close() //nolint:errcheck // best-effort cleanup of the SFTP client
 
 		file, err := sftpClient.Open(remotePath)
 		if err != nil {
 			return fmt.Errorf("sftp open %q: %w", remotePath, err)
 		}
-		defer file.Close()
+		defer file.Close() //nolint:errcheck // best-effort cleanup of the SFTP file
 
 		var buf bytes.Buffer
 		if _, err := buf.ReadFrom(file); err != nil {

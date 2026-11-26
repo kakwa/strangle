@@ -37,7 +37,7 @@ var orgTargets = []cfg.TargetConfig{
 
 func newOrgServer(st model.Store, opts ...api.Option) *api.Server {
 	apr := applier.NewAnsible(orgTargets, stubExecutor{}, st, zap.NewNop())
-	return api.New("test", apr, st, nil, nil, nil, nil, nil, nil, "", zap.NewNop(), opts...)
+	return api.New("test", apr, st, nil, nil, nil, nil, nil, "", zap.NewNop(), opts...)
 }
 
 // seedRunAt persists one successful run for a collection/playbook/host triple.
@@ -56,7 +56,7 @@ func seedRunAt(t *testing.T, st model.Store, target, playbook, host string, star
 
 func TestVersionedRoutesAndFlatAliases(t *testing.T) {
 	// This test needs no database: it only exercises routing and public docs.
-	s := api.New("test", nil, nil, nil, nil, nil, nil, nil, nil, "", zap.NewNop())
+	s := api.New("test", nil, nil, nil, nil, nil, nil, nil, "", zap.NewNop())
 
 	rec := doGet(t, s, "/api/v1/health")
 	if rec.Code != http.StatusOK {
@@ -100,7 +100,7 @@ func TestVersionedRoutesAndFlatAliases(t *testing.T) {
 }
 
 func TestOpenAPISpecIsVersionedOnly(t *testing.T) {
-	s := api.New("test", nil, nil, nil, nil, nil, nil, nil, nil, "", zap.NewNop())
+	s := api.New("test", nil, nil, nil, nil, nil, nil, nil, "", zap.NewNop())
 	rec := doGet(t, s, "/api/v1/openapi.json")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)

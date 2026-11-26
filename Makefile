@@ -5,11 +5,14 @@ GO := go
 # CPython version that provides the development headers.
 export PKG_CONFIG := $(CURDIR)/scripts/pkg-config-cpy
 
-# swaggo/swag v2 is pinned as a Go tool in go.mod; invoke it via `go tool`.
+# swaggo/swag v2, golangci-lint and govulncheck are pinned as Go tools in
+# go.mod; invoke them via `go tool`.
 SWAG := $(GO) tool swag
 SWAG_ARGS := init --v3.1 -g api/openapi_general.go -d . -o ./api/docs --parseDependency
+LINT := $(GO) tool golangci-lint
+VULN := $(GO) tool govulncheck
 
-.PHONY: all build run test coverage tidy vet ui ui-dev swag swag-check generate
+.PHONY: all build run test coverage tidy vet lint vulncheck ui ui-dev swag swag-check generate
 
 all: build
 
@@ -32,6 +35,16 @@ coverage: swag
 
 vet: swag
 	$(GO) vet ./...
+
+# Lint the whole module with golangci-lint (pinned in go.mod).
+lint: swag
+	$(LINT) run ./...
+
+# Scan direct and indirect dependencies for known vulnerabilities
+# (golang.org/x/vuln, pinned in go.mod). Needs network access to the
+# vulnerability database.
+vulncheck:
+	$(VULN) ./...
 
 tidy:
 	$(GO) mod tidy

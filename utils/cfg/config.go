@@ -174,7 +174,10 @@ func (c *CollectionConfig) UnmarshalYAML(node *yaml.Node) error {
 	if len(raw.Collections) > 0 && len(raw.Targets) > 0 {
 		return errors.New("collection: use either collections or targets, not both")
 	}
-	c.Collections = append(raw.Collections, raw.Targets...)
+	c.Collections = raw.Collections
+	if len(raw.Targets) > 0 {
+		c.Collections = append(c.Collections, raw.Targets...)
+	}
 	return nil
 }
 
@@ -541,6 +544,7 @@ type SSHConfig struct {
 
 // readYAML reads and unmarshals the YAML file at path into v.
 func readYAML(path string, v any) error {
+	//nolint:gosec // G304: path is an operator-specified configuration file
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read %q: %w", path, err)
@@ -702,6 +706,7 @@ func LoadCollection(collectionPath string) ([]TargetSpec, error) {
 // (the target name) and Branch (the tracked branch or ref).
 func LoadTarget(spec TargetSpec, path string, vars map[string]string) (TargetConfig, error) {
 	cfgPath := filepath.Join(path, "strangle.yml")
+	//nolint:gosec // G304: path is the configured target directory
 	data, err := os.ReadFile(cfgPath)
 	if err != nil {
 		return TargetConfig{}, fmt.Errorf("target %q: read %q: %w", spec.Name, cfgPath, err)
@@ -740,11 +745,12 @@ func LoadTarget(spec TargetSpec, path string, vars map[string]string) (TargetCon
 		HostCleanup: spec.HostCleanup,
 		Schedule:    targetSchedule,
 	}
-	if file.WorkingDir == "" {
+	switch {
+	case file.WorkingDir == "":
 		t.WorkingDir = path
-	} else if filepath.IsAbs(file.WorkingDir) {
+	case filepath.IsAbs(file.WorkingDir):
 		t.WorkingDir = file.WorkingDir
-	} else {
+	default:
 		t.WorkingDir = filepath.Join(path, file.WorkingDir)
 	}
 

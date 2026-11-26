@@ -21,7 +21,7 @@ import (
 func newAuthTestServer(t *testing.T, d *model.DB) *api.Server {
 	t.Helper()
 	apr := applier.NewAnsible(testTargets, stubExecutor{}, d, zap.NewNop())
-	return api.New("test", apr, d, nil, nil, nil, nil, d.Users(), nil, "", zap.NewNop())
+	return api.New("test", apr, d, nil, nil, nil, d.Users(), nil, "", zap.NewNop())
 }
 
 func seedUser(t *testing.T, users auth.UserStore, name, pw string) {
@@ -183,7 +183,7 @@ func TestLoginFlow(t *testing.T) {
 func newHookAuthTestServer(t *testing.T, d *model.DB, syncer api.Syncer, token string) *api.Server {
 	t.Helper()
 	apr := applier.NewAnsible(testTargets, stubExecutor{}, d, zap.NewNop())
-	return api.New("test", apr, d, nil, nil, nil, syncer, d.Users(), nil, token, zap.NewNop())
+	return api.New("test", apr, d, nil, nil, syncer, d.Users(), nil, token, zap.NewNop())
 }
 
 func TestHookWithSession(t *testing.T) {

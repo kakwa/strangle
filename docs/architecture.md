@@ -12,7 +12,7 @@ strangle-server serve (master)
   ├── collection.Manager: git-backed targets (clone/pin/sync/reload)
   ├── worker.Manager: spawns and supervises the worker pool
   ├── scheduler + River client: enqueues playbook runs
-  └── HTTP server: /api/v1, /metrics and the embedded web UI
+  └── HTTP server: /api/v1 and the embedded web UI
 
 strangle-server worker --socket /tmp/.../worker-N.sock   (× N, N = workers)
   ├── one embedded CPython interpreter + Ansible (go.nhat.io/cpy/v3)
@@ -62,21 +62,12 @@ The `worker.Manager` keeps the pool alive:
   fail until the master is restarted. Failures are forgiven if a worker
   stays up for 5 minutes.
 
-Worker state is observable through the public Prometheus `/metrics` endpoint
-and the web UI's Monitor tab: `strangle_workers{state=total|alive|dead}`,
-`strangle_worker_jobs{worker,collection}` and
-`strangle_worker_restarts_total{worker,collection}`. There is no worker API
-route.
-
 Dispatch is round-robin over the live slots (dead or respawning slots are
 skipped). A dispatch to a busy slot is fine: runs on one worker are
 serialized inside that worker, so extra jobs queue behind the in-flight one.
 
-`GET /metrics` is rendered on demand by the HTTP server from the worker
-manager's current status, plus build information and a few Go runtime gauges.
-It needs no configuration and is intentionally open like `/api/v1/health`;
-see the [API reference](api.md#get-metrics) for the exported series. There
-are no aggregate run/host stats in the API or the store.
+There is no worker API route, and no aggregate run/host stats in the API or
+the store.
 
 ## Job flow
 

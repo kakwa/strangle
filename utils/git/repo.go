@@ -71,7 +71,7 @@ func (r *Repo) Sync(ctx context.Context) (string, bool, error) {
 	if err != nil {
 		return "", false, err
 	}
-	defer repo.Close()
+	defer repo.Close() //nolint:errcheck // best-effort cleanup of the repository handle
 
 	if r.ref != "" {
 		err = r.checkoutRef(ctx, repo)
@@ -103,7 +103,7 @@ func (r *Repo) Status(_ context.Context) (branch, rev string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	defer repo.Close()
+	defer repo.Close() //nolint:errcheck // best-effort cleanup of the repository handle
 
 	rev, err = headRev(repo)
 	if err != nil {

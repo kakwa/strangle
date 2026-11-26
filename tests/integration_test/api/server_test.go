@@ -24,11 +24,11 @@ func (stubExecutor) RunPlaybook(context.Context, string, string, string, ...stri
 
 // newTestServer builds a server with the package's standard test targets over
 // a fresh test database.
-func newTestServer(t *testing.T, opts ...api.Option) *api.Server {
+func newTestServer(t *testing.T) *api.Server {
 	t.Helper()
 	st := testutil.OpenDB(t, "server")
 	apr := applier.NewAnsible(testTargets, stubExecutor{}, st, zap.NewNop())
-	return api.New("test", apr, st, nil, nil, nil, nil, nil, nil, "", zap.NewNop(), opts...)
+	return api.New("test", apr, st, nil, nil, nil, nil, nil, "", zap.NewNop())
 }
 
 // request serves one request through the full route table.
