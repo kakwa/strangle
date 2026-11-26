@@ -10,6 +10,19 @@ import (
 	"github.com/labstack/echo/v5"
 )
 
+// patchOperation is one RFC 6902 operation. Only `replace`/`add` on
+// /status and /fingerprint are accepted by the host status handler.
+type patchOperation struct {
+	Op    string `json:"op"`
+	Path  string `json:"path"`
+	Value string `json:"value"`
+}
+
+type hostStatusResponse struct {
+	Status string `json:"status"`
+	Host   string `json:"host"`
+}
+
 // ListHosts godoc
 //
 // @ID      get_orgs_org_collections_collection_hosts

@@ -8,6 +8,16 @@ import (
 	"github.com/labstack/echo/v5"
 )
 
+type syncRequest struct {
+	Branch string `json:"branch,omitempty"`
+}
+
+type syncResponse struct {
+	Target  string `json:"target"`
+	Rev     string `json:"rev"`
+	Changed bool   `json:"changed"`
+}
+
 // hookAllowed reports whether the resolved identity may call the hook.
 func (a *API) hookAllowed(r *http.Request) bool {
 	identity := FromRequest(r)

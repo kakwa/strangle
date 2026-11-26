@@ -11,6 +11,16 @@ import (
 	"go.uber.org/zap"
 )
 
+type tokenCreateRequest struct {
+	Name     string `json:"name"`
+	TTLHours int64  `json:"ttl_hours,omitempty"`
+}
+
+type tokenCreateResponse struct {
+	Raw   string     `json:"raw"`
+	Token auth.Token `json:"token"`
+}
+
 // tokenScope resolves and validates the org/collection of a token route.
 // Tokens are managed only through a collection URL.
 func (a *API) tokenScope(c *echo.Context) (string, string, error) {

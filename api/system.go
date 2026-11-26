@@ -9,6 +9,20 @@ import (
 	"go.uber.org/zap"
 )
 
+type statusResponse struct {
+	Status string `json:"status"`
+}
+
+type loginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type meResponse struct {
+	Authenticated bool   `json:"authenticated"`
+	Username      string `json:"username,omitempty"`
+}
+
 // SessionCookie is the cookie carrying a UI session token. It lives here so
 // handlers and the server's auth middleware share one definition.
 const SessionCookie = "strangle_session"

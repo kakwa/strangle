@@ -10,6 +10,33 @@ import (
 	"github.com/labstack/echo/v5"
 )
 
+type orgInfo struct {
+	Name        string           `json:"name"`
+	Collections []collectionInfo `json:"collections"`
+}
+
+type collectionInfo struct {
+	Name      string         `json:"name"`
+	Org       string         `json:"org"`
+	Playbooks []playbookInfo `json:"playbooks,omitempty"`
+}
+
+type orgCreateRequest struct {
+	Name string `json:"name"`
+}
+
+type orgCreateResponse struct {
+	Name        string           `json:"name"`
+	Collections []collectionInfo `json:"collections"`
+}
+
+type collectionDetailResponse struct {
+	Name      string            `json:"name"`
+	Org       string            `json:"org"`
+	Playbooks []playbookInfo    `json:"playbooks"`
+	Links     map[string]string `json:"links"`
+}
+
 // orgNamePattern keeps API-created org names usable as URL segments and in
 // configuration files.
 var orgNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
