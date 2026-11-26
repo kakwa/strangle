@@ -217,7 +217,7 @@ collections:
 		Expect(cfg.Server.Retention.MaxCount).To(Equal(1000))
 		Expect(cfg.Targets).To(HaveLen(1))
 		Expect(cfg.Targets[0].Retention.MaxCount).To(Equal(7))
-		Expect(cfg.Targets[0].Retention.MaxAge).To(Equal(0))
+		Expect(cfg.Targets[0].Retention.MaxAge).To(Equal(time.Duration(0)))
 	})
 })
 
