@@ -1,4 +1,6 @@
-// Package db implements the Store interface on PostgreSQL via gorm.
+// Package model implements the Store interface on PostgreSQL or SQLite via
+// gorm. The flavor is selected from the DSN at Open time (see dialectorFor),
+// so a single build serves either backend.
 package model
 
 import (
@@ -12,23 +14,29 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/cfg"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
-// DB is a Store backed by PostgreSQL.
+// DB is a Store backed by PostgreSQL or SQLite.
 type DB struct {
 	gdb *gorm.DB
 }
 
-// Open connects to the PostgreSQL database described by dsn and migrates the
-// schema.
+// Open connects to the database described by dsn and migrates the schema.
+// The backend is chosen from the DSN: a postgres:// (or postgresql://) URI
+// opens PostgreSQL, anything else (a file path, a file: URI, or a
+// sqlite:// URI) opens SQLite.
 func Open(ctx context.Context, dsn string) (*DB, error) {
-	gdb, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+	d, err := dialectorFor(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("resolve database dialect: %w", err)
+	}
+	gdb, err := gorm.Open(d.open, &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
-		// Turn SQLSTATE 23505 into gorm.ErrDuplicatedKey so stores can map
-		// duplicate users/tokens to their domain errors.
+		// Turn unique-constraint violations into gorm.ErrDuplicatedKey so
+		// stores can map duplicate users/tokens to their domain errors
+		// (SQLSTATE 23505 on PostgreSQL, SQLITE_CONSTRAINT on SQLite).
 		TranslateError: true,
 	})
 	if err != nil {
@@ -54,12 +62,16 @@ func Open(ctx context.Context, dsn string) (*DB, error) {
 		return nil, fmt.Errorf("migrate schema: %w", err)
 	}
 
-	// AutoMigrate never drops indexes. Replace the old per-target host index
-	// with the context key (collection, hostname, playbook, inventory), and the
-	// old unscoped token index with one that includes the token's scope.
-	for _, idx := range []string{"idx_hosts_name", "idx_host_target_name", "idx_api_tokens_owner_name"} {
-		if err := gdb.WithContext(ctx).Exec("DROP INDEX IF EXISTS " + idx).Error; err != nil {
-			return nil, fmt.Errorf("drop legacy index %s: %w", idx, err)
+	// AutoMigrate never drops indexes. On an upgraded PostgreSQL install,
+	// replace the old per-target host index with the context key (collection,
+	// hostname, playbook, inventory), and the old unscoped token index with
+	// one that includes the token's scope. Fresh SQLite databases have none
+	// of these, so the step is skipped there.
+	if d.name == "postgres" {
+		for _, idx := range []string{"idx_hosts_name", "idx_host_target_name", "idx_api_tokens_owner_name"} {
+			if err := gdb.WithContext(ctx).Exec("DROP INDEX IF EXISTS " + idx).Error; err != nil {
+				return nil, fmt.Errorf("drop legacy index %s: %w", idx, err)
+			}
 		}
 	}
 
@@ -393,11 +405,23 @@ func (d *DB) ListHosts(ctx context.Context) ([]HostRecord, error) {
 	}
 	var hosts []hostRow
 	// The same hostname can have one row per playbook/inventory context; the
-	// host view only shows its latest appearance per collection.
+	// host view only shows its latest appearance per collection. ROW_NUMBER is
+	// used instead of PostgreSQL's SELECT DISTINCT ON so the query is portable
+	// to SQLite. (last_run_at IS NULL) DESC mirrors PostgreSQL's default
+	// NULLS-FIRST ordering for a DESC column.
 	if err := d.gdb.WithContext(ctx).
-		Raw(`SELECT DISTINCT ON (c.name, h.name) h.*, c.name AS target
-			FROM hosts h JOIN collections c ON c.id = h.collection_id
-			ORDER BY c.name, h.name, h.last_run_at DESC, h.id DESC`).
+		Raw(`SELECT h.*
+			FROM (
+				SELECT h.*, c.name AS target,
+					ROW_NUMBER() OVER (
+						PARTITION BY c.name, h.name
+						ORDER BY (h.last_run_at IS NULL) DESC, h.last_run_at DESC, h.id DESC
+					) AS rn
+				FROM hosts h
+				JOIN collections c ON c.id = h.collection_id
+			) h
+			WHERE h.rn = 1
+			ORDER BY h.target, h.name`).
 		Scan(&hosts).Error; err != nil {
 		return nil, err
 	}
@@ -420,11 +444,14 @@ func (d *DB) HostRuns(ctx context.Context, host string, limit int) ([]HostRunRec
 		Success    bool      `gorm:"column:success"`
 	}
 	var rows []row
+	// host_runs is keyed by (run_id, host_id), so a given host name has at
+	// most one row per run; no dedup is needed. A plain SELECT (rather than
+	// PostgreSQL's DISTINCT ON (r.id)) keeps the query portable to SQLite.
 	q := d.gdb.WithContext(ctx).Model(&HostRun{}).
 		Joins("JOIN hosts h ON h.id = host_runs.host_id").
 		Joins("JOIN collections c ON c.id = h.collection_id").
 		Joins("JOIN runs r ON r.id = host_runs.run_id").
-		Select("DISTINCT ON (r.id) host_runs.*, h.name AS hostname, c.name AS hosttarget, r.playbook, r.started_at, r.duration_ms, r.exit_code, r.success").
+		Select("host_runs.*, h.name AS hostname, c.name AS hosttarget, r.playbook, r.started_at, r.duration_ms, r.exit_code, r.success").
 		Where("h.name = ?", host).
 		Order("r.id DESC")
 	if limit > 0 {

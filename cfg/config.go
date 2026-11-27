@@ -146,10 +146,16 @@ type AuthConfig struct {
 	CLIToken string `yaml:"cli_token,omitempty"`
 }
 
-// DatabaseConfig configures the PostgreSQL database that stores run history.
+// DatabaseConfig configures the database that stores run history.
 type DatabaseConfig struct {
-	// DSN is the PostgreSQL connection string. It is required: run history,
-	// users and the job queue all live in the same database.
+	// DSN is the connection string. It is required: run history, users and
+	// the job queue all live in the same database.
+	//
+	// PostgreSQL is selected by a postgres:// (or postgresql://) URI. Any
+	// other value is treated as SQLite: a file path, a file: URI, or a
+	// sqlite:// URI. Note the scheduler's River job queue is PostgreSQL-only,
+	// so a full server still needs a postgres:// DSN; SQLite is intended for
+	// local development and tests of the store itself.
 	DSN string `yaml:"dsn"`
 }
 

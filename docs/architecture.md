@@ -106,10 +106,11 @@ so a branch switch or a changed `strangle.yml` takes effect from the next run.
 ## The store
 
 `model.Store` is the persistence interface. Its only implementation is
-`model` — GORM on PostgreSQL, with tables for runs, per-host recap
-lines, append-only per-task results, per-task latest state and hosts. There is
-no in-memory fallback; `model` also defines the interface and shared
-value types.
+`model` — GORM on PostgreSQL or SQLite (the flavor is picked from the DSN at
+open time: a `postgres://` URI means PostgreSQL, anything else a SQLite file),
+with tables for runs, per-host recap lines, append-only per-task results,
+per-task latest state and hosts. There is no in-memory fallback; `model` also
+defines the interface and shared value types.
 
 Every task result parsed from a run is appended to task history, keeping every
 status, diff and error available per run. The separate `task_states` table

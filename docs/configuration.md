@@ -26,7 +26,7 @@ Process-level settings for the master process.
 | `log_level` | `info` | `debug`, `info`, `warn` or `error`. JSON logs on stderr. |
 | `schedule` | `@every 15m` | Fallback for jobs without their own schedule in `strangle.yml`, in robfig/cron v3 format. Jobs wait for their first scheduled time; there is no startup run. |
 | `workers` | `1` | Worker child processes. Each owns one embedded Ansible interpreter, so this is the maximum number of concurrent playbook runs. |
-| `database.dsn` | — | PostgreSQL DSN. Required: run history, accounts, tokens, collection memberships and the River job queue all use this database. |
+| `database.dsn` | — | Database DSN. Required: run history, accounts, tokens and collection memberships all use this database. A `postgres://` (or `postgresql://`) URI selects PostgreSQL; any other value selects SQLite — a file path, a `file:` URI or a `sqlite://` URI. The River job queue is PostgreSQL-only, so a full server still needs a `postgres://` DSN. |
 | `auth.token` | — | When set, the collection `hook` endpoint (without a UI session) requires the token, either as `Authorization: Bearer <token>` or as the webhook-friendly `X-Strangle-Token: <token>` header. This static token works only on `hook` and is independent of the UI authentication below. |
 | `auth.cli_token` | — | User API token (`st_…`) sent by the CLI subcommands on every API call; a client-side setting the server ignores. Tokens are scoped to one org/collection, so the configured token must match the collection the CLI reads. Can be overridden with `--token`. |
 | `sandbox.enabled` | `false` | Enables Landlock isolation: each collection gets dedicated workers, its checkout is read-only and Ansible writes go to a private scratch directory. |

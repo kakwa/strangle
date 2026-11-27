@@ -5,7 +5,7 @@
   shutdown.
 - [Configuration](configuration.md) — full reference for `server.yml`,
   `collection.yml` and the per-target `strangle.yml`, including per-job
-  schedules, the mandatory PostgreSQL DSN and the Go-managed SSH transport options.
+  schedules, the mandatory database DSN (PostgreSQL or SQLite) and the Go-managed SSH transport options.
 - [API](api.md) — the `/api/v1` endpoints with request and response examples,
   plus the served OpenAPI 3.1 document at `/api/v1/openapi.json` (generated
   with swaggo/swag v2) and Swagger UI at `/api/docs`.

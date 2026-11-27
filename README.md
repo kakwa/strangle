@@ -58,7 +58,7 @@ controller/          HTTP handlers and swaggo annotations
   scheduler/         runs each job on its own schedule (live job list)
   worker/            worker pool, JSON-RPC transport and the worker service
     riverqueue/      postgres-backed River job queue for playbook runs
-model/               GORM/PostgreSQL store, run records and shared value types
+model/               GORM store (PostgreSQL or SQLite), run records and shared value types
 collection/          git-backed targets: clone, pin to tracked ref, sync, reload
 cfg/                 YAML config: server.yml, collection.yml, per-target strangle.yml
 security/
@@ -376,10 +376,10 @@ delivery keeps working for the life of the process.
 
 ## Status
 
-Playbook scheduling, worker supervision, PostgreSQL-backed history, the
-postgres-backed job queue, git-backed collections, per-task change traces and
-the web UI are implemented and exercised by the test suite (PostgreSQL tests
-run when `STRANGLE_TEST_DSN` is set).
+Playbook scheduling, worker supervision, persistent run history (PostgreSQL or
+SQLite), the postgres-backed job queue, git-backed collections, per-task change
+traces and the web UI are implemented and exercised by the test suite
+(PostgreSQL tests run when `STRANGLE_TEST_DSN` is set).
 
 ## License
 
