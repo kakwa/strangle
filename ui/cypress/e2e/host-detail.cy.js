@@ -23,6 +23,11 @@ describe('Host detail', () => {
     cy.get('table').contains('td', 'changed')
     cy.contains('h4', 'Ansible facts')
     cy.contains('pre', '"ansible_hostname": "web-01"')
+    // Nested facts are collapsed by default and expand on click.
+    cy.contains('"ansible_default_ipv4": {…1}')
+      .should('not.contain', '"address"')
+      .click()
+    cy.contains('"address": "10.0.1.10"')
     cy.contains('h4', 'Task changes').should('not.exist')
   })
 

@@ -161,26 +161,175 @@ function StatusBadge({ status }) {
   return <Badge color={color} variant="light">{status || 'unknown'}</Badge>
 }
 
+// Solarized (dark) palette for every code block in the UI.
+const SOLARIZED = {
+  bg: '#073642',
+  border: '#0e4a58',
+  text: '#839496',
+  key: '#268bd2',
+  string: '#859900',
+  number: '#b58900',
+  boolean: '#cb4b16',
+  null: '#dc322f',
+  punct: '#586e75',
+}
+
 const CODE_BLOCK_STYLE = {
   flex: 1,
   minWidth: 0,
   overflow: 'auto',
   maxHeight: 300,
-  background: 'var(--mantine-color-gray-1)',
-  border: '1px solid var(--mantine-color-default-border)',
+  background: SOLARIZED.bg,
+  border: `1px solid ${SOLARIZED.border}`,
   borderRadius: 'var(--mantine-radius-md)',
   padding: 'var(--mantine-spacing-sm)',
 }
 
-function formatFacts(facts) {
-  if (!facts) return ''
+const CODE_TEXT_STYLE = {
+  margin: 0,
+  fontFamily: 'monospace',
+  fontSize: 12,
+  lineHeight: 1.6,
+  color: SOLARIZED.text,
+}
+
+// CodeBlock shows raw code on the solarized dark background with basic JSON
+// syntax coloring. Non-JSON content is rendered as-is.
+function CodeBlock({ code }) {
+  const text = String(code)
+  let highlighted = null
   try {
-    const value = typeof facts === 'string' ? JSON.parse(facts) : facts
-    if (value === null || typeof value !== 'object' || Object.keys(value).length === 0) return ''
-    return JSON.stringify(value, null, 2)
+    JSON.parse(text)
+    highlighted = highlightJson(text)
   } catch {
-    return String(facts)
+    highlighted = text
   }
+  return (
+    <div style={CODE_BLOCK_STYLE}>
+      <pre style={CODE_TEXT_STYLE}>{highlighted}</pre>
+    </div>
+  )
+}
+
+// highlightJson tokenizes a JSON document into colored spans: property keys
+// (a string followed by a colon), string values, numbers, booleans, null and
+// punctuation. The regex is single-pass, so it is O(n) in the document size.
+function highlightJson(code) {
+  const token = /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false)\b|\bnull\b|-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b|[{}\[\],:]/g
+  const out = []
+  let last = 0
+  let i = 0
+  for (const m of code.matchAll(token)) {
+    if (m.index > last) out.push(code.slice(last, m.index))
+    let color = SOLARIZED.punct
+    if (m[1] !== undefined) color = m[2] ? SOLARIZED.key : SOLARIZED.string
+    else if (m[3] !== undefined) color = SOLARIZED.boolean
+    else if (m[4] !== undefined) color = SOLARIZED.null
+    else if (m[5] !== undefined) color = SOLARIZED.number
+    const end = m[2] ? m.index + m[0].length : m.index + m[1].length
+    out.push(
+      <span key={i++} style={{ color }}>
+        {code.slice(m.index, end)}
+      </span>,
+    )
+    last = end
+  }
+  if (last < code.length) out.push(code.slice(last))
+  return out
+}
+
+// JsonNode renders one value of the foldable facts tree. Containers
+// (objects and arrays) are collapsed below depth 1 and toggle on click.
+function JsonNode({ name, value, depth, isLast }) {
+  const [open, setOpen] = useState(depth < 1)
+  const isContainer = value !== null && typeof value === 'object'
+  const label = name !== undefined && (
+    <>
+      <span style={{ color: SOLARIZED.key }}>{JSON.stringify(name)}</span>
+      <span style={{ color: SOLARIZED.punct }}>{': '}</span>
+    </>
+  )
+  const comma = isLast ? '' : <span style={{ color: SOLARIZED.punct }}>{','}</span>
+
+  if (!isContainer) {
+    let color = SOLARIZED.text
+    let shown = String(value)
+    if (value === null) { color = SOLARIZED.null }
+    else if (typeof value === 'string') { color = SOLARIZED.string; shown = JSON.stringify(value) }
+    else if (typeof value === 'number') { color = SOLARIZED.number }
+    else if (typeof value === 'boolean') { color = SOLARIZED.boolean }
+    return (
+      <div style={{ paddingLeft: depth * 16 }}>
+        {label}
+        <span style={{ color }}>{shown}</span>
+        {comma}
+      </div>
+    )
+  }
+
+  const isArr = Array.isArray(value)
+  const entries = isArr ? value : Object.entries(value)
+  const openBrace = isArr ? '[' : '{'
+  const closeBrace = isArr ? ']' : '}'
+  const summary = isArr ? `[…${entries.length}]` : `{…${entries.length}}`
+  const head = open && entries.length > 0 ? openBrace : open ? openBrace + closeBrace : summary
+
+  return (
+    <div style={{ paddingLeft: depth * 16 }}>
+      <div
+        style={{ display: 'flex', cursor: 'pointer' }}
+        onClick={() => setOpen(!open)}
+      >
+        <span style={{ width: 14, flexShrink: 0, color: SOLARIZED.punct }}>{open ? '▾' : '▸'}</span>
+        <span style={{ whiteSpace: 'nowrap' }}>
+          {label}
+          <span style={{ color: SOLARIZED.punct }}>{head}</span>
+          {comma}
+        </span>
+      </div>
+      {open && entries.length > 0 && (
+        <>
+          {entries.map((entry, idx) => (
+            <JsonNode
+              key={isArr ? idx : entry[0]}
+              name={isArr ? undefined : entry[0]}
+              value={isArr ? entry : entry[1]}
+              depth={depth + 1}
+              isLast={idx === entries.length - 1}
+            />
+          ))}
+          <div style={{ paddingLeft: 16 }}>
+            <span style={{ width: 14, display: 'inline-block' }} />
+            <span style={{ color: SOLARIZED.punct }}>{closeBrace}</span>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// JsonTree is the foldable view of the Ansible facts blob, rendered on the
+// solarized dark background with the same token colors as CodeBlock.
+function JsonTree({ data }) {
+  return (
+    <div style={CODE_BLOCK_STYLE}>
+      <pre style={CODE_TEXT_STYLE}>
+        <JsonNode value={data} depth={0} />
+      </pre>
+    </div>
+  )
+}
+
+function parseFacts(facts) {
+  if (facts === null || facts === undefined || facts === '') return null
+  if (typeof facts === 'string') {
+    try {
+      return JSON.parse(facts)
+    } catch {
+      return facts
+    }
+  }
+  return facts
 }
 
 // ScopePicker is shared by every collection-scoped screen. Both levels are
@@ -469,7 +618,9 @@ function HostDetail({ host, record, org, collection, playbooks, onBack }) {
     }
   }, [org, collection, playbook, host])
 
-  const facts = formatFacts(record?.facts)
+  const facts = parseFacts(record?.facts)
+  const factsEmpty = facts !== null
+    && (typeof facts !== 'object' || Object.keys(facts).length === 0)
 
   return (
     <Stack gap="md">
@@ -491,14 +642,12 @@ function HostDetail({ host, record, org, collection, playbooks, onBack }) {
         </Group>
       </Card>
 
-      {facts && (
+      {facts !== null && !factsEmpty && (
         <Card withBorder>
           <Title order={4} mb="sm">Ansible facts</Title>
-          <div style={CODE_BLOCK_STYLE}>
-            <Text component="pre" size="xs" ff="monospace" style={{ margin: 0 }}>
-              {facts}
-            </Text>
-          </div>
+          {typeof facts === 'string'
+            ? <CodeBlock code={facts} />
+            : <JsonTree data={facts} />}
         </Card>
       )}
 
