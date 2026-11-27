@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // register the pgx database/sql driver
-	"github.com/kakwa/strangle/model"
+	"github.com/kakwa/strangle/store"
 )
 
 var dbCounter atomic.Uint64
@@ -66,10 +66,10 @@ func TestDSN(t *testing.T, label string) string {
 
 // OpenDB creates a fresh PostgreSQL database, migrates the schema and returns
 // a store backed by it. The database is dropped when the test ends.
-func OpenDB(t *testing.T, label string) *model.DB {
+func OpenDB(t *testing.T, label string) *store.DB {
 	t.Helper()
 	dsn := TestDSN(t, label)
-	d, err := model.Open(context.Background(), dsn)
+	d, err := store.Open(context.Background(), dsn)
 	if err != nil {
 		t.Fatalf("open test database: %v", err)
 	}

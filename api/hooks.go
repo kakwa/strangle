@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/kakwa/strangle/controller/collection"
+	"github.com/kakwa/strangle/collection_manager"
 	"github.com/labstack/echo/v5"
 )
 
@@ -65,9 +65,9 @@ func (a *API) Hook(c *echo.Context) error {
 	rev, changed, err := a.Syncer.Sync(r.Context(), coll, req.Branch)
 	if err != nil {
 		switch {
-		case errors.Is(err, collection.ErrUnknownTarget):
+		case errors.Is(err, collection_manager.ErrUnknownTarget):
 			return apiStatus(http.StatusNotFound, err)
-		case errors.Is(err, collection.ErrNotGit):
+		case errors.Is(err, collection_manager.ErrNotGit):
 			return apiStatus(http.StatusBadRequest, err)
 		default:
 			return apiStatus(http.StatusBadGateway, err)

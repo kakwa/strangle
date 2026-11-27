@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kakwa/strangle/auth"
 	"github.com/kakwa/strangle/cfg"
-	"github.com/kakwa/strangle/model"
-	"github.com/kakwa/strangle/security/auth"
+	"github.com/kakwa/strangle/store"
 	"github.com/spf13/cobra"
 )
 
@@ -145,12 +145,12 @@ func userCmd() *cobra.Command {
 }
 
 // openDB opens the configured server database.
-func openDB(serverConfigPath string) (*model.DB, error) {
+func openDB(serverConfigPath string) (*store.DB, error) {
 	conf, err := cfg.LoadServer(serverConfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
-	d, err := model.Open(context.Background(), conf.Database.DSN)
+	d, err := store.Open(context.Background(), conf.Database.DSN)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -168,7 +168,7 @@ func readPasswordStdin() string {
 }
 
 // requireUser fails with a friendly message when user does not exist.
-func requireUser(d *model.DB, ctx context.Context, user string) error {
+func requireUser(d *store.DB, ctx context.Context, user string) error {
 	if _, err := d.Users().GetUser(ctx, user); err != nil {
 		if errors.Is(err, auth.ErrNotFound) {
 			return fmt.Errorf("user %q not found", user)
@@ -327,7 +327,7 @@ func collectionCmd() *cobra.Command {
 	cmd.PersistentFlags().StringVarP(&serverConfigPath, "server-config", "s",
 		"config/server.yml", "path to the server configuration file")
 
-	accessCmd := func(use, short, verb string, act func(d *model.DB, ctx context.Context, user, org, collection string) error) *cobra.Command {
+	accessCmd := func(use, short, verb string, act func(d *store.DB, ctx context.Context, user, org, collection string) error) *cobra.Command {
 		return &cobra.Command{
 			Use:   use,
 			Short: short,
@@ -347,11 +347,11 @@ func collectionCmd() *cobra.Command {
 	}
 
 	grant := accessCmd("grant <user> <org> <collection>", "Allow a user to use one collection.", "granted",
-		func(d *model.DB, ctx context.Context, user, org, collection string) error {
+		func(d *store.DB, ctx context.Context, user, org, collection string) error {
 			return d.Access().Add(ctx, user, org, collection)
 		})
 	revoke := accessCmd("revoke <user> <org> <collection>", "Remove a user's access to one collection.", "revoked",
-		func(d *model.DB, ctx context.Context, user, org, collection string) error {
+		func(d *store.DB, ctx context.Context, user, org, collection string) error {
 			return d.Access().Remove(ctx, user, org, collection)
 		})
 

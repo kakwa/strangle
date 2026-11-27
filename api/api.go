@@ -17,12 +17,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kakwa/strangle/auth"
 	"github.com/kakwa/strangle/cfg"
-	"github.com/kakwa/strangle/controller/applier"
-	"github.com/kakwa/strangle/model"
-	"github.com/kakwa/strangle/security/auth"
+	"github.com/kakwa/strangle/playbook_applier"
+	"github.com/kakwa/strangle/ssh"
+	"github.com/kakwa/strangle/store"
 	"github.com/kakwa/strangle/ui"
-	"github.com/kakwa/strangle/utils/sshpool"
 	"github.com/labstack/echo/v5"
 	echoSwagger "github.com/swaggo/echo-swagger/v2"
 	swag "github.com/swaggo/swag/v2"
@@ -73,9 +73,9 @@ func WithTLS(certFile, keyFile string) Option {
 
 type Server struct {
 	addr        string
-	applier     *applier.Ansible
-	store       model.Store
-	ssh         *sshpool.Multi
+	applier     *playbook_applier.Ansible
+	store       store.Store
+	ssh         *ssh.Multi
 	syncer      Syncer
 	users       auth.UserStore
 	tokens      auth.TokenStore
@@ -108,7 +108,7 @@ var uiFS = func() fs.FS {
 // tokens. authToken, when non-empty, is a static bearer token accepted on the
 // collection hook only. The run argument is kept for source compatibility
 // and ignored.
-func New(addr string, apr *applier.Ansible, st model.Store, ssh *sshpool.Multi, _ RunEnqueuer, syncer Syncer, users auth.UserStore, tokens auth.TokenStore, authToken string, logger *zap.Logger, opts ...Option) *Server {
+func New(addr string, apr *playbook_applier.Ansible, st store.Store, ssh *ssh.Multi, _ RunEnqueuer, syncer Syncer, users auth.UserStore, tokens auth.TokenStore, authToken string, logger *zap.Logger, opts ...Option) *Server {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
@@ -386,9 +386,9 @@ func spaHandler(fsys fs.FS) http.Handler {
 // API holds the dependencies shared by all handlers. It is constructed by the
 // server and used by routes.go to register the route table.
 type API struct {
-	Applier   *applier.Ansible
-	Store     model.Store
-	SSH       *sshpool.Multi
+	Applier   *playbook_applier.Ansible
+	Store     store.Store
+	SSH       *ssh.Multi
 	Syncer    Syncer
 	Users     auth.UserStore
 	Tokens    auth.TokenStore

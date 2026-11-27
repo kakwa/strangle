@@ -4,7 +4,7 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/kakwa/strangle/security/auth"
+	"github.com/kakwa/strangle/auth"
 	"github.com/labstack/echo/v5"
 	"go.uber.org/zap"
 )

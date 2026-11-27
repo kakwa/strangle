@@ -20,7 +20,7 @@ collections:
 - The tracked ref may be a branch, a tag or a commit; `branch` is shorthand
   for `ref`.
 - All git operations are in-process ([go-git](https://github.com/go-git/go-git)
-  via `utils/git`); no system `git` binary is invoked.
+  via `git`); no system `git` binary is invoked.
 - A `token` is embedded in https clone/fetch URLs for authenticated
   repositories.
 

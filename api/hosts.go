@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/kakwa/strangle/model"
-	"github.com/kakwa/strangle/utils/sshpool"
+	"github.com/kakwa/strangle/ssh"
+	"github.com/kakwa/strangle/store"
 	"github.com/labstack/echo/v5"
 )
 
@@ -33,7 +33,7 @@ type hostStatusResponse struct {
 // @Security userBearer
 // @Param   org path string true "Organization name"
 // @Param   collection path string true "Collection (target) name"
-// @Success 200 {array} model.HostRecord "Hosts"
+// @Success 200 {array} store.HostRecord "Hosts"
 // @Failure 401 {object} apiError "not authenticated"
 // @Failure 403 {object} apiError "access denied"
 // @Failure 404 {object} apiError "unknown collection"
@@ -53,7 +53,7 @@ func (a *API) ListHosts(c *echo.Context) error {
 	if a.restricted(r.Context()) {
 		allowed = a.accessibleTargets(r.Context(), r)
 	}
-	filtered := make([]model.HostRecord, 0, len(hosts))
+	filtered := make([]store.HostRecord, 0, len(hosts))
 	for _, h := range hosts {
 		if h.Target == coll && targetVisible(allowed, h.Target) {
 			filtered = append(filtered, h)
@@ -75,7 +75,7 @@ func (a *API) ListHosts(c *echo.Context) error {
 // @Param   playbook path string true "Playbook (job) name from strangle.yml"
 // @Param   host path string true "Inventory host name"
 // @Param   limit query int false "Maximum number of entries" default(10)
-// @Success 200 {array} model.HostRunRecord "Host runs"
+// @Success 200 {array} store.HostRunRecord "Host runs"
 // @Failure 400 {object} apiError "invalid limit"
 // @Failure 401 {object} apiError "not authenticated"
 // @Failure 403 {object} apiError "access denied"
@@ -101,7 +101,7 @@ func (a *API) HostRuns(c *echo.Context) error {
 	if a.restricted(r.Context()) {
 		allowed = a.accessibleTargets(r.Context(), r)
 	}
-	filtered := make([]model.HostRunRecord, 0, len(runs))
+	filtered := make([]store.HostRunRecord, 0, len(runs))
 	for _, run := range runs {
 		if run.Target == coll && run.Playbook == playbook && targetVisible(allowed, run.Target) {
 			filtered = append(filtered, run)
@@ -125,7 +125,7 @@ func (a *API) HostRuns(c *echo.Context) error {
 // @Param   collection path string true "Collection (target) name"
 // @Param   playbook path string true "Playbook (job) name from strangle.yml"
 // @Param   host path string true "Inventory host name"
-// @Success 200 {array} sshpool.HostKey "Host keys"
+// @Success 200 {array} ssh.HostKey "Host keys"
 // @Failure 401 {object} apiError "not authenticated"
 // @Failure 403 {object} apiError "access denied"
 // @Failure 404 {object} apiError "unknown collection or playbook"
@@ -135,7 +135,7 @@ func (a *API) HostKeys(c *echo.Context) error {
 	if err != nil {
 		return err
 	}
-	keys := []sshpool.HostKey{}
+	keys := []ssh.HostKey{}
 	if a.SSH != nil {
 		for _, key := range a.SSH.PendingHostKeys() {
 			if key.Target == scope && key.Host == c.Param("host") {
@@ -205,9 +205,9 @@ func (a *API) PatchHost(c *echo.Context) error {
 	}
 	if err != nil {
 		switch {
-		case errors.Is(err, sshpool.ErrNoPendingKey):
+		case errors.Is(err, ssh.ErrNoPendingKey):
 			return apiStatus(http.StatusNotFound, err)
-		case errors.Is(err, sshpool.ErrFingerprintMismatch):
+		case errors.Is(err, ssh.ErrFingerprintMismatch):
 			return apiStatus(http.StatusConflict, err)
 		default:
 			return apiStatus(http.StatusBadRequest, err)

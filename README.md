@@ -21,7 +21,7 @@ The server binary (`strangle-server serve`) owns the configuration, the HTTP API
 and the schedule. It spawns a pool of worker child processes
 (`strangle-server worker`), each owning one embedded Ansible interpreter, and
 dispatches playbook runs to them over unix sockets using a small JSON-RPC
-protocol in `controller/worker` (no code generation).
+protocol in `worker` (no code generation).
 A master supervises the workers: health pings and automatic restarts with
 backoff.
 
@@ -38,9 +38,9 @@ tracked ref (branch, tag or commit); the collection `hook` endpoint is a
 webhook that re-syncs a target — optionally switching the tracked branch —
 and reloads its `strangle.yml`, so per-branch content takes effect immediately.
 
-The details: [architecture](api/docs/architecture.md), [configuration reference](api/docs/configuration.md),
-[API reference](api/docs/api.md), [git-backed collections](api/docs/git-collections.md),
-[the Go-managed SSH transport](api/docs/ssh-transport.md), including short-lived
+The details: [architecture](docs/architecture.md), [configuration reference](docs/configuration.md),
+[API reference](docs/api.md), [git-backed collections](docs/git-collections.md),
+[the Go-managed SSH transport](docs/ssh-transport.md), including short-lived
 user certificates signed by a local CA or by Vault through AppRole.
 
 ## Layout
@@ -50,26 +50,22 @@ cmd/strangle-server/ server entrypoint: config, wiring, worker subcommand, grace
 cmd/strangle-cli/    client entrypoint: API client and account/token/access commands
 api/                 HTTP API: Echo transport, auth middleware, routes,
                      OpenAPI docs and the built-in UI
-  docs/              documentation (architecture, configuration, API) and the
-                     generated OpenAPI 3.1 package (swaggo)
-controller/          HTTP handlers and swaggo annotations
-  applier/           embedded CPython runner, output parser and result recording
-  maintenance/       periodic run retention and stale-host cleanup
-  scheduler/         runs each job on its own schedule (live job list)
-  worker/            worker pool, JSON-RPC transport and the worker service
-    riverqueue/      postgres-backed River job queue for playbook runs
-model/               GORM store (PostgreSQL or SQLite), run records and shared value types
-collection/          git-backed targets: clone, pin to tracked ref, sync, reload
+  docs/              generated OpenAPI 3.1 package (swaggo)
+auth/                local accounts, sessions, scoped tokens and collection access
 cfg/                 YAML config: server.yml, collection.yml, per-target strangle.yml
-security/
-  auth/              local accounts, sessions, scoped tokens and collection access
-  logger/            zap logger construction
-  sandbox/           Landlock sandboxing for worker child processes
-utils/
-  git/               in-process git operations (go-git), no system git binary
-  sshpool/           Go-managed persistent SSH connections with host-key policies
+collection_manager/  git-backed targets: clone, pin to tracked ref, sync, reload
+git/                 in-process git operations (go-git), no system git binary
+logging/             zap logger construction
+maintenance/         periodic run retention and stale-host cleanup
+playbook_applier/    embedded CPython runner, output parser and result recording
+queue/               postgres-backed River job queue for playbook runs
+sandbox/             Landlock sandboxing for worker child processes
+scheduler/           runs each job on its own schedule (live job list)
+ssh/                 Go-managed persistent SSH connections with host-key policies
+store/               GORM store (PostgreSQL or SQLite), run records and shared value types
+worker/              worker pool, JSON-RPC transport and the worker service
 tests/
-  integration_test/  DB, API, queue and Ansible suites (external test packages)
+  integration/       DB, API, queue and Ansible suites (external test packages)
   testutil/          shared test helpers (store setup, JSON fixtures)
   config/
     strangle.yml         sample per-target configuration (reference)
@@ -205,7 +201,7 @@ With `sandbox.enabled: true`, Landlock confines each worker to one collection:
 playbooks cannot read another collection's credentials or modify their own
 checkout. Ansible writes are redirected to a per-worker scratch directory.
 A [validating collection](tests/sandbox/validate/README.md) is provided to verify
-the isolation. See [configuration](api/docs/configuration.md#collection-sandboxing).
+the isolation. See [configuration](docs/configuration.md#collection-sandboxing).
 
 ### UI authentication
 
@@ -330,7 +326,7 @@ may use `{{ .Branch }}` and `{{ .Name }}` templates, e.g.
 
 The full reference — schedule syntax, every option, the Go-managed SSH
 transport and its host-key policies — is in
-[api/docs/configuration.md](api/docs/configuration.md).
+[docs/configuration.md](docs/configuration.md).
 
 ## Running
 

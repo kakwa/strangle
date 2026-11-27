@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/kakwa/strangle/model"
+	"github.com/kakwa/strangle/store"
 	"github.com/labstack/echo/v5"
 )
 
@@ -43,7 +43,7 @@ func (a *API) CollectionPlaybooks(c *echo.Context) error {
 	if err != nil {
 		return apiStatus(http.StatusInternalServerError, err)
 	}
-	latest := map[string]model.RunRecord{}
+	latest := map[string]store.RunRecord{}
 	for _, run := range runs {
 		if run.Target != coll {
 			continue

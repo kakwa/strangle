@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kakwa/strangle/auth"
 	"github.com/kakwa/strangle/cfg"
-	"github.com/kakwa/strangle/controller/applier"
-	"github.com/kakwa/strangle/security/auth"
+	"github.com/kakwa/strangle/playbook_applier"
 	"github.com/kakwa/strangle/tests/testutil"
 	swag "github.com/swaggo/swag/v2"
 	"go.uber.org/zap"
@@ -68,7 +68,7 @@ func newOpenAPITestServer(users auth.UserStore) *Server {
 			{Name: "site", Playbook: "site.yml", Inventory: "inventory.ini"},
 		},
 	}}
-	apr := applier.NewAnsible(targets, openAPIExecutor{}, nil, zap.NewNop())
+	apr := playbook_applier.NewAnsible(targets, openAPIExecutor{}, nil, zap.NewNop())
 	return New("test", apr, nil, nil, openAPINoEnqueuer{}, nil, users, nil, "", zap.NewNop())
 }
 

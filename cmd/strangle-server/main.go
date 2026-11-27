@@ -17,18 +17,18 @@ import (
 	"time"
 
 	"github.com/kakwa/strangle/api"
+	"github.com/kakwa/strangle/auth"
 	"github.com/kakwa/strangle/cfg"
-	"github.com/kakwa/strangle/controller/applier"
-	"github.com/kakwa/strangle/controller/collection"
-	"github.com/kakwa/strangle/controller/maintenance"
-	"github.com/kakwa/strangle/controller/scheduler"
-	"github.com/kakwa/strangle/controller/worker"
-	"github.com/kakwa/strangle/controller/worker/riverqueue"
-	"github.com/kakwa/strangle/model"
-	"github.com/kakwa/strangle/security/auth"
-	"github.com/kakwa/strangle/security/logger"
-	"github.com/kakwa/strangle/security/sandbox"
-	"github.com/kakwa/strangle/utils/sshpool"
+	"github.com/kakwa/strangle/collection_manager"
+	"github.com/kakwa/strangle/logging"
+	"github.com/kakwa/strangle/maintenance"
+	"github.com/kakwa/strangle/playbook_applier"
+	"github.com/kakwa/strangle/queue"
+	"github.com/kakwa/strangle/sandbox"
+	"github.com/kakwa/strangle/scheduler"
+	"github.com/kakwa/strangle/ssh"
+	"github.com/kakwa/strangle/store"
+	"github.com/kakwa/strangle/worker"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 )
@@ -100,7 +100,7 @@ func run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	lg, err := logger.New(conf.Server.LogLevel)
+	lg, err := logging.New(conf.Server.LogLevel)
 	if err != nil {
 		return err
 	}
@@ -111,7 +111,7 @@ func run(cmd *cobra.Command, args []string) error {
 	// Git-backed targets are cloned into their configured path and pinned
 	// to their tracked ref. A failure is reported, not fatal: the target
 	// can be synced later through the collection hook endpoint.
-	collMgr := collection.New(conf.Targets, lg)
+	collMgr := collection_manager.New(conf.Targets, lg)
 	if collMgr.HasGit() {
 		if err := collMgr.InitialSync(ctx); err != nil {
 			lg.Error("collection sync failed at startup", zap.Error(err))
@@ -121,7 +121,7 @@ func run(cmd *cobra.Command, args []string) error {
 	// The master keeps its own SSH multi for the host-key approval API; the
 	// trust decisions are shared with the workers through the per-scope
 	// files on disk.
-	multi, err := sshpool.BuildMulti(collMgr.Targets())
+	multi, err := ssh.BuildMulti(collMgr.Targets())
 	if err != nil {
 		return fmt.Errorf("failed to initialize SSH transport: %w", err)
 	}
@@ -156,14 +156,14 @@ func run(cmd *cobra.Command, args []string) error {
 	}()
 
 	var (
-		d     *model.DB
-		queue *riverqueue.Client
+		d        *store.DB
+		jobQueue *queue.Client
 	)
 	// fail stops everything started so far, in reverse order, before
 	// returning err.
 	fail := func(format string, err error) error {
-		if queue != nil {
-			queue.Close()
+		if jobQueue != nil {
+			jobQueue.Close()
 		}
 		if d != nil {
 			warnOn(lg, "failed to close store", d.Close())
@@ -173,7 +173,7 @@ func run(cmd *cobra.Command, args []string) error {
 	}
 
 	dctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	d, err = model.Open(dctx, conf.Server.Database.DSN)
+	d, err = store.Open(dctx, conf.Server.Database.DSN)
 	cancel()
 	if err != nil {
 		return fail("failed to open database: %w", err)
@@ -189,24 +189,24 @@ func run(cmd *cobra.Command, args []string) error {
 		return fail("failed to load collections into database: %w", err)
 	}
 
-	var st model.Store = d
+	var st store.Store = d
 	var users auth.UserStore = d.Users()
 	var tokens auth.TokenStore = d.Tokens()
 	var access auth.CollectionAccess = d.Access()
 
-	apr := applier.NewAnsible(collMgr.Targets(), mgr, st, lg)
+	apr := playbook_applier.NewAnsible(collMgr.Targets(), mgr, st, lg)
 
 	// Playbook runs flow through a postgres-backed River queue and a River
 	// client in this process dispatches them to the worker pool. The
 	// scheduler below decides when each individual (target, playbook) pair
 	// runs.
-	queue, err = riverqueue.Open(ctx, conf.Server.Database.DSN, conf.Server.Workers, func(ctx context.Context, target, playbook string, runID uint64, check bool) error {
-		return apr.Trigger(applier.WithCheck(applier.WithRunID(ctx, runID), check), target, playbook)
+	jobQueue, err = queue.Open(ctx, conf.Server.Database.DSN, conf.Server.Workers, func(ctx context.Context, target, playbook string, runID uint64, check bool) error {
+		return apr.Trigger(playbook_applier.WithCheck(playbook_applier.WithRunID(ctx, runID), check), target, playbook)
 	}, lg)
 	if err != nil {
 		return fail("failed to initialize job queue: %w", err)
 	}
-	var enqueue api.RunEnqueuer = queue
+	var enqueue api.RunEnqueuer = jobQueue
 
 	// Read the live target list on every reconcile: git-backed targets gain
 	// (or change) their playbooks and schedules only after a sync.
@@ -224,7 +224,7 @@ func run(cmd *cobra.Command, args []string) error {
 		return jobs
 	}
 	runScheduled := func(ctx context.Context, target, playbook string) error {
-		record := model.RunRecord{Target: target, Playbook: playbook, State: model.RunStateQueued}
+		record := store.RunRecord{Target: target, Playbook: playbook, State: store.RunStateQueued}
 		if err := st.CreateRun(ctx, &record); err != nil {
 			return err
 		}
@@ -262,7 +262,7 @@ func run(cmd *cobra.Command, args []string) error {
 	// must not hard-cancel in-flight runs; Stop drains them.
 	queueCtx, cancelQueue := context.WithCancel(context.Background())
 	defer cancelQueue()
-	if err := queue.Start(queueCtx); err != nil {
+	if err := jobQueue.Start(queueCtx); err != nil {
 		return fail("failed to start job queue: %w", err)
 	}
 
@@ -276,10 +276,10 @@ func run(cmd *cobra.Command, args []string) error {
 	)
 	if err := srv.ListenAndServe(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		lg.Error("server failed", zap.Error(err))
-		shutdown(stop, done, retentionDone, cleanupDone, mgr, st, queue, lg)
+		shutdown(stop, done, retentionDone, cleanupDone, mgr, st, jobQueue, lg)
 		return err
 	}
-	shutdown(stop, done, retentionDone, cleanupDone, mgr, st, queue, lg)
+	shutdown(stop, done, retentionDone, cleanupDone, mgr, st, jobQueue, lg)
 	lg.Info("strangle stopped")
 	return nil
 }
@@ -320,7 +320,7 @@ func runWorker(cmd *cobra.Command, args []string) error {
 		conf.Targets = owned
 	}
 
-	lg, err := logger.New(conf.Server.LogLevel)
+	lg, err := logging.New(conf.Server.LogLevel)
 	if err != nil {
 		return err
 	}
@@ -338,18 +338,18 @@ func runWorker(cmd *cobra.Command, args []string) error {
 	// The worker shares the master's checkouts: resolve the playbooks of
 	// git-backed targets from disk so its SSH managers match what the
 	// master will dispatch. Reload does not touch git.
-	collMgr := collection.New(conf.Targets, lg)
+	collMgr := collection_manager.New(conf.Targets, lg)
 	if err := collMgr.Reload(); err != nil {
 		lg.Error("failed to fully resolve collection for worker", zap.Error(err))
 	}
 
-	multi, err := sshpool.BuildMulti(collMgr.Targets())
+	multi, err := ssh.BuildMulti(collMgr.Targets())
 	if err != nil {
 		return fmt.Errorf("failed to initialize SSH transport: %w", err)
 	}
 	defer multi.Close()
 
-	runner, err := applier.NewRunner(multi)
+	runner, err := playbook_applier.NewRunner(multi)
 	if err != nil {
 		return fmt.Errorf("failed to initialize embedded Python: %w", err)
 	}
@@ -368,15 +368,15 @@ func runWorker(cmd *cobra.Command, args []string) error {
 // playbook runs to finish and be recorded), then terminates the workers and
 // closes the store in that order: in-progress runs may still be writing to
 // the store while they finish, and they run inside the worker processes.
-func shutdown(stop context.CancelFunc, done, retentionDone, cleanupDone <-chan struct{}, mgr *worker.Manager, st model.Store, queue *riverqueue.Client, lg *zap.Logger) {
+func shutdown(stop context.CancelFunc, done, retentionDone, cleanupDone <-chan struct{}, mgr *worker.Manager, st store.Store, jobQueue *queue.Client, lg *zap.Logger) {
 	stop()
 	<-done
 	<-retentionDone
 	<-cleanupDone
 	qctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	warnOn(lg, "job queue did not drain in time", queue.Stop(qctx))
+	warnOn(lg, "job queue did not drain in time", jobQueue.Stop(qctx))
 	cancel()
-	queue.Close()
+	jobQueue.Close()
 	warnOn(lg, "failed to stop workers", mgr.Stop())
 	warnOn(lg, "failed to close store", st.Close())
 }
