@@ -2,6 +2,7 @@ package maintenance
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -58,5 +59,53 @@ var _ = Describe("HostCleanup", func() {
 		m.Once(context.Background())
 		m.Run(context.Background())
 		Expect(st.calls).To(BeEmpty())
+	})
+})
+
+var _ = Describe("Task", func() {
+	It("runs one pass immediately and one per interval until cancelled", func() {
+		var calls int32
+		t := newTask(10*time.Millisecond, true, func(context.Context) {
+			atomic.AddInt32(&calls, 1)
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		done := Start(ctx, t)
+
+		deadline := time.Now().Add(3 * time.Second)
+		for atomic.LoadInt32(&calls) < 3 && time.Now().Before(deadline) {
+			time.Sleep(2 * time.Millisecond)
+		}
+		cancel()
+		<-done
+		Expect(atomic.LoadInt32(&calls)).To(BeNumerically(">=", 3))
+	})
+
+	It("returns immediately when the context is already cancelled", func() {
+		var calls int32
+		t := newTask(time.Hour, true, func(context.Context) {
+			atomic.AddInt32(&calls, 1)
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		t.Run(ctx)
+		Expect(atomic.LoadInt32(&calls)).To(Equal(int32(1)))
+	})
+
+	It("Once performs exactly one pass", func() {
+		var calls int32
+		t := newTask(time.Hour, true, func(context.Context) {
+			atomic.AddInt32(&calls, 1)
+		})
+		t.Once(context.Background())
+		Expect(atomic.LoadInt32(&calls)).To(Equal(int32(1)))
+	})
+
+	It("Start yields a closed channel for a nil task", func() {
+		Expect(Start(context.Background(), nil)).To(BeClosed())
+	})
+
+	It("newTask returns nil when the pass is disabled", func() {
+		Expect(newTask(time.Minute, false, nil)).To(BeNil())
 	})
 })

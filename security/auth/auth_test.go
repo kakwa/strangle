@@ -119,6 +119,19 @@ func TestSessionsExpire(t *testing.T) {
 	}
 }
 
+func TestCollectionMembershipKey(t *testing.T) {
+	m := CollectionMembership{Org: "acme", Collection: "web"}
+	if got := m.Key(); got != "acme\x00web" {
+		t.Errorf("Key() = %q, want %q", got, "acme\x00web")
+	}
+	// The separator makes (org, collection) pairs unambiguous: the org and
+	// collection of two different pairs must not yield the same key.
+	other := CollectionMembership{Org: "acme\x00web", Collection: ""}
+	if m.Key() == other.Key() {
+		t.Error("Key() must not collide across org/collection boundaries")
+	}
+}
+
 func TestSessionTokensAreUnique(t *testing.T) {
 	s := NewSessions()
 	seen := map[string]bool{}
