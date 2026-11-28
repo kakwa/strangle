@@ -8,7 +8,7 @@ describe('Playbooks', () => {
   })
 
   const selectOrg = (name) =>
-    cy.contains('label', 'Organization').parent().find('select').select(name)
+    cy.get('nav select[aria-label="Organization"]').select(name)
   const selectCollection = (name) =>
     cy.contains('label', 'Collection').parent().find('select').select(name)
 
@@ -31,13 +31,12 @@ describe('Playbooks', () => {
     cy.contains('button', 'Check').should('not.exist')
   })
 
-  it('switches to another collection and mirrors its playbooks in the sidebar', () => {
+  it('switches to another collection and shows its playbooks', () => {
     selectOrg('lab')
     selectCollection('beta')
 
     cy.contains('td', 'databases').closest('tr').should('contain.text', 'failed')
     cy.contains('td', 'bootstrap').closest('tr').should('contain.text', 'never run')
-    cy.get('nav').should('contain.text', 'databases').and('contain.text', 'bootstrap')
-    cy.get('nav').should('not.contain.text', 'web')
+    cy.contains('td', 'web').should('not.exist')
   })
 })

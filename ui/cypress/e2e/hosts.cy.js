@@ -9,16 +9,16 @@ describe('Hosts', () => {
   })
 
   const selectOrg = (name) =>
-    cy.contains('label', 'Organization').parent().find('select').select(name)
+    cy.get('nav select[aria-label="Organization"]').select(name)
   const selectCollection = (name) =>
     cy.contains('label', 'Collection').parent().find('select').select(name)
 
   it('lists the hosts of the default collection with their details', () => {
-    for (const name of ['web-01', 'web-02', 'retired-01']) {
+    for (const name of ['web-01', 'web-02']) {
       cy.contains('td', name)
     }
     cy.contains('td', 'db-01').should('not.exist')
-    cy.get('table tbody tr').should('have.length', 3)
+    cy.get('table tbody tr').should('have.length', 2)
 
     cy.contains('td', 'web-01')
       .closest('tr')

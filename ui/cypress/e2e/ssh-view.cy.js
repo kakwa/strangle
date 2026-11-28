@@ -10,7 +10,7 @@ describe('SSH view', () => {
   })
 
   const selectOrg = (name) =>
-    cy.contains('label', 'Organization').parent().find('select').select(name)
+    cy.get('nav select[aria-label="Organization"]').select(name)
   const selectCollection = (name) =>
     cy.contains('label', 'Collection').parent().find('select').select(name)
 

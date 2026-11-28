@@ -286,6 +286,76 @@ function patchHostKeys(req, res, org, collection, playbook, host) {
 
 // --- API -------------------------------------------------------------------
 
+// Minimal stand-in for the swag-generated OpenAPI 3.1 document: just enough
+// structure (info, tagged paths, parameters, $ref'd schemas, security
+// schemes) for the API reference screen to render in the e2e suite.
+const OPENAPI_SPEC = {
+  openapi: '3.1.0',
+  info: {
+    title: 'Strangle API',
+    version: 'v1',
+    description: 'Versioned HTTP API for inspecting and administering Ansible playbook collections.',
+    license: { name: 'GPL-3.0' },
+  },
+  servers: [{ url: '/' }],
+  paths: {
+    '/api/v1/health': {
+      get: {
+        operationId: 'get_health',
+        summary: 'Liveness probe',
+        tags: ['system'],
+        responses: {
+          '200': {
+            description: 'Server is up',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/api.statusResponse' } } },
+          },
+        },
+      },
+    },
+    '/api/v1/orgs/{org}/collections/{collection}/playbooks/{playbook}/hosts/{host}/runs': {
+      post: {
+        operationId: 'post_orgs_org_collections_collection_playbooks_playbook_hosts_host_runs',
+        summary: 'Enqueue a playbook run',
+        tags: ['playbooks'],
+        parameters: [
+          { name: 'org', in: 'path', required: true, schema: { type: 'string' }, description: 'Organization name' },
+          { name: 'collection', in: 'path', required: true, schema: { type: 'string' }, description: 'Collection name' },
+          { name: 'playbook', in: 'path', required: true, schema: { type: 'string' }, description: 'Playbook name' },
+          { name: 'host', in: 'path', required: true, schema: { type: 'string' }, description: 'Host name' },
+        ],
+        requestBody: {
+          required: true,
+          description: 'run options',
+          content: { 'application/json': { schema: { $ref: '#/components/schemas/api.runRequest' } } },
+        },
+        responses: {
+          '202': {
+            description: 'run enqueued',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/api.runResponse' } } },
+          },
+          '401': {
+            description: 'not authenticated',
+            content: { 'application/json': { schema: { $ref: '#/components/schemas/api.apiError' } } },
+          },
+        },
+        security: [{ sessionCookie: [] }, { userBearer: [] }],
+      },
+    },
+  },
+  components: {
+    securitySchemes: {
+      sessionCookie: { type: 'apiKey', in: 'cookie', name: 'strangle_session' },
+      userBearer: { type: 'http', scheme: 'bearer' },
+    },
+    schemas: {
+      'api.apiError': { type: 'object', properties: { error: { type: 'string' } } },
+      'api.statusResponse': { type: 'object', properties: { status: { type: 'string' } } },
+      'api.runRequest': { type: 'object', properties: { limit: { type: 'integer' } } },
+      'api.runResponse': { type: 'object', properties: { run_id: { type: 'integer' } } },
+    },
+  },
+}
+
 function handleApi(req, res, url) {
   const p = url.pathname
 
@@ -293,7 +363,7 @@ function handleApi(req, res, url) {
     return json(res, 200, { status: 'ok' })
   }
   if (req.method === 'GET' && p === `${V1}/openapi.json`) {
-    return json(res, 200, { openapi: '3.1.0', info: { title: 'strangle', version: '1' }, paths: {} })
+    return json(res, 200, OPENAPI_SPEC)
   }
   if (req.method === 'POST' && p === `${V1}/login`) {
     return readJSON(req, res, (creds) => {

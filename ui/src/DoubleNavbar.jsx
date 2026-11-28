@@ -1,4 +1,5 @@
 import {
+  IconApi,
   IconBook,
   IconFingerprint,
   IconGauge,
@@ -23,6 +24,7 @@ const mainLinks = [
   { icon: IconBook, label: 'Playbooks' },
   { icon: IconFingerprint, label: 'SSH' },
   { icon: IconKey, label: 'Tokens' },
+  { icon: IconApi, label: 'API' },
 ]
 
 const dashboardLinks = [
@@ -78,53 +80,55 @@ export function DoubleNavbar({
         </div>
         {mainLinksNodes}
       </div>
-      <div className={classes.main}>
-        <Title order={4} className={classes.title}>
-          {activeSection === 'hosts' ? (selectedHost || 'Hosts') : active}
-        </Title>
-        <div className={classes.links}>
-          {activeSection === 'dashboard' &&
-            dashboardLinks.map((link) => (
-              <Anchor
-                key={link.id}
-                className={classes.link}
-                href={`#${link.id}`}
-                onClick={(event) => {
-                  event.preventDefault()
-                  document
-                    .getElementById(link.id)
-                    ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-                }}
-              >
-                {link.label}
-              </Anchor>
-            ))}
-          {activeSection === 'hosts' && (
-            <ScrollArea.Autosize mah="100%">
-              {hostLinks.length === 0 && (
-                <span className={classes.link} style={{ cursor: 'default' }}>
-                  No hosts in this collection
-                </span>
-              )}
-              {hostLinks}
-            </ScrollArea.Autosize>
-          )}
-          {activeSection === 'playbooks' && (
-            <ScrollArea.Autosize mah="100%">
-              {playbooks.length === 0 && (
-                <span className={classes.link} style={{ cursor: 'default' }}>
-                  No playbooks in this collection
-                </span>
-              )}
-              {playbooks.map((pb) => (
-                <span key={pb.name} className={classes.link} style={{ cursor: 'default' }}>
-                  {pb.name}
-                </span>
+      {activeSection !== 'api' && (
+        <div className={classes.main}>
+          <Title order={4} className={classes.title}>
+            {activeSection === 'hosts' ? (selectedHost || 'Hosts') : active}
+          </Title>
+          <div className={classes.links}>
+            {activeSection === 'dashboard' &&
+              dashboardLinks.map((link) => (
+                <Anchor
+                  key={link.id}
+                  className={classes.link}
+                  href={`#${link.id}`}
+                  onClick={(event) => {
+                    event.preventDefault()
+                    document
+                      .getElementById(link.id)
+                      ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                  }}
+                >
+                  {link.label}
+                </Anchor>
               ))}
-            </ScrollArea.Autosize>
-          )}
+            {activeSection === 'hosts' && (
+              <ScrollArea.Autosize mah="100%">
+                {hostLinks.length === 0 && (
+                  <span className={classes.link} style={{ cursor: 'default' }}>
+                    No hosts in this collection
+                  </span>
+                )}
+                {hostLinks}
+              </ScrollArea.Autosize>
+            )}
+            {activeSection === 'playbooks' && (
+              <ScrollArea.Autosize mah="100%">
+                {playbooks.length === 0 && (
+                  <span className={classes.link} style={{ cursor: 'default' }}>
+                    No playbooks in this collection
+                  </span>
+                )}
+                {playbooks.map((pb) => (
+                  <span key={pb.name} className={classes.link} style={{ cursor: 'default' }}>
+                    {pb.name}
+                  </span>
+                ))}
+              </ScrollArea.Autosize>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </nav>
   )
 }

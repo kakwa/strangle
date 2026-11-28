@@ -34,10 +34,10 @@ describe('Auth', () => {
     cy.contains('button', 'Sign in').click()
 
     cy.get('h4').contains('Dashboard').should('be.visible')
-    cy.contains('p', 'admin') // the username in the header
-    cy.contains('button', 'Log out')
+    cy.contains('nav', 'admin') // the username in the navbar
+    cy.contains('a,button', 'Logout')
 
-    cy.contains('button', 'Log out').click()
+    cy.contains('a,button', 'Logout').click()
     cy.wait('@logout')
     cy.contains('button', 'Sign in')
   })

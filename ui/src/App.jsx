@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import {
   IconActivity,
   IconBook,
   IconFingerprint,
   IconKey,
+  IconLayoutSidebar,
   IconMoonStars,
   IconSearch,
   IconServer,
@@ -41,9 +42,12 @@ import {
   useParams,
   useSearchParams,
 } from 'react-router-dom'
-import { DoubleNavbar } from './DoubleNavbar'
+import { NavbarSegmented } from './NavbarSegmented'
 import LoginScreen from './LoginScreen'
 import { createToken, fetchMe, fetchTokens, logout, removeToken } from './auth'
+
+// Elements is a large bundle; load it only when the API reference is opened.
+const ApiScreen = lazy(() => import('./ApiScreen.jsx'))
 
 const POLL_INTERVAL_MS = 10_000
 const V1 = '/api/v1'
@@ -332,21 +336,14 @@ function parseFacts(facts) {
   return facts
 }
 
-// ScopePicker is shared by every collection-scoped screen. Both levels are
-// explicit: the org decides which collection list is offered, and the
-// collection is stored in the URL so a scope is bookmarkable.
-function ScopePicker({ orgs, org, collection, onChange, loading }) {
+// CollectionPicker is shared by collection-scoped screens. Organization is
+// selected from the navbar; the collection stays in the URL so a scope is
+// bookmarkable.
+function CollectionPicker({ orgs, org, collection, onChange, loading }) {
   const collections = orgs.find((o) => o.name === org)?.collections || []
   return (
     <Card withBorder>
       <Group align="flex-end" gap="md" wrap="wrap">
-        <NativeSelect
-          label="Organization"
-          data={orgs.map((o) => o.name)}
-          value={org}
-          onChange={(event) => onChange(event.currentTarget.value, '')}
-          style={{ minWidth: 200 }}
-        />
         <NativeSelect
           label="Collection"
           data={collections.map((c) => c.name)}
@@ -1074,6 +1071,8 @@ function sectionFromPath(pathname) {
   if (pathname === '/playbooks') return { section: 'Playbooks', selectedHost: null }
   if (pathname === '/tokens') return { section: 'Tokens', selectedHost: null }
   if (pathname === '/ssh') return { section: 'SSH', selectedHost: null }
+  // /api-spec instead of /api: the dev server proxies /api/* to the backend.
+  if (pathname === '/api-spec') return { section: 'API', selectedHost: null }
   return { section: 'Dashboard', selectedHost: null }
 }
 
@@ -1153,10 +1152,10 @@ function AppInner({ user, onLogout }) {
   const [orgs, setOrgs] = useState(null)
   const [collectionData, setCollectionData] = useState({})
   const [error, setError] = useState(null)
-  const [hostFilter, setHostFilter] = useState('all')
   const [tick, setTick] = useState(0)
   const [mobileOpened, { toggle: toggleMobile, close: closeMobile }] =
     useDisclosure(false)
+  const [navCollapsed, { toggle: toggleNav }] = useDisclosure(false)
 
   const location = useLocation()
   const navigate = useNavigate()
@@ -1280,6 +1279,7 @@ function AppInner({ user, onLogout }) {
     else if (label === 'Playbooks') navigate(withScope('/playbooks'))
     else if (label === 'Tokens') navigate(withScope('/tokens'))
     else if (label === 'SSH') navigate(withScope('/ssh'))
+    else if (label === 'API') navigate(withScope('/api-spec'))
     else navigate(withScope('/'))
   }
 
@@ -1295,11 +1295,16 @@ function AppInner({ user, onLogout }) {
     ? selectedHost
     : section
 
+  const setOrg = (org) => {
+    const collections = orgs?.find((o) => o.name === org)?.collections || []
+    setScope(org, collections[0]?.name || '')
+  }
+
   return (
     <AppShell
       header={{ height: 56 }}
       navbar={{
-        width: { base: 300 },
+        width: navCollapsed ? 72 : 300,
         breakpoint: 'sm',
         collapsed: { mobile: !mobileOpened },
       }}
@@ -1313,27 +1318,33 @@ function AppInner({ user, onLogout }) {
               hiddenFrom="sm"
               size="sm"
             />
+            <UnstyledButton
+              onClick={toggleNav}
+              visibleFrom="sm"
+              aria-label="Toggle sidebar"
+              title={navCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              style={{ display: 'inline-flex', alignItems: 'center' }}
+            >
+              <IconLayoutSidebar size={20} stroke={1.5} />
+            </UnstyledButton>
             <Title order={4}>{headerTitle}</Title>
           </Group>
           <Group gap="sm">
-            {user && (
-              <>
-                <Text size="sm" c="dimmed">{user}</Text>
-                <Button size="xs" variant="subtle" onClick={onLogout}>Log out</Button>
-              </>
-            )}
             <ColorSchemeToggle />
           </Group>
         </Group>
       </AppShell.Header>
 
       <AppShell.Navbar p={0}>
-        <DoubleNavbar
+        <NavbarSegmented
           active={section}
           onSection={goSection}
-          hosts={hosts}
-          selectedHost={selectedHost}
-          playbooks={playbooks}
+          orgs={orgs || []}
+          selectedOrg={selectedOrg}
+          onOrgChange={setOrg}
+          user={user}
+          onLogout={onLogout}
+          collapsed={navCollapsed}
         />
       </AppShell.Navbar>
 
@@ -1349,7 +1360,7 @@ function AppInner({ user, onLogout }) {
               path="/hosts"
               element={
                 <Stack gap="md">
-                  <ScopePicker
+                  <CollectionPicker
                     orgs={orgs || []}
                     org={selectedOrg}
                     collection={selectedCollection}
@@ -1381,7 +1392,7 @@ function AppInner({ user, onLogout }) {
               path="/playbooks"
               element={
                 <Stack gap="md">
-                  <ScopePicker
+                  <CollectionPicker
                     orgs={orgs || []}
                     org={selectedOrg}
                     collection={selectedCollection}
@@ -1396,7 +1407,7 @@ function AppInner({ user, onLogout }) {
               path="/ssh"
               element={
                 <Stack gap="md">
-                  <ScopePicker
+                  <CollectionPicker
                     orgs={orgs || []}
                     org={selectedOrg}
                     collection={selectedCollection}
@@ -1417,7 +1428,7 @@ function AppInner({ user, onLogout }) {
               path="/tokens"
               element={
                 <Stack gap="md">
-                  <ScopePicker
+                  <CollectionPicker
                     orgs={orgs || []}
                     org={selectedOrg}
                     collection={selectedCollection}
@@ -1429,6 +1440,14 @@ function AppInner({ user, onLogout }) {
               }
             />
 
+            <Route
+              path="/api-spec"
+              element={
+                <Suspense fallback={<Center py="xl"><Loader /></Center>}>
+                  <ApiScreen />
+                </Suspense>
+              }
+            />
             <Route path="*" element={<Navigate to={withScope('/')} replace />} />
           </Routes>
         </Stack>
