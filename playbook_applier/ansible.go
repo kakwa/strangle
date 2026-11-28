@@ -161,7 +161,10 @@ func (a *Ansible) RunCycle(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := a.runTarget(ctx, t, &firstErr); err != nil {
+		if err := a.runTarget(ctx, t); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
 			a.logger.Error("target cycle failed", zap.String("target", t.Name), zap.Error(err))
 		}
 	}
@@ -182,14 +185,14 @@ func (a *Ansible) Trigger(ctx context.Context, target, name string) error {
 	if !ok {
 		return fmt.Errorf("unknown playbook %q for target %q", name, target)
 	}
-	return a.runTarget(ctx, t, nil, pb)
+	return a.runTarget(ctx, t, pb)
 }
 
 // runTarget runs the given target's playbooks (or just one, when specified)
 // and records the results. The target is a snapshot, safe to run without
 // holding a.mu. It returns the first error encountered; playbooks after a
 // failure still run.
-func (a *Ansible) runTarget(ctx context.Context, t cfg.TargetConfig, firstErr *error, only ...cfg.PlaybookConfig) error {
+func (a *Ansible) runTarget(ctx context.Context, t cfg.TargetConfig, only ...cfg.PlaybookConfig) error {
 	playbooks := t.Playbooks
 	if len(only) > 0 {
 		playbooks = only
@@ -206,13 +209,12 @@ func (a *Ansible) runTarget(ctx context.Context, t cfg.TargetConfig, firstErr *e
 		if pb.Options.SSH.Enabled {
 			sshScope = pb.SSHKey()
 		}
-		inv, invHosts := a.loadInventory(pb)
 		a.logger.Info("running playbook",
 			zap.String("target", t.Name),
 			zap.String("playbook", pb.Name),
 			zap.String("file", pb.PlaybookPath()),
 		)
-		if err := a.runPlaybook(ctx, t, pb, sshScope, scopeNames(inv, pb.PlaybookPath()), invHosts); err != nil {
+		if err := a.runPlaybook(ctx, t, pb, sshScope); err != nil {
 			a.logger.Error("playbook failed",
 				zap.String("target", t.Name),
 				zap.String("playbook", pb.Name),
@@ -223,33 +225,19 @@ func (a *Ansible) runTarget(ctx context.Context, t cfg.TargetConfig, firstErr *e
 			}
 		}
 	}
-	if targetErr != nil && firstErr != nil && *firstErr == nil {
-		*firstErr = targetErr
-	}
 	return targetErr
 }
 
 // runPlaybook dispatches one playbook to the worker pool, parses the output
 // and persists the results.
-func (a *Ansible) runPlaybook(ctx context.Context, target cfg.TargetConfig, pb cfg.PlaybookConfig, sshScope string, scope []string, invHosts []store.InventoryHost) error {
+func (a *Ansible) runPlaybook(ctx context.Context, target cfg.TargetConfig, pb cfg.PlaybookConfig, sshScope string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
 	id := runIDFrom(ctx)
 	started := time.Now().UTC()
-	if id != 0 && a.store != nil {
-		record, err := a.store.Run(ctx, id)
-		if err == nil {
-			record.State = store.RunStateRunning
-			record.StartedAt = started
-			if err := a.store.UpdateRun(ctx, record); err != nil {
-				a.logger.Warn("failed to mark run as running", zap.Uint64("run", id), zap.Error(err))
-			}
-		} else {
-			a.logger.Warn("run record not found for in-flight run", zap.Uint64("run", id), zap.Error(err))
-		}
-	}
+	a.markRunning(ctx, id, started)
 	check := checkFrom(ctx)
 	exitCode, output, facts, runErr := a.exec.RunPlaybook(ctx, target.Name, sshScope, pb.WorkingDir, pb.Args(check)...)
 	finished := time.Now().UTC()
