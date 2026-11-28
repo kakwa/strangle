@@ -367,9 +367,6 @@ function Dashboard({ data }) {
   const entries = data || []
   const allHosts = entries.flatMap((e) => e.hosts || [])
   const allPlaybooks = entries.flatMap((e) => e.playbooks || [])
-  const inInventory = allHosts.filter((h) => h.in_inventory).length
-  const active = allHosts.filter((h) => h.active).length
-  const disappeared = allHosts.filter((h) => !h.active && h.in_inventory).length
   const failed = allPlaybooks.filter((pb) => pb.last_status === 'failed').length
   const lastRuns = allPlaybooks.map((pb) => pb.last_run_at).filter(Boolean).sort()
   const namesOf = (entry) => {
@@ -382,17 +379,13 @@ function Dashboard({ data }) {
 
   return (
     <Stack gap="md">
+      <Group gap="sm">
+        <a href="#dash-overview" onClick={(e) => { e.preventDefault(); document.getElementById('dash-overview')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }}>Overview</a>
+        <a href="#dash-collections" onClick={(e) => { e.preventDefault(); document.getElementById('dash-collections')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }}>Collections</a>
+      </Group>
       <div id="dash-overview">
         <SimpleGrid cols={{ base: 2, md: 4 }} gap="md">
-          <Stat label="Hosts" value={allHosts.length} icon={IconServer}>
-            <Group gap="xs" mt="xs" wrap="wrap">
-              <Badge size="sm" variant="subtle">{inInventory} in inventory</Badge>
-              <Badge size="sm" color="green" variant="light">{active} active</Badge>
-              {disappeared > 0 && (
-                <Badge size="sm" color="orange" variant="light">{disappeared} disappeared</Badge>
-              )}
-            </Group>
-          </Stat>
+          <Stat label="Hosts" value={allHosts.length} icon={IconServer} />
           <Stat label="Playbooks" value={allPlaybooks.length} icon={IconBook}>
             <Text size="xs" c="dimmed" mt="xs">{names.join(', ') || '—'}</Text>
           </Stat>
@@ -417,7 +410,6 @@ function Dashboard({ data }) {
               <Table.Th>Organization</Table.Th>
               <Table.Th>Collection</Table.Th>
               <Table.Th>Hosts</Table.Th>
-              <Table.Th>Active</Table.Th>
               <Table.Th>Playbooks</Table.Th>
               <Table.Th>Configured playbooks</Table.Th>
             </Table.Tr>
@@ -428,14 +420,13 @@ function Dashboard({ data }) {
                 <Table.Td>{e.org}</Table.Td>
                 <Table.Td>{e.collection}</Table.Td>
                 <Table.Td>{(e.hosts || []).length}</Table.Td>
-                <Table.Td>{(e.hosts || []).filter((h) => h.active).length}</Table.Td>
                 <Table.Td>{(e.playbooks || []).length}</Table.Td>
                 <Table.Td>{namesOf(e).join(', ') || '—'}</Table.Td>
               </Table.Tr>
             ))}
             {entries.length === 0 && (
               <Table.Tr>
-                <Table.Td colSpan={6}>No collections configured</Table.Td>
+                <Table.Td colSpan={5}>No collections configured</Table.Td>
               </Table.Tr>
             )}
           </Table.Tbody>
@@ -445,38 +436,24 @@ function Dashboard({ data }) {
   )
 }
 
-function HostsTable({ hosts, onHost, filter, setFilter, loading }) {
+function HostsTable({ hosts, onHost, loading }) {
   const [query, setQuery] = useState('')
   const needle = query.trim().toLowerCase()
-  const visible = hosts.filter((h) => {
-    const matchesFilter = filter === 'all' ||
-      (filter === 'active' ? h.active : !h.active && h.in_inventory)
-    return matchesFilter && (!needle || h.name.toLowerCase().includes(needle))
-  })
+  const visible = hosts.filter(
+    (h) => !needle || h.name.toLowerCase().includes(needle),
+  )
   return (
     <Card withBorder>
       <Group justify="space-between" mb="md">
         <Title order={4}>Hosts</Title>
-        <Group gap="xs">
-          <Input
-            aria-label="Search hosts by name"
-            placeholder="Search hosts by name"
-            leftSection={<IconSearch size={14} />}
-            value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-            style={{ width: 220 }}
-          />
-          {['all', 'active', 'disappeared'].map((f) => (
-            <Badge
-              key={f}
-              variant={filter === f ? 'filled' : 'subtle'}
-              onClick={() => setFilter(f)}
-              style={{ cursor: 'pointer' }}
-            >
-              {f}
-            </Badge>
-          ))}
-        </Group>
+        <Input
+          aria-label="Search hosts by name"
+          placeholder="Search hosts by name"
+          leftSection={<IconSearch size={14} />}
+          value={query}
+          onChange={(event) => setQuery(event.currentTarget.value)}
+          style={{ width: 220 }}
+        />
       </Group>
       <Table>
         <Table.Thead>
@@ -493,11 +470,7 @@ function HostsTable({ hosts, onHost, filter, setFilter, loading }) {
           {visible.map((h) => (
             <Table.Tr key={h.name} onClick={() => onHost(h.name)} style={{ cursor: 'pointer' }}>
               <Table.Td>
-                <Group gap="xs">
-                  <Text fw="bold">{h.name}</Text>
-                  {!h.in_inventory && <Badge size="xs" color="gray" variant="subtle">not in inventory</Badge>}
-                  {!h.active && h.in_inventory && <Badge size="xs" color="orange" variant="light">disappeared</Badge>}
-                </Group>
+                <Text fw="bold">{h.name}</Text>
               </Table.Td>
               <Table.Td>{h.ip || '—'}</Table.Td>
               <Table.Td>
@@ -1386,8 +1359,6 @@ function AppInner({ user, onLogout }) {
                   <HostsTable
                     hosts={hosts}
                     onHost={openHost}
-                    filter={hostFilter}
-                    setFilter={setHostFilter}
                     loading={!scopeLoaded}
                   />
                 </Stack>

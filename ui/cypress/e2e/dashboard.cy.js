@@ -9,11 +9,8 @@ describe('Dashboard', () => {
   })
 
   it('renders overview cards from collection data', () => {
-    // 3 alpha hosts + 2 beta hosts; 4 in inventory, 4 active, 1 disappeared.
-    cy.contains('p', 'Hosts').parent().contains('5')
-    cy.contains('4 in inventory')
-    cy.contains('4 active')
-    cy.contains('1 disappeared')
+    // 2 alpha hosts + 2 beta hosts.
+    cy.contains('p', 'Hosts').parent().contains('4')
 
     // 2 alpha playbooks + 2 beta playbooks, named from collection details.
     cy.contains('p', 'Playbooks').parent().contains('4')
@@ -32,10 +29,10 @@ describe('Dashboard', () => {
     const alpha = () => cy.contains('td', 'alpha').closest('tr')
     const beta = () => cy.contains('td', 'beta').closest('tr')
     alpha().should('contain.text', 'default')
-      .and('contain.text', '3')
       .and('contain.text', '2')
       .and('contain.text', 'web, common')
     beta().should('contain.text', 'lab')
+      .and('contain.text', '2')
       .and('contain.text', 'databases, bootstrap')
 
     cy.contains('h4', 'Recent runs').should('not.exist')

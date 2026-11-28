@@ -62,12 +62,13 @@ let orgs = [
   { id: 2, name: 'lab', collections: COLLECTIONS.filter((c) => c.org === 'lab') },
 ]
 
+// Hosts exist only while they appear in a playbook recap; a host that stops
+// being seen is pruned, so there is no "disappeared" state in the fixtures.
 const HOSTS = {
   alpha: [
     {
       target: 'alpha', name: 'web-01', ip: '10.0.1.10', user: 'deploy',
       groups: ['webservers', 'prod'],
-      in_inventory: true, active: true,
       first_seen_at: iso(24 * HOUR), last_seen_at: iso(30 * MIN), last_run_at: iso(30 * MIN),
       last_status: 'changed', last_change_at: iso(30 * MIN),
       facts: {
@@ -79,30 +80,19 @@ const HOSTS = {
     {
       target: 'alpha', name: 'web-02', ip: '10.0.1.11', user: 'deploy',
       groups: ['webservers'],
-      in_inventory: true, active: true,
       first_seen_at: iso(24 * HOUR), last_seen_at: iso(HOUR), last_run_at: iso(HOUR),
       last_status: 'ok',
-    },
-    {
-      target: 'alpha', name: 'retired-01', ip: '10.0.1.99',
-      groups: ['webservers'],
-      in_inventory: true, active: false,
-      first_seen_at: iso(48 * HOUR), last_seen_at: iso(2 * HOUR), last_run_at: iso(2 * HOUR),
-      last_status: 'ok', disappeared_at: iso(2 * HOUR),
     },
   ],
   beta: [
     {
       target: 'beta', name: 'db-01', ip: '10.0.2.20',
       groups: ['databases'],
-      in_inventory: true, active: true,
       first_seen_at: iso(24 * HOUR), last_seen_at: iso(10 * MIN), last_run_at: iso(10 * MIN),
       last_status: 'failed',
     },
     {
-      // A host that answered but is not in any tracked inventory.
       target: 'beta', name: 'adhoc-01',
-      in_inventory: false, active: true,
       first_seen_at: iso(HOUR), last_seen_at: iso(20 * MIN), last_run_at: iso(20 * MIN),
       last_status: 'changed', last_change_at: iso(20 * MIN),
     },
