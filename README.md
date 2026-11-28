@@ -67,6 +67,8 @@ worker/              worker pool, JSON-RPC transport and the worker service
 tests/
   integration/       DB, API, queue and Ansible suites (external test packages)
   testutil/          shared test helpers (store setup, JSON fixtures)
+  seed/              deterministic large test dataset + config generator;
+                     see tests/seed/README.md for DB init and server startup
   config/
     strangle.yml         sample per-target configuration (reference)
   demo/                self-contained demo target (applies a playbook to

@@ -15,3 +15,5 @@
   transport: the `strangle_ssh` connection plugin, connection pooling,
   authentication and host-key approval through the playbook-scoped host
   endpoints.
+- [Seed dataset](../tests/seed/README.md) — create a database, fill it with a
+  large deterministic test dataset and start the server against it.
