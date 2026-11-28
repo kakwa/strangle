@@ -52,7 +52,7 @@ func TestDialectorFor(t *testing.T) {
 // TestSQLiteRoundTrip exercises the Store surface on a temporary SQLite file,
 // the backend a bare file DSN selects. It covers the queries rewritten to be
 // dialect-portable (ListHosts, HostRuns), jsonb-as-BLOB columns, the host
-// inventory-maintenance paths, and unique-constraint translation to
+// state and pruning paths, and unique-constraint translation to
 // gorm.ErrDuplicatedKey.
 func TestSQLiteRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "strangle.db")
@@ -63,9 +63,13 @@ func TestSQLiteRoundTrip(t *testing.T) {
 	defer d.Close()
 
 	ctx := context.Background()
-	t1 := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	t2 := t1.Add(time.Hour)
-	t3 := t2.Add(time.Hour)
+	// PruneHosts cuts against the real clock, so the fixtures must be
+	// relative to now: every host ends up stale (older than the hour-long
+	// delay) by the time the test prunes.
+	now := time.Now().UTC()
+	t1 := now.Add(-72 * time.Hour)
+	t2 := t1.Add(24 * time.Hour)
+	t3 := t2.Add(24 * time.Hour)
 
 	// Unique-constraint translation must hold on SQLite as on PostgreSQL.
 	if _, err := d.CreateOrg(ctx, "acme"); err != nil {
@@ -83,12 +87,12 @@ func TestSQLiteRoundTrip(t *testing.T) {
 	}
 
 	save := func(rec RunRecord, hosts []HostRunRecord, tasks []TaskStateRecord,
-		facts map[string]json.RawMessage, inventory []InventoryHost) (uint64, error) {
+		facts map[string]json.RawMessage) (uint64, error) {
 		// The queue worker finalizes runs; mark them completed so retention
 		// may consider them.
 		rec.StartedAt = rec.FinishedAt.Add(-10 * time.Second)
 		rec.State = RunStateCompleted
-		in := RunInput{Run: rec, Hosts: hosts, Tasks: tasks, Facts: facts, Inventory: inventory}
+		in := RunInput{Run: rec, Hosts: hosts, Tasks: tasks, Facts: facts}
 		if err := d.CreateRun(ctx, &in.Run); err != nil {
 			return 0, err
 		}
@@ -112,10 +116,6 @@ func TestSQLiteRoundTrip(t *testing.T) {
 			{Target: "home", Host: "db1", Task: "start postgres", Status: "ok", LastRunAt: t1},
 		},
 		map[string]json.RawMessage{"web1": json.RawMessage(`{"os":"linux"}`)},
-		[]InventoryHost{
-			{Name: "web1", IP: "10.0.0.1", User: "deploy", Groups: []string{"webservers"}},
-			{Name: "db1", IP: "10.0.0.2", User: "deploy", Groups: []string{"databases"}},
-		},
 	)
 	if err != nil {
 		t.Fatalf("save run 1: %v", err)
@@ -128,14 +128,13 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		[]HostRunRecord{{Target: "home", Host: "web1", Status: "ok", Ok: 5}},
 		nil,
 		map[string]json.RawMessage{"web1": json.RawMessage(`{"os":"linux","kernel":"6.1"}`)},
-		[]InventoryHost{{Name: "web1", IP: "10.0.0.1", User: "deploy"}},
 	)
 	if err != nil {
 		t.Fatalf("save run 2: %v", err)
 	}
 
-	// Run 3: back in run 1's context; db1 is recap'd but missing from the
-	// inventory snapshot, so it leaves the inventory.
+	// Run 3: back in run 1's context; only db1 answers the recap, so web1's
+	// state is left untouched.
 	r3, err := save(
 		RunRecord{Target: "home", Playbook: "site.yml", Inventory: "inv/one",
 			FinishedAt: t3, DurationMS: 7000, ExitCode: 2, Success: false,
@@ -145,7 +144,6 @@ func TestSQLiteRoundTrip(t *testing.T) {
 			{Target: "home", Host: "db1", Task: "migrate schema", Status: "failed", LastRunAt: t3, LastError: "boom"},
 		},
 		nil,
-		[]InventoryHost{{Name: "web1", IP: "10.0.0.1", User: "deploy"}},
 	)
 	if err != nil {
 		t.Fatalf("save run 3: %v", err)
@@ -184,7 +182,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("ListHosts: web1 missing: %+v", hosts)
 	}
-	if !web1.LastRunAt.Equal(t2) || web1.LastStatus != "ok" || !web1.InInventory {
+	if !web1.LastRunAt.Equal(t2) || web1.LastStatus != "ok" {
 		t.Fatalf("ListHosts: web1 should show its latest appearance (run 2), got %+v", web1)
 	}
 	// Facts live on the latest row, i.e. the one run 2 wrote.
@@ -195,8 +193,8 @@ func TestSQLiteRoundTrip(t *testing.T) {
 	if !ok {
 		t.Fatalf("ListHosts: db1 missing: %+v", hosts)
 	}
-	if !db1.LastRunAt.Equal(t3) || db1.LastStatus != "failed" || db1.InInventory {
-		t.Fatalf("ListHosts: db1 should be failed and out of inventory, got %+v", db1)
+	if !db1.LastRunAt.Equal(t3) || db1.LastStatus != "failed" {
+		t.Fatalf("ListHosts: db1 should be failed, got %+v", db1)
 	}
 	if len(db1.Facts) != 0 {
 		t.Fatalf("ListHosts: db1 never reported facts, got %s", db1.Facts)
@@ -240,7 +238,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		t.Fatalf("HostChanges(db1): want the failed migrate task, got %+v", changes)
 	}
 
-	// Retention: keep the two newest runs, then drop hosts out of inventory.
+	// Retention: keep the two newest runs, then drop stale hosts.
 	pruned, err := d.PruneRuns(ctx, "home", RetentionPolicy{MaxCount: 2})
 	if err != nil {
 		t.Fatalf("PruneRuns: %v", err)

@@ -45,9 +45,7 @@ func TestDBRoundTrip(t *testing.T) {
 			{Host: "h1", Task: "Install nginx", Status: "changed", LastRunAt: t1, LastDiff: "-a\n+b"},
 			{Host: "h1", Task: "Start nginx", Status: "ok", LastRunAt: t1},
 		},
-		ScopeNames: []string{"h1", "h2", "h3"},
-		Inventory:  []store.InventoryHost{{Name: "h1", IP: "10.0.0.1", Groups: []string{"web"}}, {Name: "h2"}, {Name: "h3"}},
-		Facts:      map[string]json.RawMessage{"h1": []byte(`{"ansible_hostname":"h1"}`)},
+		Facts: map[string]json.RawMessage{"h1": []byte(`{"ansible_hostname":"h1"}`)},
 	}
 	if err := d.SaveRun(ctx, in); err != nil {
 		t.Fatalf("SaveRun() error: %v", err)
@@ -68,26 +66,21 @@ func TestDBRoundTrip(t *testing.T) {
 		t.Error("Run(unknown) error = nil, want an error")
 	}
 
+	// Only hosts seen in the recap exist; h3 never ran, so it has no row.
 	hosts, err := d.ListHosts(ctx)
-	if err != nil || len(hosts) != 3 {
+	if err != nil || len(hosts) != 2 {
 		t.Fatalf("ListHosts() = %v, %v", hosts, err)
 	}
 	byName := map[string]store.HostRecord{}
 	for _, h := range hosts {
 		byName[h.Name] = h
 	}
-	if !byName["h1"].Active || !byName["h1"].InInventory || byName["h1"].IP != "10.0.0.1" {
+	if h1 := byName["h1"]; h1.LastStatus != "changed" {
 		t.Errorf("h1 = %+v", byName["h1"])
 	}
-	if got := byName["h1"].Groups; len(got) != 1 || got[0] != "web" {
-		t.Errorf("h1.Groups = %v", byName["h1"].Groups)
-	}
 	testutil.AssertJSONEqual(t, byName["h1"].Facts, []byte(`{"ansible_hostname":"h1"}`))
-	if byName["h3"].Active {
-		t.Error("h3 in scope but not in recap, want inactive")
-	}
-	if byName["h3"].DisappearedAt == nil || !byName["h3"].DisappearedAt.Equal(t1) {
-		t.Errorf("h3.DisappearedAt = %v, want %v", byName["h3"].DisappearedAt, t1)
+	if _, ok := byName["h3"]; ok {
+		t.Error("h3 was never in the recap, want no host row")
 	}
 
 	hostRuns, err := d.HostRuns(ctx, "h1", 10)
@@ -133,27 +126,21 @@ func TestDBRoundTrip(t *testing.T) {
 			StartedAt: t2.Add(-10 * time.Second), FinishedAt: t2,
 			DurationMS: 10000, ExitCode: 0, Success: true, Hosts: 1,
 		},
+		// h1 is absent from the recap, so its stored state is left as-is.
 		Hosts: []store.HostRunRecord{{Target: "home", Host: "h2", Status: "ok", Ok: 5}},
-		// h1 is in scope but absent from the recap, so it becomes disappeared.
-		ScopeNames: []string{"h1", "h2"},
-		Inventory: []store.InventoryHost{
-			{Name: "h1"}, {Name: "h2"}, // h3 dropped from the inventory
-		},
 	}
 	if err := d.SaveRun(ctx, in2); err != nil {
 		t.Fatalf("SaveRun() #2 error: %v", err)
 	}
 
+	// h1 was not recap'd in run 2, so its stored state stays at run 1.
 	hosts, _ = d.ListHosts(ctx)
 	byName = map[string]store.HostRecord{}
 	for _, h := range hosts {
 		byName[h.Name] = h
 	}
-	if byName["h3"].InInventory {
-		t.Error("h3 dropped from inventory, want in_inventory=false")
-	}
-	if byName["h3"].Active || byName["h3"].DisappearedAt == nil {
-		t.Errorf("h3 should keep its disappeared state: %+v", byName["h3"])
+	if h1 := byName["h1"]; !h1.LastRunAt.Equal(t1) || h1.LastStatus != "changed" {
+		t.Errorf("h1 state should be untouched by run 2: %+v", h1)
 	}
 
 	// The same host name in another target is a distinct host.
@@ -163,17 +150,15 @@ func TestDBRoundTrip(t *testing.T) {
 			StartedAt: t2.Add(-5 * time.Second), FinishedAt: t2,
 			DurationMS: 5000, ExitCode: 0, Success: true, Hosts: 1,
 		},
-		Hosts:      []store.HostRunRecord{{Target: "other", Host: "h1", Status: "ok", Ok: 3}},
-		ScopeNames: []string{"h1"},
-		Inventory:  []store.InventoryHost{{Name: "h1"}},
+		Hosts: []store.HostRunRecord{{Target: "other", Host: "h1", Status: "ok", Ok: 3}},
 	}
 	if err := d.SaveRun(ctx, in3); err != nil {
 		t.Fatalf("SaveRun() #3 error: %v", err)
 	}
 
 	hosts, _ = d.ListHosts(ctx)
-	if len(hosts) != 4 {
-		t.Fatalf("ListHosts() = %d hosts, want 4 (3 home + 1 other)", len(hosts))
+	if len(hosts) != 3 {
+		t.Fatalf("ListHosts() = %d hosts, want 3 (2 home + 1 other)", len(hosts))
 	}
 	byTarget := map[string]int{}
 	for _, h := range hosts {

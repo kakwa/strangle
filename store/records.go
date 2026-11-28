@@ -26,14 +26,11 @@ type HostRecord struct {
 	IP            string     `json:"ip,omitempty"`
 	User          string     `json:"user,omitempty"`
 	Groups        []string   `json:"groups,omitempty"`
-	InInventory   bool       `json:"in_inventory"`
-	Active        bool       `json:"active"`
 	FirstSeenAt   time.Time  `json:"first_seen_at"`
 	LastSeenAt    time.Time  `json:"last_seen_at"`
 	LastRunAt     time.Time  `json:"last_run_at"`
 	LastStatus    string     `json:"last_status"` // ok | changed | failed | unreachable | ""
 	LastChangeAt  *time.Time `json:"last_change_at,omitempty"`
-	DisappearedAt *time.Time `json:"disappeared_at,omitempty"`
 	// Facts is the latest ansible_facts blob collected for this host. It is
 	// replaced only by a later run that actually returned facts.
 	Facts json.RawMessage `json:"facts,omitempty"`
@@ -108,20 +105,6 @@ type RunInput struct {
 	// Facts maps each host to its latest ansible_facts blob from this run.
 	// Hosts without facts keep whatever was stored by earlier runs.
 	Facts map[string]json.RawMessage
-	// ScopeNames are the hosts this run was expected to reach (the play
-	// targets resolved against the inventory). Hosts in the scope but absent
-	// from the recap are marked as disappeared.
-	ScopeNames []string
-	// Inventory is the current inventory snapshot (hosts, IPs, groups).
-	Inventory []InventoryHost
-}
-
-// InventoryHost is a host from the parsed inventory file.
-type InventoryHost struct {
-	Name   string   `json:"name"`
-	IP     string   `json:"ip,omitempty"`
-	User   string   `json:"user,omitempty"`
-	Groups []string `json:"groups,omitempty"`
 }
 
 // RetentionPolicy describes which finished runs of one collection may be
@@ -151,7 +134,9 @@ type Store interface {
 	// pass a record with Target and Playbook set; the store fills in ID and
 	// started_at. It is idempotent when ID is already set.
 	CreateRun(ctx context.Context, in *RunRecord) error
-	// SaveRun atomically persists one playbook run and updates host state.
+	// SaveRun atomically persists one playbook run and updates host state. It
+	// is idempotent for a run ID: finalizing a retried job replaces the
+	// results recorded by its previous attempt.
 	SaveRun(ctx context.Context, in RunInput) error
 	// UpdateRun updates the mutable fields of an existing run (state, job ID,
 	// output, result). It returns ErrNotFound for an unknown ID.
@@ -176,9 +161,9 @@ type Store interface {
 	// policy. Queued and running runs are never removed. It also removes the
 	// per-run host and task rows that would otherwise become orphans.
 	PruneRuns(ctx context.Context, target string, policy RetentionPolicy) (PruneResult, error)
-	// PruneHosts deletes hosts of one collection that are no longer in its
-	// inventory and have not been seen for delay. It returns the number of
-	// hosts removed and deletes their per-host history rows with them.
+	// PruneHosts deletes hosts of one collection that have not been seen in
+	// a playbook recap for delay. It returns the number of hosts removed and
+	// deletes their per-host history rows with them.
 	PruneHosts(ctx context.Context, target string, delay time.Duration) (int64, error)
 	// CreateOrg inserts a new organization; it fails when the name exists.
 	CreateOrg(ctx context.Context, name string) (OrgRecord, error)

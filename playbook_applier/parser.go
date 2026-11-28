@@ -1,5 +1,5 @@
-// Parsing of captured ansible-playbook output lives here alongside the
-// applier that records it.
+// This file parses the captured ansible-playbook output the applier records:
+// recap lines and per-task results.
 package playbook_applier
 
 import (

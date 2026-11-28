@@ -218,32 +218,6 @@ func (d *DB) SaveRun(ctx context.Context, in RunInput) error {
 			}
 		}
 
-		// Inventory snapshot: update known fields and membership in this
-		// context only.
-		for _, ih := range in.Inventory {
-			updates := map[string]any{
-				"ip":           ih.IP,
-				"user":         ih.User,
-				"groups":       strings.Join(ih.Groups, ","),
-				"in_inventory": true,
-			}
-			if err := tx.Model(&Host{}).Where("id = ?", hostIDs[ih.Name]).Updates(updates).Error; err != nil {
-				return err
-			}
-		}
-		if len(in.Inventory) > 0 {
-			invHostIDs := make([]uint64, 0, len(in.Inventory))
-			for _, ih := range in.Inventory {
-				invHostIDs = append(invHostIDs, hostIDs[ih.Name])
-			}
-			if err := tx.Model(&Host{}).
-				Where("collection_id = ? AND playbook = ? AND inventory = ? AND id NOT IN ?",
-					collectionID, in.Run.Playbook, in.Run.Inventory, invHostIDs).
-				UpdateColumn("in_inventory", false).Error; err != nil {
-				return err
-			}
-		}
-
 		// Per-host run history: recap counters and task results as jsonb.
 		// Everything else (org, collection, target, mode, timing) is reached
 		// via the host and the aggregate run row, so it is not stored twice.
@@ -253,9 +227,7 @@ func (d *DB) SaveRun(ctx context.Context, in RunInput) error {
 				Task: t.Task, Status: t.Status, Diff: t.LastDiff, Error: t.LastError,
 			})
 		}
-		inRecap := map[string]struct{}{}
 		for _, h := range in.Hosts {
-			inRecap[h.Host] = struct{}{}
 			status := "ok"
 			switch {
 			case h.Failed > 0:
@@ -266,11 +238,9 @@ func (d *DB) SaveRun(ctx context.Context, in RunInput) error {
 				status = "changed"
 			}
 			updates := map[string]any{
-				"last_seen_at":   run.FinishedAt,
-				"last_run_at":    run.FinishedAt,
-				"last_status":    status,
-				"active":         true,
-				"disappeared_at": nil,
+				"last_seen_at": run.FinishedAt,
+				"last_run_at":  run.FinishedAt,
+				"last_status":  status,
 			}
 			if facts := in.Facts[h.Host]; len(facts) > 0 {
 				updates["facts"] = []byte(facts)
@@ -290,20 +260,6 @@ func (d *DB) SaveRun(ctx context.Context, in RunInput) error {
 			}
 			if err := tx.Create(&ar).Error; err != nil {
 				return fmt.Errorf("insert ansible run: %w", err)
-			}
-		}
-
-		// Scope hosts that did not answer are disappeared.
-		for _, name := range in.ScopeNames {
-			if _, ok := inRecap[name]; ok {
-				continue
-			}
-			if err := tx.Model(&Host{}).Where("id = ?", hostIDs[name]).
-				Updates(map[string]any{
-					"active":         false,
-					"disappeared_at": gorm.Expr("COALESCE(disappeared_at, ?)", run.FinishedAt),
-				}).Error; err != nil {
-				return err
 			}
 		}
 
@@ -653,9 +609,9 @@ func (d *DB) PruneRuns(ctx context.Context, target string, policy RetentionPolic
 	return out, nil
 }
 
-// PruneHosts removes hosts that are no longer in a collection's inventory
-// and whose last sight is older than delay. Per-host history is deleted in
-// the same transaction as the host rows.
+// PruneHosts removes hosts of one collection whose last sight in a playbook
+// recap is older than delay. Per-host history is deleted in the same
+// transaction as the host rows.
 func (d *DB) PruneHosts(ctx context.Context, target string, delay time.Duration) (int64, error) {
 	if delay <= 0 {
 		return 0, nil
@@ -670,7 +626,6 @@ func (d *DB) PruneHosts(ctx context.Context, target string, delay time.Duration)
 	if err := d.gdb.WithContext(ctx).Model(&Host{}).
 		Select("id", "first_seen_at", "last_seen_at").
 		Where("collection_id IN (SELECT id FROM collections WHERE name = ?)", target).
-		Where("in_inventory = ?", false).
 		Scan(&rows).Error; err != nil {
 		return 0, fmt.Errorf("list hosts for cleanup: %w", err)
 	}
@@ -739,19 +694,16 @@ func fromHostModel(h Host, target string) HostRecord {
 		}
 	}
 	return HostRecord{
-		Target:        target,
-		Name:          h.Name,
-		IP:            h.IP,
-		User:          h.User,
-		Groups:        groups,
-		InInventory:   h.InInventory,
-		Active:        h.Active,
-		FirstSeenAt:   h.FirstSeenAt,
-		LastSeenAt:    h.LastSeenAt,
-		LastRunAt:     h.LastRunAt,
-		LastStatus:    h.LastStatus,
-		LastChangeAt:  h.LastChangeAt,
-		DisappearedAt: h.DisappearedAt,
-		Facts:         json.RawMessage(h.Facts),
+		Target:       target,
+		Name:         h.Name,
+		IP:           h.IP,
+		User:         h.User,
+		Groups:       groups,
+		FirstSeenAt:  h.FirstSeenAt,
+		LastSeenAt:   h.LastSeenAt,
+		LastRunAt:    h.LastRunAt,
+		LastStatus:   h.LastStatus,
+		LastChangeAt: h.LastChangeAt,
+		Facts:        json.RawMessage(h.Facts),
 	}
 }

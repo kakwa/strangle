@@ -6,8 +6,6 @@ import (
 	"errors"
 	"github.com/kakwa/strangle/playbook_applier"
 	"github.com/kakwa/strangle/tests/testutil"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -141,35 +139,15 @@ func TestCancellationIsRecorded(t *testing.T) {
 	}
 }
 
-func TestInventoryScopeMarksMissingHostsDisappeared(t *testing.T) {
+func TestHostsComeOnlyFromRecap(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "inventory"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	inventory := `all:
-  children:
-    web:
-      hosts:
-        web1:
-          ansible_host: 10.0.0.1
-        web2: {}
-    db:
-      hosts:
-        db1: {}
-`
-	if err := os.WriteFile(filepath.Join(dir, "inventory", "hosts.yml"), []byte(inventory), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "site.yml"), []byte("- hosts: web\n  tasks: []\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
 	st := testutil.OpenDB(t, "applier")
 	apr := playbook_applier.NewAnsible(
-		[]cfg.TargetConfig{namedTarget("prod", dir)},
+		[]cfg.TargetConfig{namedTarget("prod", t.TempDir())},
 		executorFunc(func(context.Context, string, string, string, ...string) (int, string, map[string]json.RawMessage, error) {
-			return 0, "PLAY RECAP *******\nweb1 : ok=1    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0\n", nil, nil
+			return 0, "PLAY RECAP *******\n"+
+				"web1 : ok=1    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0\n"+
+				"db1  : ok=1    changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0\n", nil, nil
 		}),
 		st, zap.NewNop(),
 	)
@@ -177,21 +155,22 @@ func TestInventoryScopeMarksMissingHostsDisappeared(t *testing.T) {
 		t.Fatalf("Trigger() error: %v", err)
 	}
 
+	// Only recap'd hosts exist; web2 never ran, so it has no row.
 	hosts, err := st.ListHosts(ctx)
-	if err != nil || len(hosts) != 3 {
-		t.Fatalf("ListHosts() = %v, %v; want all three inventory hosts", hosts, err)
+	if err != nil || len(hosts) != 2 {
+		t.Fatalf("ListHosts() = %v, %v; want the two recap'd hosts", hosts, err)
 	}
 	byName := map[string]store.HostRecord{}
 	for _, h := range hosts {
 		byName[h.Name] = h
 	}
-	if web1 := byName["web1"]; !web1.Active || web1.DisappearedAt != nil || web1.IP != "10.0.0.1" {
-		t.Errorf("web1 = %+v, want an active host with its inventory IP", web1)
+	if web1 := byName["web1"]; web1.LastStatus != "ok" {
+		t.Errorf("web1 = %+v, want status ok", web1)
 	}
-	if web2 := byName["web2"]; web2.Active || web2.DisappearedAt == nil {
-		t.Errorf("web2 = %+v, want a disappeared host (in scope but absent from the recap)", web2)
+	if db1 := byName["db1"]; db1.LastStatus != "changed" {
+		t.Errorf("db1 = %+v, want status changed", db1)
 	}
-	if db1 := byName["db1"]; !db1.InInventory || db1.Active || db1.DisappearedAt != nil {
-		t.Errorf("db1 = %+v, want an inventory host outside this play's scope", db1)
+	if _, ok := byName["web2"]; ok {
+		t.Error("web2 was never in the recap, want no host row")
 	}
 }

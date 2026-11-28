@@ -54,8 +54,6 @@ func TestStoreSaveRunAndQueries(t *testing.T) {
 			{Target: "home", Host: "h1", Task: "Install nginx", Status: "changed", LastDiff: "-a\n+b"},
 			{Target: "home", Host: "h1", Task: "Start nginx", Status: "ok"},
 		},
-		ScopeNames: []string{"h1", "h2", "h3"},
-		Inventory:  []store.InventoryHost{{Name: "h1"}, {Name: "h2"}, {Name: "h3"}},
 	}
 	if err := s.SaveRun(ctx, in); err != nil {
 		t.Fatalf("SaveRun() error: %v", err)
@@ -76,25 +74,23 @@ func TestStoreSaveRunAndQueries(t *testing.T) {
 		t.Errorf("Run(unknown) error = %v, want store.ErrNotFound", err)
 	}
 
+	// Only hosts seen in the recap exist; h3 never ran, so it has no row.
 	hosts, err := s.ListHosts(ctx)
-	if err != nil || len(hosts) != 3 {
+	if err != nil || len(hosts) != 2 {
 		t.Fatalf("ListHosts() = %v, %v", hosts, err)
 	}
 	byName := map[string]store.HostRecord{}
 	for _, h := range hosts {
 		byName[h.Name] = h
 	}
-	if !byName["h1"].Active || !byName["h1"].InInventory {
-		t.Errorf("h1 = %+v, want active in-inventory", byName["h1"])
+	if h1 := byName["h1"]; h1.LastStatus != "changed" {
+		t.Errorf("h1 = %+v, want last status changed", h1)
 	}
 	if byName["h1"].LastChangeAt == nil || !byName["h1"].LastChangeAt.Equal(t1) {
 		t.Errorf("h1.LastChangeAt = %v, want %v", byName["h1"].LastChangeAt, t1)
 	}
-	if byName["h3"].Active {
-		t.Error("h3 was in scope but not in the recap, want inactive")
-	}
-	if byName["h3"].DisappearedAt == nil || !byName["h3"].DisappearedAt.Equal(t1) {
-		t.Errorf("h3.DisappearedAt = %v, want %v", byName["h3"].DisappearedAt, t1)
+	if _, ok := byName["h3"]; ok {
+		t.Error("h3 was never in the recap, want no host row")
 	}
 
 	hostRuns, err := s.HostRuns(ctx, "h1", 10)
@@ -173,8 +169,8 @@ func TestStoreSaveRunAndQueries(t *testing.T) {
 	if err := s.SaveRun(ctx, in3); err != nil {
 		t.Fatalf("SaveRun() #3 error: %v", err)
 	}
-	if hosts, _ := s.ListHosts(ctx); len(hosts) != 5 {
-		t.Errorf("ListHosts() = %d hosts, want 5 (4 home + 1 other)", len(hosts))
+	if hosts, _ := s.ListHosts(ctx); len(hosts) != 4 {
+		t.Errorf("ListHosts() = %d hosts, want 4 (3 home + 1 other)", len(hosts))
 	}
 	hostRuns, err = s.HostRuns(ctx, "h1", 10)
 	if err != nil || len(hostRuns) != 2 {

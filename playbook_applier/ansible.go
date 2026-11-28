@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"sync"
 	"time"
@@ -14,7 +13,6 @@ import (
 	"github.com/kakwa/strangle/cfg"
 	"github.com/kakwa/strangle/store"
 	"go.uber.org/zap"
-	"gopkg.in/yaml.v3"
 )
 
 // Executor runs one playbook and reports its outcome: the ansible-playbook
@@ -273,14 +271,20 @@ func (a *Ansible) runPlaybook(ctx context.Context, target cfg.TargetConfig, pb c
 		output += "\n[strangle] run canceled"
 	}
 
-	changedHosts := countStatus(summaries, "changed")
-	failedHosts := countStatus(summaries, "failed")
+	changedHosts, failedHosts := 0, 0
 	hostRuns := make([]store.HostRunRecord, 0, len(summaries))
 	for _, s := range summaries {
+		status := hostStatus(s)
+		switch status {
+		case "changed":
+			changedHosts++
+		case "failed":
+			failedHosts++
+		}
 		hostRuns = append(hostRuns, store.HostRunRecord{
 			Target:       pb.TargetName,
 			Host:         s.Host,
-			Status:       hostStatus(s),
+			Status:       status,
 			TaskCounters: s.TaskCounters,
 		})
 	}
@@ -320,12 +324,10 @@ func (a *Ansible) runPlaybook(ctx context.Context, target cfg.TargetConfig, pb c
 	// The run has completed: persist its results even if the context was
 	// canceled while it was running (e.g. the process is shutting down).
 	if err := a.store.SaveRun(context.WithoutCancel(ctx), store.RunInput{
-		Run:        run,
-		Hosts:      hostRuns,
-		Tasks:      taskStates,
-		Facts:      facts,
-		ScopeNames: scope,
-		Inventory:  invHosts,
+		Run:   run,
+		Hosts: hostRuns,
+		Tasks: taskStates,
+		Facts: facts,
 	}); err != nil {
 		return fmt.Errorf("save run: %w", err)
 	}
@@ -348,86 +350,23 @@ func (a *Ansible) runPlaybook(ctx context.Context, target cfg.TargetConfig, pb c
 	return nil
 }
 
-// loadInventory parses one playbook's inventory directory. It returns nil for
-// anything it cannot parse (e.g. an INI file), in which case host membership
-// is not tracked for that cycle.
-func (a *Ansible) loadInventory(pb cfg.PlaybookConfig) (*Inventory, []store.InventoryHost) {
-	dir := pb.InventoryPath()
-	st, err := os.Stat(dir)
-	if err != nil || !st.IsDir() {
-		return nil, nil
+// markRunning updates the store record created when the run was enqueued so
+// the API can show it as running. A missing record or store error is only
+// logged: the run itself still proceeds.
+func (a *Ansible) markRunning(ctx context.Context, id uint64, started time.Time) {
+	if id == 0 || a.store == nil {
+		return
 	}
-	inv, err := Load(dir)
+	record, err := a.store.Run(ctx, id)
 	if err != nil {
-		a.logger.Warn("inventory load failed",
-			zap.String("target", pb.TargetName),
-			zap.String("playbook", pb.Name),
-			zap.Error(err),
-		)
-		return nil, nil
+		a.logger.Warn("run record not found for in-flight run", zap.Uint64("run", id), zap.Error(err))
+		return
 	}
-	if len(inv.Hosts) == 0 {
-		return nil, nil
+	record.State = store.RunStateRunning
+	record.StartedAt = started
+	if err := a.store.UpdateRun(ctx, record); err != nil {
+		a.logger.Warn("failed to mark run as running", zap.Uint64("run", id), zap.Error(err))
 	}
-	hosts := make([]store.InventoryHost, 0, len(inv.Hosts))
-	for _, h := range inv.Hosts {
-		hosts = append(hosts, store.InventoryHost{
-			Name:   h.Name,
-			IP:     h.IP,
-			User:   h.User,
-			Groups: h.Groups,
-		})
-	}
-	return inv, hosts
-}
-
-// scopeNames resolves the hosts a playbook is expected to reach by parsing
-// the play targets and matching them against the
-func scopeNames(inv *Inventory, playbookPath string) []string {
-	if inv == nil {
-		return nil
-	}
-	patterns, err := playHosts(playbookPath)
-	if err != nil || len(patterns) == 0 {
-		// Unknown target: assume the whole inventory so no host is
-		// incorrectly marked as disappeared.
-		names := make([]string, 0, len(inv.Hosts))
-		for _, h := range inv.Hosts {
-			names = append(names, h.Name)
-		}
-		return names
-	}
-	return inv.Members(patterns...)
-}
-
-// playHosts reads a playbook file and collects the "hosts" pattern of every
-// play.
-func playHosts(path string) ([]string, error) {
-	//nolint:gosec // G304: path is a configured target directory joined with a playbook name
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var plays []struct {
-		Hosts yaml.Node `yaml:"hosts"`
-	}
-	if err := yaml.Unmarshal(data, &plays); err != nil {
-		return nil, err
-	}
-	var patterns []string
-	for _, p := range plays {
-		switch p.Hosts.Kind {
-		case yaml.ScalarNode:
-			patterns = append(patterns, p.Hosts.Value)
-		case yaml.SequenceNode:
-			for _, n := range p.Hosts.Content {
-				if n.Kind == yaml.ScalarNode {
-					patterns = append(patterns, n.Value)
-				}
-			}
-		}
-	}
-	return patterns, nil
 }
 
 // hostStatus reduces a host's per-status counters to a single outcome.
@@ -441,14 +380,4 @@ func hostStatus(s HostSummary) string {
 		return "changed"
 	}
 	return "ok"
-}
-
-func countStatus(summaries []HostSummary, status string) int {
-	n := 0
-	for _, s := range summaries {
-		if hostStatus(s) == status {
-			n++
-		}
-	}
-	return n
 }

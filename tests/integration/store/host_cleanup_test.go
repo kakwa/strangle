@@ -8,7 +8,7 @@ import (
 	"github.com/kakwa/strangle/store"
 )
 
-func seedHostRun(t *testing.T, st *store.DB, id uint64, target string, finished time.Time, inventory []store.InventoryHost, hosts []string) {
+func seedHostRun(t *testing.T, st *store.DB, id uint64, target string, finished time.Time, hosts []string) {
 	t.Helper()
 	run := testRun(target, "site", finished)
 	run.ID = id
@@ -21,7 +21,7 @@ func seedHostRun(t *testing.T, st *store.DB, id uint64, target string, finished 
 		tasks = append(tasks, store.TaskStateRecord{Host: name, Task: "install", Status: "ok", LastRunID: id})
 	}
 	if err := st.SaveRun(context.Background(), store.RunInput{
-		Run: run, Hosts: recaps, Tasks: tasks, Inventory: inventory,
+		Run: run, Hosts: recaps, Tasks: tasks,
 	}); err != nil {
 		t.Fatalf("SaveRun(%d) error: %v", id, err)
 	}
@@ -33,19 +33,11 @@ func TestStorePruneHosts(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	seedHostRun(t, st, 1, "home", now.Add(-72*time.Hour),
-		[]store.InventoryHost{{Name: "old"}, {Name: "recent"}}, []string{"old", "recent"})
-	seedHostRun(t, st, 2, "home", now.Add(-time.Hour),
-		[]store.InventoryHost{{Name: "recent"}}, []string{"recent"})
-	seedHostRun(t, st, 3, "edge", now.Add(-72*time.Hour),
-		[]store.InventoryHost{{Name: "old"}}, []string{"old"})
-	// A later inventory snapshot that omits the host clears in_inventory.
-	if err := st.SaveRun(ctx, store.RunInput{
-		Run:       testRun("home", "site", now),
-		Inventory: []store.InventoryHost{{Name: "recent"}},
-	}); err != nil {
-		t.Fatalf("SaveRun(inventory snapshot) error: %v", err)
-	}
+	// home/old was last seen 72h ago (stale past the 24h delay), home/recent
+	// 1h ago (fresh), and edge/old 72h ago but in another collection.
+	seedHostRun(t, st, 1, "home", now.Add(-72*time.Hour), []string{"old", "recent"})
+	seedHostRun(t, st, 2, "home", now.Add(-time.Hour), []string{"recent"})
+	seedHostRun(t, st, 3, "edge", now.Add(-72*time.Hour), []string{"old"})
 
 	removed, err := st.PruneHosts(ctx, "home", 24*time.Hour)
 	if err != nil {
