@@ -4,6 +4,7 @@
 package playbook_applier
 
 import (
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -122,6 +123,46 @@ type response struct {
 	err    error
 }
 
+//go:embed plugins/connection/*.py plugins/callback/*.py
+var pluginFS embed.FS
+
+// installPlugins materializes the embedded Ansible plugins so the plugin
+// loader can find them, and returns the directory containing the connection/
+// and callback/ subdirectories.
+func installPlugins() (string, error) {
+	dir, err := os.MkdirTemp("", "strangle-ansible-plugins-*")
+	if err != nil {
+		return "", err
+	}
+	fail := func(err error) (string, error) {
+		_ = os.RemoveAll(dir)
+		return "", err
+	}
+	for _, kind := range []string{"connection", "callback"} {
+		if err := os.MkdirAll(filepath.Join(dir, kind), 0o700); err != nil {
+			return fail(err)
+		}
+		entries, err := pluginFS.ReadDir(filepath.Join("plugins", kind))
+		if err != nil {
+			return fail(err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			path := filepath.Join("plugins", kind, entry.Name())
+			data, err := pluginFS.ReadFile(path)
+			if err != nil {
+				return fail(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, kind, entry.Name()), data, 0o600); err != nil {
+				return fail(err)
+			}
+		}
+	}
+	return dir, nil
+}
+
 // Runner owns a dedicated OS thread with an embedded CPython interpreter.
 // All Python API calls happen on that thread, so the GIL never has to be
 // handed between Go goroutines.
@@ -148,13 +189,17 @@ func NewRunner(multi *ssh.Multi) (*Runner, error) {
 		return nil, fmt.Errorf("install Ansible plugins: %w", err)
 	}
 	r.pluginDir = dir
+	fail := func(err error) (*Runner, error) {
+		_ = os.RemoveAll(dir)
+		return nil, err
+	}
+
 	callbackPath := filepath.Join(dir, "callback")
 	if existing := os.Getenv("ANSIBLE_CALLBACK_PLUGINS"); existing != "" {
 		callbackPath += string(os.PathListSeparator) + existing
 	}
 	if err := os.Setenv("ANSIBLE_CALLBACK_PLUGINS", callbackPath); err != nil {
-		_ = os.RemoveAll(dir)
-		return nil, err
+		return fail(err)
 	}
 	enabled := os.Getenv("ANSIBLE_CALLBACKS_ENABLED")
 	if !strings.Contains(enabled, "strangle_facts") {
@@ -163,20 +208,17 @@ func NewRunner(multi *ssh.Multi) (*Runner, error) {
 		}
 		enabled += "strangle_facts"
 		if err := os.Setenv("ANSIBLE_CALLBACKS_ENABLED", enabled); err != nil {
-			_ = os.RemoveAll(dir)
-			return nil, err
+			return fail(err)
 		}
 	}
 
 	if multi != nil {
 		if err := os.Setenv("ANSIBLE_CONNECTION_PLUGINS", filepath.Join(dir, "connection")); err != nil {
-			_ = os.RemoveAll(dir)
-			return nil, err
+			return fail(err)
 		}
 		bridge, err := ssh.NewBridge(multi)
 		if err != nil {
-			_ = os.RemoveAll(dir)
-			return nil, err
+			return fail(err)
 		}
 		r.bridge = bridge
 		r.setup = bridge.PythonSetup() + setupScript
