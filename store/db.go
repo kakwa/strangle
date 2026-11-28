@@ -166,16 +166,21 @@ func (d *DB) SaveRun(ctx context.Context, in RunInput) error {
 			}
 		}
 
+		// A job is retried when the playbook fails, and its results are saved
+		// before the failure is returned. Finalizing the same run ID again
+		// must replace the earlier attempt's per-run rows: host_runs and
+		// ansible_runs are keyed by run ID, so a plain insert collides. Task
+		// states are the latest-view table and are updated in place below.
+		for _, model := range []any{&HostRun{}, &AnsibleRun{}, &TaskRunResult{}} {
+			if err := tx.Where("run_id = ?", run.ID).Delete(model).Error; err != nil {
+				return fmt.Errorf("clear previous run results: %w", err)
+			}
+		}
+
 		// Collect every host name involved so IDs can be resolved once.
 		names := map[string]struct{}{}
-		for _, ih := range in.Inventory {
-			names[ih.Name] = struct{}{}
-		}
 		for _, h := range in.Hosts {
 			names[h.Host] = struct{}{}
-		}
-		for _, n := range in.ScopeNames {
-			names[n] = struct{}{}
 		}
 		for _, t := range in.Tasks {
 			names[t.Host] = struct{}{}

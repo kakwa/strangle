@@ -260,18 +260,91 @@ func TestSQLiteRoundTrip(t *testing.T) {
 	if len(webRuns) != 1 || webRuns[0].RunID != r2 {
 		t.Fatalf("HostRuns(web1) after prune: want only r2, got %+v", webRuns)
 	}
+	// Every host was last seen days ago, so all three context rows are past
+	// the hour-long delay and are removed.
 	removed, err := d.PruneHosts(ctx, "home", time.Hour)
 	if err != nil {
 		t.Fatalf("PruneHosts: %v", err)
 	}
-	if removed != 1 {
-		t.Fatalf("PruneHosts: want 1 host removed (db1), got %d", removed)
+	if removed != 3 {
+		t.Fatalf("PruneHosts: want 3 stale hosts removed, got %d", removed)
 	}
 	hosts, err = d.ListHosts(ctx)
 	if err != nil {
 		t.Fatalf("ListHosts after prune: %v", err)
 	}
-	if len(hosts) != 1 || hosts[0].Name != "web1" {
-		t.Fatalf("ListHosts after prune: want only web1, got %+v", hosts)
+	if len(hosts) != 0 {
+		t.Fatalf("ListHosts after prune: want no hosts, got %+v", hosts)
+	}
+}
+
+// TestSaveRunRetryIsIdempotent covers the queue's retry path: a failed
+// playbook is recorded before its job returns an error, so River re-runs the
+// job with the same run ID. Finalizing that run again must replace the first
+// attempt's per-run rows instead of inserting duplicate primary keys.
+func TestSaveRunRetryIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	d, err := Open(ctx, filepath.Join(t.TempDir(), "strangle.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	run := RunRecord{
+		Target: "home", Playbook: "site.yml", FinishedAt: time.Now().UTC(),
+		ExitCode: 2, Success: false, Hosts: 2,
+	}
+	if err := d.CreateRun(ctx, &run); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	in := RunInput{
+		Run: run,
+		Hosts: []HostRunRecord{
+			{Host: "web1", Status: "ok", Ok: 1},
+			{Host: "db1", Status: "failed", Failed: 1},
+		},
+		Tasks: []TaskStateRecord{
+			{Host: "web1", Task: "install", Status: "ok"},
+			{Host: "db1", Task: "configure", Status: "failed"},
+		},
+		Facts: map[string]json.RawMessage{"web1": json.RawMessage(`{"os":"linux"}`)},
+	}
+	if err := d.SaveRun(ctx, in); err != nil {
+		t.Fatalf("SaveRun: %v", err)
+	}
+
+	// Same run ID, second attempt: only web1 answers and the task now changes.
+	in.Run.Output = "second attempt"
+	in.Hosts = []HostRunRecord{{Host: "web1", Status: "changed", Changed: 1}}
+	in.Tasks = []TaskStateRecord{{Host: "web1", Task: "install", Status: "changed"}}
+	in.Facts = nil
+	if err := d.SaveRun(ctx, in); err != nil {
+		t.Fatalf("SaveRun retry: %v", err)
+	}
+
+	count := func(model any) int64 {
+		t.Helper()
+		var n int64
+		if err := d.gdb.Model(model).Where("run_id = ?", run.ID).Count(&n).Error; err != nil {
+			t.Fatalf("count %T: %v", model, err)
+		}
+		return n
+	}
+	if n := count(&HostRun{}); n != 1 {
+		t.Errorf("host_runs = %d, want 1", n)
+	}
+	if n := count(&AnsibleRun{}); n != 1 {
+		t.Errorf("ansible_runs = %d, want 1", n)
+	}
+	if n := count(&TaskRunResult{}); n != 1 {
+		t.Errorf("task_run_results = %d, want 1", n)
+	}
+	history, err := d.HostRuns(ctx, "web1", 0)
+	if err != nil || len(history) != 1 || history[0].Status != "changed" {
+		t.Fatalf("HostRuns(web1) after retry = %+v, %v; want one changed run", history, err)
+	}
+	full, err := d.Run(ctx, run.ID)
+	if err != nil || full.Output != "second attempt" {
+		t.Fatalf("Run after retry = %+v, %v; want the second attempt's output", full, err)
 	}
 }
